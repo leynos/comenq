@@ -31,10 +31,8 @@ mod tests {
             pr_number: 1,
             body: "Hi".into(),
         };
-        let value = match serde_json::to_value(&request) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialise: {e}"),
-        };
+        let value =
+            serde_json::to_value(&request).unwrap_or_else(|e| panic!("serialisation failed: {e}"));
         let expected = json!({
             "owner": "octocat",
             "repo": "hello-world",
@@ -47,6 +45,25 @@ mod tests {
     #[test]
     fn fails_to_parse_invalid_json() {
         let data = "{ invalid json }";
+        let result: Result<CommentRequest, _> = serde_json::from_str(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fails_to_parse_missing_fields() {
+        let data = r#"{"owner": "octocat"}"#;
+        let result: Result<CommentRequest, _> = serde_json::from_str(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fails_to_parse_incorrect_field_types() {
+        let data = r#"{
+            "owner": "octocat",
+            "repo": "hello-world",
+            "pr_number": "not a number",
+            "body": "Hi"
+        }"#;
         let result: Result<CommentRequest, _> = serde_json::from_str(data);
         assert!(result.is_err());
     }

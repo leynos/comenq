@@ -43,7 +43,7 @@
 - [ ] Structure the daemon's `main` function to spawn the two primary,
   long-running `tokio` tasks: the UDS listener and the queue worker.
 
-## Milestone 4: `comenqd` Daemon - UDS Listener Task
+## Milestone 4: `comenqd` Daemon — UDS Listener Task
 
 - [ ] Implement the `run_listener` async task.
 
@@ -58,7 +58,7 @@
 - [ ] Implement the `handle_client` task to read the JSON payload, deserialize
   it into a `CommentRequest`, and enqueue it using the `yaque` sender.
 
-## Milestone 5: `comenqd` Daemon - Queue Worker Task
+## Milestone 5: `comenqd` Daemon — Queue Worker Task
 
 - [ ] Implement the `run_worker` async task.
 
