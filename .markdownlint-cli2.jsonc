@@ -1,9 +1,7 @@
 {
-  // Ignore MD013 (line length) inside tables since reflowing
-  // Markdown tables often breaks formatting and readability.
   "config": {
     "MD013": false,
-    "MD029": false,
-    "MD040": false
+    "MD029": { "style": "ordered" },
+    "MD040": { "code_blocks": true }
   }
 }
