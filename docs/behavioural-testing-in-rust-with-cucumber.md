@@ -1114,7 +1114,6 @@ aligned with what is needed.
 [^18]: *Quickstart* — Cucumber Rust Book, accessed on 14 July 2025,
     <https://cucumber-rs.github.io/cucumber/current/quickstart.html>
 
-[^19]: *A Beginner’s Guide to Cucumber in Rust* — Florian Reinhard, accessed
     on 14 July 2025,
     <https://www.florianreinhard.de/cucumber-in-rust-beginners-tutorial/>
 
@@ -1129,7 +1128,7 @@ aligned with what is needed.
     Stack Overflow, accessed on 14 July 2025,
     <https://stackoverflow.com/questions/30505639/how-to-do-error-handling-in-rust-and-what-are-the-common-pitfalls>
 
-[^23]: Data tables - Cucumber Rust Book, accessed on 14 July 2025, 
+[^23]: Data tables - Cucumber Rust Book, accessed on 14 July 2025,
     <https://cucumber-rs.github.io/cucumber/main/writing/data_tables.html>
 
 [^25]: Best practices for scenario writing | CucumberStudio Documentation

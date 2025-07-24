@@ -3,75 +3,130 @@
 
 ## Section 1: System Architecture and Core Component Selection
 
-This document presents a comprehensive architectural design and implementation guide for `comenq`, a robust service for enqueuing GitHub Pull Request comments. The system is designed to post comments with a mandatory cooling-off period, a critical feature for managing interactions with GitHub's API and avoiding secondary rate limits that penalize rapid, automated actions. The design prioritizes reliability, security, and operational simplicity, tailored for deployment on a resource-constrained Linux environment.
+This document presents a comprehensive architectural design and implementation
+guide for `comenq`, a robust service for enqueuing GitHub Pull Request
+comments. The system is designed to post comments with a mandatory cooling-off
+period, a critical feature for managing interactions with GitHub's API and
+avoiding secondary rate limits that penalize rapid, automated actions. The
+design prioritizes reliability, security, and operational simplicity, tailored
+for deployment on a resource-constrained Linux environment.
 
 ### 1.1. Architectural Overview: The Client-Daemon Model
 
-The fundamental architecture of the `comenq` system is based on the classic Unix client-daemon model. This design pattern is not merely a stylistic choice but a direct and necessary consequence of the core requirement to enforce a time-delayed, sequential processing of comments. A simple, ephemeral script cannot maintain the state and persistence required for this task. The system is therefore decomposed into two distinct, cooperating processes:
+The fundamental architecture of the `comenq` system is based on the classic
+Unix client-daemon model. This design pattern is not merely a stylistic choice
+but a direct and necessary consequence of the core requirement to enforce a
+time-delayed, sequential processing of comments. A simple, ephemeral script
+cannot maintain the state and persistence required for this task. The system is
+therefore decomposed into two distinct, cooperating processes:
 
-1. `comenqd` **(The Daemon):** A long-running background process that serves as the system's engine. It is solely responsible for managing a persistent job queue, interacting with the GitHub API, and enforcing the 15-minute cooling-off period between posts.
+1. `comenqd` **(The Daemon):** A long-running background process that serves as
+   the system's engine. It is solely responsible for managing a persistent job
+   queue, interacting with the GitHub API, and enforcing the 15-minute
+   cooling-off period between posts.
 
-2. `comenq` **(The Client):** A lightweight command-line interface (CLI) tool. Its only function is to parse user input, connect to the `comenqd` daemon, and submit a new comment request for queuing.
+2. `comenq` **(The Client):** A lightweight command-line interface (CLI) tool.
+   Its only function is to parse user input, connect to the `comenqd` daemon,
+   and submit a new comment request for queuing.
 
-This separation of concerns, inspired by established systems like Docker which use a daemon-client model over a Unix socket , yields significant advantages:
+This separation of concerns, inspired by established systems like Docker which
+use a daemon-client model over a Unix socket , yields significant advantages:
 
-- **Persistence and Statefulness:** The daemon can maintain the queue and its internal timer state across many client invocations, ensuring that the 15-minute delay is consistently enforced.
+- **Persistence and Statefulness:** The daemon can maintain the queue and its
+  internal timer state across many client invocations, ensuring that the
+  15-minute delay is consistently enforced.
 
-- **Decoupling:** The user's interaction (via the CLI) is immediate. The user can submit a comment and receive confirmation that it has been enqueued without having to wait for it to be posted. The daemon handles the asynchronous processing in the background.
+- **Decoupling:** The user's interaction (via the CLI) is immediate. The user
+  can submit a comment and receive confirmation that it has been enqueued
+  without having to wait for it to be posted. The daemon handles the
+  asynchronous processing in the background.
 
-- **Robustness:** The daemon can be managed as a proper system service, with automatic restarts on failure, while the client remains a simple, stateless utility.
+- **Robustness:** The daemon can be managed as a proper system service, with
+  automatic restarts on failure, while the client remains a simple, stateless
+  utility.
 
 The complete lifecycle of a request is illustrated in the following sequence:
 
- 1. A user on the host machine invokes the `comenq` client via a command like `ssh mybox comenq owner/repo 123 "My comment"`.
+ 1. A user on the host machine invokes the `comenq` client via a command like
+    `ssh mybox comenq owner/repo 123 "My comment"`.
 
- 2. The `comenq` client parses the command-line arguments.
+ 1. The `comenq` client parses the command-line arguments.
 
- 3. The client establishes a connection to the `comenqd` daemon over a local Unix Domain Socket (UDS).
+ 1. The client establishes a connection to the `comenqd` daemon over a local
+    Unix Domain Socket (UDS).
 
- 4. The client serializes the comment data into a predefined format (JSON) and transmits it to the daemon.
+ 1. The client serializes the comment data into a predefined format (JSON) and
+    transmits it to the daemon.
 
- 5. The `comenqd` daemon, listening on the UDS, accepts the connection, reads the data, and deserializes it into a job request.
+ 1. The `comenqd` daemon, listening on the UDS, accepts the connection, reads
+    the data, and deserializes it into a job request.
 
- 6. The daemon validates the request and pushes it onto a persistent, disk-backed queue.
+ 1. The daemon validates the request and pushes it onto a persistent,
+    disk-backed queue.
 
- 7. The daemon immediately sends an acknowledgment of receipt back to the client, which then exits.
+ 1. The daemon immediately sends an acknowledgment of receipt back to the
+    client, which then exits.
 
- 8. A separate, dedicated worker task within the daemon continuously monitors the queue. It dequeues one job at a time.
+ 1. A separate, dedicated worker task within the daemon continuously monitors
+    the queue. It dequeues one job at a time.
 
- 9. The worker task uses an authenticated client to post the comment to the GitHub API.
+ 1. The worker task uses an authenticated client to post the comment to the
+    GitHub API.
 
-10. Upon successful posting, the worker commits the job, permanently removing it from the queue.
+ 1. Upon successful posting, the worker commits the job, permanently removing
+    it from the queue.
 
-11. The worker task then enters a 15-minute sleep state (the "cooling-off period").
+ 2. The worker task then enters a 15-minute sleep state (the "cooling-off
+    period").
 
-12. After the sleep period elapses, the worker task returns to step 8, ready to process the next job in the queue.
+ 3. After the sleep period elapses, the worker task returns to step 8, ready to
+    process the next job in the queue.
 
-This architecture ensures that comment posting is strictly serialized and paced, directly addressing the primary goal of avoiding API rate limits.
+This architecture ensures that comment posting is strictly serialized and
+paced, directly addressing the primary goal of avoiding API rate limits.
 
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
-The selection of foundational Rust libraries (crates) is critical to building a robust and maintainable system. The following table outlines the chosen crates for each major component of the `comenq` service, along with a detailed justification for each selection based on an analysis of available tools and project requirements.
+The selection of foundational Rust libraries (crates) is critical to building a
+robust and maintainable system. The following table outlines the chosen crates
+for each major component of the `comenq` service, along with a detailed
+justification for each selection based on an analysis of available tools and
+project requirements.
 
-<table class="not-prose border-collapse table-auto w-full" style="min-width: 150px">
-<colgroup><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"></colgroup><tbody><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Component/Concern</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Selected Crate/Library</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Key Features &amp; Rationale</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Alternative(s) Considered</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Asynchronous Runtime</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">tokio</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The de-facto standard for asynchronous programming in Rust. It provides a high-performance, multi-threaded scheduler and a comprehensive suite of utilities for I/O, networking, and timers, including the essential <code class="code-inline">UnixListener</code>, <code class="code-inline">UnixStream</code>, and <code class="code-inline">time::sleep</code> components.2 Its maturity and extensive ecosystem make it the definitive choice for the daemon's core.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">async-std</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>CLI Argument Parsing</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">clap</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The most popular and feature-rich CLI argument parsing library for Rust.4 The</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">derive</code> feature offers an exceptionally ergonomic and declarative way to define the CLI's structure, automatically generating argument parsing, validation, and help text from a simple struct definition.6</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">argh</code>, <code class="code-inline">pico-args</code> 4</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>GitHub API Client</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">octocrab</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>A modern, actively maintained, and extensible GitHub API client.9 It provides strongly-typed models for API responses and a builder pattern for requests, simplifying interaction with the GitHub REST API. Its static API and support for custom middleware are valuable for building robust clients.11</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">roctokit</code> 12, manual</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">reqwest</code> 13</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Persistent Queue</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">yaque</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>A disk-backed, persistent queue designed for asynchronous environments.14 Its most critical feature is</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>transactional reads</strong> via its <code class="code-inline">RecvGuard</code> mechanism. This ensures that a dequeued item is automatically returned to the queue if the program panics or fails before the item is explicitly committed, providing an "at-least-once" delivery guarantee essential for reliability.14</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">queue-file</code> 16,</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">v_queue</code> 18</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>IPC Serialization</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">serde</code> / <code class="code-inline">serde_json</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">serde</code> is the universal framework for serialization and deserialization in Rust. <code class="code-inline">serde_json</code> provides a straightforward implementation for the JSON data format, which is chosen for its human-readability (aiding in debugging) and widespread support.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">bincode</code>, <code class="code-inline">prost</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Systemd Integration</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">systemd</code> (crate)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Provides native Rust bindings for interacting with the <code class="code-inline">systemd</code> journal and daemon notification APIs.19 While the primary deployment mechanism is a</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">.service</code> file, this crate can be used for more advanced integration, such as sending readiness notifications.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">systemctl</code> (crate) 20</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Logging</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">tracing</code> / <code class="code-inline">tracing-subscriber</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>A modern, structured, and asynchronous-aware logging and diagnostics framework. It is the standard choice for <code class="code-inline">tokio</code>-based applications, providing contextual information that is superior to traditional line-based logging.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">log</code> / <code class="code-inline">env_logger</code> 22</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p></p></td></tr></tbody>
-</table>
+| Component/Concern    | Selected Crate/Library       | Key Features & Rationale                                                                                                                                                                                                                                                                                                                                              | Alternative(s) Considered                                                                                                                                                                                                                                                      |
+| -------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | ---------- |
+| Asynchronous Runtime | tokio                        | The de-facto standard for asynchronous programming in Rust. It provides a high-performance, multi-threaded scheduler and a comprehensive suite of utilities for I/O, networking, and timers, including the essential UnixListener, UnixStream, and time::sleep components.2 Its maturity and extensive ecosystem make it the definitive choice for the daemon's core. | async-std                                                                                                                                                                                                                                                                      |
+| CLI Argument Parsing | clap                         | The most popular and feature-rich CLI argument parsing library for Rust.4 The                                                                                                                                                                                                                                                                                         | derive feature offers an exceptionally ergonomic and declarative way to define the CLI's structure, automatically generating argument parsing, validation, and help text from a simple struct definition.6                                                                     | argh, pico-args 4    |
+| GitHub API Client    | octocrab                     | A modern, actively maintained, and extensible GitHub API client.9 It provides strongly-typed models for API responses and a builder pattern for requests, simplifying interaction with the GitHub REST API. Its static API and support for custom middleware are valuable for building robust clients.11                                                              | roctokit 12, manual                                                                                                                                                                                                                                                            | reqwest 13           |
+| Persistent Queue     | yaque                        | A disk-backed, persistent queue designed for asynchronous environments.14 Its most critical feature is                                                                                                                                                                                                                                                                | transactional reads via its RecvGuard mechanism. This ensures that a dequeued item is automatically returned to the queue if the program panics or fails before the item is explicitly committed, providing an "at-least-once" delivery guarantee essential for reliability.14 | queue-file 16,       | v_queue 18 |
+| IPC Serialization    | serde / serde_json           | serde is the universal framework for serialization and deserialization in Rust. serde_json provides a straightforward implementation for the JSON data format, which is chosen for its human-readability (aiding in debugging) and widespread support.                                                                                                                | bincode, prost                                                                                                                                                                                                                                                                 |
+| Systemd Integration  | systemd (crate)              | Provides native Rust bindings for interacting with the systemd journal and daemon notification APIs.19 While the primary deployment mechanism is a                                                                                                                                                                                                                    | .service file, this crate can be used for more advanced integration, such as sending readiness notifications.                                                                                                                                                                  | systemctl (crate) 20 |
+| Logging              | tracing / tracing-subscriber | A modern, structured, and asynchronous-aware logging and diagnostics framework. It is the standard choice for tokio-based applications, providing contextual information that is superior to traditional line-based logging.                                                                                                                                          | log / env_logger 22                                                                                                                                                                                                                                                            |
+|  |
 
 ## Section 2: Design of the `comenq` CLI Client
 
-The `comenq` client is designed to be a simple, robust, and user-friendly tool. Its sole responsibility is to capture the user's intent from the command line and relay it securely to the `comenqd` daemon. The implementation will leverage `clap` for argument parsing and `tokio` for asynchronous communication over the Unix Domain Socket.
+The `comenq` client is designed to be a simple, robust, and user-friendly tool.
+Its sole responsibility is to capture the user's intent from the command line
+and relay it securely to the `comenqd` daemon. The implementation will leverage
+`clap` for argument parsing and `tokio` for asynchronous communication over the
+Unix Domain Socket.
 
 ### 2.1. Defining the Command-Line Interface with `clap`
 
-The command-line interface is the primary point of interaction for the user. A well-designed CLI is intuitive and self-documenting. We will use `clap`'s `derive` macro, which allows us to define the entire CLI structure declaratively within a Rust `struct`. This approach is highly recommended for its clarity and maintainability compared to the more verbose builder pattern.6
+The command-line interface is the primary point of interaction for the user. A
+well-designed CLI is intuitive and self-documenting. We will use `clap`'s
+`derive` macro, which allows us to define the entire CLI structure
+declaratively within a Rust `struct`. This approach is highly recommended for
+its clarity and maintainability compared to the more verbose builder pattern.6
 
-The CLI will accept three required positional arguments, matching the user's requested invocation format: `comenq <owner/repo> <pr_number> <comment_body>`.
+The CLI will accept three required positional arguments, matching the user's
+requested invocation format: `comenq <owner/repo> <pr_number> <comment_body>`.
 
-The following code defines the `Args` struct that represents our CLI. This will be the core of the `comenq` client's `main.rs`.
+The following code defines the `Args` struct that represents our CLI. This will
+be the core of the `comenq` client's `main.rs`.
 
-Rust
-
-```
+```rust
 // In src/bin/comenq/main.rs
 
 use clap::Parser;
@@ -99,23 +154,32 @@ pub struct Args {
 }
 ```
 
-The `#[derive(Parser)]` attribute instructs `clap` to generate all the necessary parsing logic.7 The doc comments (
+The `#[derive(Parser)]` attribute instructs `clap` to generate all the
+necessary parsing logic.7 The doc comments (
 
-`///`) are automatically converted into help messages, which are displayed when the user runs `comenq --help`. This feature makes the tool self-documenting.24 The
+`///`) are automatically converted into help messages, which are displayed when
+the user runs `comenq --help`. This feature makes the tool self-documenting.24
+The
 
-`#[arg(...)]` attributes provide fine-grained control over each argument, such as defining a `default_value` for the socket path, making the client flexible for different environments.8
+`#[arg(...)]` attributes provide fine-grained control over each argument, such
+as defining a `default_value` for the socket path, making the client flexible
+for different environments.8
 
 ### 2.2. Client-Daemon IPC Protocol
 
-Effective communication between the client and daemon requires a clearly defined data contract. This ensures that both components have a shared understanding of the information being exchanged.
+Effective communication between the client and daemon requires a clearly
+defined data contract. This ensures that both components have a shared
+understanding of the information being exchanged.
 
 #### 2.2.1. The `CommentRequest` Data Structure
 
-A shared `CommentRequest` struct will serve as the message format. To be used by both the client and the daemon, this struct will reside in a shared library crate (e.g., `comenq-lib`). It must be serializable, so it will derive `serde::Serialize` for the client to encode it and `serde::Deserialize` for the daemon to decode it.
+A shared `CommentRequest` struct will serve as the message format. To be used
+by both the client and the daemon, this struct will reside in a shared library
+crate (e.g., `comenq-lib`). It must be serializable, so it will derive
+`serde::Serialize` for the client to encode it and `serde::Deserialize` for the
+daemon to decode it.
 
-Rust
-
-```
+```rust
 // In src/lib.rs (or a dedicated lib crate)
 
 use serde::{Serialize, Deserialize};
@@ -133,23 +197,37 @@ pub struct CommentRequest {
 
 #### 2.2.2. Serialization and Transport
 
-The client will serialize the `CommentRequest` instance into a JSON string using the `serde_json` crate. JSON is selected for this purpose due to its excellent debugging characteristics (it is human-readable) and its robust, widespread support within the Rust ecosystem.
+The client will serialize the `CommentRequest` instance into a JSON string
+using the `serde_json` crate. JSON is selected for this purpose due to its
+excellent debugging characteristics (it is human-readable) and its robust,
+widespread support within the Rust ecosystem.
 
-The serialized JSON data will be sent over a `tokio::net::UnixStream`. The choice of a Unix Domain Socket (UDS) is deliberate and carries significant advantages for this application:
+The serialized JSON data will be sent over a `tokio::net::UnixStream`. The
+choice of a Unix Domain Socket (UDS) is deliberate and carries significant
+advantages for this application:
 
-- **Performance:** For local Inter-Process Communication (IPC), UDS bypasses much of the TCP/IP stack overhead, resulting in lower latency and higher throughput.
+- **Performance:** For local Inter-Process Communication (IPC), UDS bypasses
+  much of the TCP/IP stack overhead, resulting in lower latency and higher
+  throughput.
 
-- **Security:** This is the most critical advantage. A UDS is an entity in the filesystem, like a file.25 This means it is subject to standard Unix filesystem permissions (
+- **Security:** This is the most critical advantage. A UDS is an entity in the
+  filesystem, like a file.25 This means it is subject to standard Unix
+  filesystem permissions (
 
-  `chmod`, `chown`). The `comenqd` daemon can create the socket with permissions that restrict write access to a specific user or group. This provides a simple, powerful, and OS-integrated security model, preventing unauthorized local users or processes from injecting comments into the queue. This is inherently more secure than a `localhost` TCP socket, which any local user could connect to by default.
+  `chmod`, `chown`). The `comenqd` daemon can create the socket with
+  permissions that restrict write access to a specific user or group. This
+  provides a simple, powerful, and OS-integrated security model, preventing
+  unauthorized local users or processes from injecting comments into the queue.
+  This is inherently more secure than a `localhost` TCP socket, which any local
+  user could connect to by default.
 
 ### 2.3. Complete Client Implementation Blueprint
 
-The following is a complete, commented blueprint for the `comenq` client's `main.rs` file. It integrates argument parsing via `clap` with asynchronous IPC via `tokio` and `UnixStream`.
+The following is a complete, commented blueprint for the `comenq` client's
+`main.rs` file. It integrates argument parsing via `clap` with asynchronous IPC
+via `tokio` and `UnixStream`.
 
-Rust
-
-```
+```rust
 // In src/bin/comenq/main.rs
 
 use clap::Parser;
@@ -251,73 +329,125 @@ async fn main() {
 }
 ```
 
-This client is a self-contained, robust utility. It provides clear error messages for common failure modes, such as an invalid repository slug or the inability to connect to the daemon, guiding the user toward a resolution.
+This client is a self-contained, robust utility. It provides clear error
+messages for common failure modes, such as an invalid repository slug or the
+inability to connect to the daemon, guiding the user toward a resolution.
 
 ## Section 3: Design of the `comenqd` Daemon
 
-The `comenqd` daemon is the heart of the system. It is a stateful, asynchronous, long-running process responsible for all interactions with the persistent queue and the GitHub API. Its design is centered around the `tokio` runtime to handle concurrent operations efficiently.
+The `comenqd` daemon is the heart of the system. It is a stateful,
+asynchronous, long-running process responsible for all interactions with the
+persistent queue and the GitHub API. Its design is centered around the `tokio`
+runtime to handle concurrent operations efficiently.
 
 ### 3.1. The Asynchronous Core and Task Structure
 
-The daemon's architecture is built on `tokio`'s cooperative multitasking model. Upon startup, the `main` function will initialize necessary resources (configuration, logger, queue) and then spawn two primary, independent asynchronous tasks that run concurrently for the lifetime of the daemon:
+The daemon's architecture is built on `tokio`'s cooperative multitasking model.
+Upon startup, the `main` function will initialize necessary resources
+(configuration, logger, queue) and then spawn two primary, independent
+asynchronous tasks that run concurrently for the lifetime of the daemon:
 
-1. `task_listen_for_requests`**:** This task is the daemon's public-facing interface. It binds to the UDS and listens for incoming connections from `comenq` clients. Its sole job is to accept requests and place them into the queue as quickly as possible.
+1. `task_listen_for_requests`**:** This task is the daemon's public-facing
+   interface. It binds to the UDS and listens for incoming connections from
+   `comenq` clients. Its sole job is to accept requests and place them into the
+   queue as quickly as possible.
 
-2. `task_process_queue`**:** This is the main worker task. It operates in a serialized loop, pulling one job at a time from the queue, processing it (i.e., posting the comment to GitHub), and then observing the mandatory 15-minute cooldown period.
+2. `task_process_queue`**:** This is the main worker task. It operates in a
+   serialized loop, pulling one job at a time from the queue, processing it
+   (i.e., posting the comment to GitHub), and then observing the mandatory
+   15-minute cooldown period.
 
-This concurrent design ensures that the daemon remains responsive to new client requests even while the worker task is in its long sleep phase. A request can be accepted and enqueued in milliseconds, while the worker task independently processes the queue at its own deliberate pace.
+This concurrent design ensures that the daemon remains responsive to new client
+requests even while the worker task is in its long sleep phase. A request can
+be accepted and enqueued in milliseconds, while the worker task independently
+processes the queue at its own deliberate pace.
 
 ### 3.2. The Persistent Job Queue with `yaque`
 
-A core requirement for the daemon is fault tolerance. If the daemon or the entire server restarts, pending comments must not be lost. This rules out simple in-memory queues like `std::collections::VecDeque` 26 and necessitates a disk-backed, persistent solution.
+A core requirement for the daemon is fault tolerance. If the daemon or the
+entire server restarts, pending comments must not be lost. This rules out
+simple in-memory queues like `std::collections::VecDeque` 26 and necessitates a
+disk-backed, persistent solution.
 
-The `yaque` crate is selected as the ideal queue implementation for this project.14 While other file-based queues exist 17,
+The `yaque` crate is selected as the ideal queue implementation for this
+project.14 While other file-based queues exist 17,
 
-`yaque` offers a unique combination of features perfectly suited to this daemon's needs:
+`yaque` offers a unique combination of features perfectly suited to this
+daemon's needs:
 
-- **Natively Asynchronous:** It is built on `mio` and integrates seamlessly with the `tokio` runtime without requiring blocking operations.14
+- **Natively Asynchronous:** It is built on `mio` and integrates seamlessly
+  with the `tokio` runtime without requiring blocking operations.14
 
-- **Persistence:** It stores queue data on the filesystem, ensuring durability across process restarts.14
+- **Persistence:** It stores queue data on the filesystem, ensuring durability
+  across process restarts.14
 
-- **Transactional Reads:** This is the most compelling feature. When an item is dequeued using `receiver.recv().await`, `yaque` returns a `RecvGuard`. The item is not permanently removed from the queue at this point. It is only removed when `guard.commit()` is explicitly called. If the `RecvGuard` is dropped without being committed (e.g., due to a program panic or an API error), the item is automatically and safely returned to the head of the queue. This "dead man's switch" mechanism provides a powerful "at-least-once" delivery guarantee, which is the cornerstone of the daemon's reliability.14
+- **Transactional Reads:** This is the most compelling feature. When an item is
+  dequeued using `receiver.recv().await`, `yaque` returns a `RecvGuard`. The
+  item is not permanently removed from the queue at this point. It is only
+  removed when `guard.commit()` is explicitly called. If the `RecvGuard` is
+  dropped without being committed (e.g., due to a program panic or an API
+  error), the item is automatically and safely returned to the head of the
+  queue. This "dead man's switch" mechanism provides a powerful "at-least-once"
+  delivery guarantee, which is the cornerstone of the daemon's reliability.14
 
-The queue will be initialized at a configurable path (e.g., `/var/lib/comenq/queue`) and will store the `CommentRequest` struct defined in the shared library.
+The queue will be initialized at a configurable path (e.g.,
+`/var/lib/comenq/queue`) and will store the `CommentRequest` struct defined in
+the shared library.
 
 ### 3.3. The UDS Listener and Request Ingestion (`task_listen_for_requests`)
 
-This task is responsible for handling all client communication. It will be implemented as an asynchronous function spawned by the main `tokio` runtime.
+This task is responsible for handling all client communication. It will be
+implemented as an asynchronous function spawned by the main `tokio` runtime.
 
 Its workflow is as follows:
 
-1. **Cleanup and Binding:** The task first attempts to remove any stale socket file from a previous run. It then creates and binds a `tokio::net::UnixListener` to the configured socket path.2
+1. **Cleanup and Binding:** The task first attempts to remove any stale socket
+   file from a previous run. It then creates and binds a
+   `tokio::net::UnixListener` to the configured socket path.2
 
-2. **Set Permissions:** After binding, it must set the permissions on the socket file to enforce the security model (e.g., `0o660`), allowing access only to the owner user and group.
+2. **Set Permissions:** After binding, it must set the permissions on the
+   socket file to enforce the security model (e.g., `0o660`), allowing access
+   only to the owner user and group.
 
-3. **Accept Loop:** The task enters an infinite `loop`, waiting for new client connections via `listener.accept().await`.30
+3. **Accept Loop:** The task enters an infinite `loop`, waiting for new client
+   connections via `listener.accept().await`.30
 
-4. **Spawn Connection Handler:** To ensure the listener is never blocked, upon accepting a new connection, it immediately spawns a new, short-lived `tokio` task to handle that specific client.
+4. **Spawn Connection Handler:** To ensure the listener is never blocked, upon
+   accepting a new connection, it immediately spawns a new, short-lived `tokio`
+   task to handle that specific client.
 
-5. **Handle Client:** This per-client task will read all data from the `UnixStream`, deserialize the received JSON into a `CommentRequest` struct, and then use the sender half of the `yaque` channel to enqueue the request. After enqueuing, the task terminates.
+5. **Handle Client:** This per-client task will read all data from the
+   `UnixStream`, deserialize the received JSON into a `CommentRequest` struct,
+   and then use the sender half of the `yaque` channel to enqueue the request.
+   After enqueuing, the task terminates.
 
-This design makes the request ingestion process highly concurrent and robust, capable of handling multiple simultaneous client connections without impacting the main worker loop.
+This design makes the request ingestion process highly concurrent and robust,
+capable of handling multiple simultaneous client connections without impacting
+the main worker loop.
 
 ### 3.4. The GitHub Comment-Posting Worker (`task_process_queue`)
 
-This task implements the core business logic of the service. It runs in a simple, infinite loop, ensuring that comments are processed one by one with the required delay.
+This task implements the core business logic of the service. It runs in a
+simple, infinite loop, ensuring that comments are processed one by one with the
+required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
-The `octocrab` client will be initialized once at daemon startup, using a Personal Access Token (PAT) securely loaded from the configuration file.
+The `octocrab` client will be initialized once at daemon startup, using a
+Personal Access Token (PAT) securely loaded from the configuration file.
 
-A critical detail for a successful implementation is using the correct GitHub API endpoint. While one might intuitively look for a "create comment" method within the Pull Request API, general comments on a PR are, in fact, considered part of the underlying Issue. This non-obvious fact is highlighted in GitHub's own documentation patterns.31 Therefore, the correct
+A critical detail for a successful implementation is using the correct GitHub
+API endpoint. While one might intuitively look for a "create comment" method
+within the Pull Request API, general comments on a PR are, in fact, considered
+part of the underlying Issue. This non-obvious fact is highlighted in GitHub's
+own documentation patterns.31 Therefore, the correct
 
-`octocrab` method to use is `issues().create_comment()`, not a method on the `pulls()` handler.32
+`octocrab` method to use is `issues().create_comment()`, not a method on the
+`pulls()` handler.32
 
 The correct invocation will be:
 
-Rust
-
-```
+```rust
 octocrab.issues("owner", "repo").create_comment(pr_number, "body").await?;
 ```
 
@@ -325,31 +455,54 @@ octocrab.issues("owner", "repo").create_comment(pr_number, "body").await?;
 
 The worker task's loop consists of the following steps:
 
-1. **Dequeue Job:** It calls `receiver.recv().await?` to receive the next `CommentRequest` wrapped in a `yaque::RecvGuard`. This operation will block asynchronously until a job is available in the queue.
+1. **Dequeue Job:** It calls `receiver.recv().await?` to receive the next
+   `CommentRequest` wrapped in a `yaque::RecvGuard`. This operation will block
+   asynchronously until a job is available in the queue.
 
-2. **Post Comment:** It constructs and sends the API request to GitHub using the `octocrab` client and the data from the dequeued job.
+2. **Post Comment:** It constructs and sends the API request to GitHub using
+   the `octocrab` client and the data from the dequeued job.
 
 3. **Handle Result:**
 
-   - **On API Success:** The task immediately calls `guard.commit()` to finalize the transaction and permanently remove the job from the queue. It then logs the successful post.
+   - **On API Success:** The task immediately calls `guard.commit()` to
+     finalize the transaction and permanently remove the job from the queue. It
+     then logs the successful post.
 
-   - **On API Failure:** The task logs the error from the GitHub API. The `guard` is simply dropped. `yaque`'s transactional guarantee ensures the job is automatically returned to the queue, ready to be retried on the next iteration of the loop. For more advanced error handling, a retry counter could be added to the `CommentRequest` to prevent infinite loops for unfixable errors, eventually moving the job to a "dead-letter" queue.
+   - **On API Failure:** The task logs the error from the GitHub API. The
+     `guard` is simply dropped. `yaque`'s transactional guarantee ensures the
+     job is automatically returned to the queue, ready to be retried on the
+     next iteration of the loop. For more advanced error handling, a retry
+     counter could be added to the `CommentRequest` to prevent infinite loops
+     for unfixable errors, eventually moving the job to a "dead-letter" queue.
 
-4. **Cooldown:** After successfully processing a job (or after a failed attempt), the task calls `tokio::time::sleep(Duration::from_secs(900)).await` to enforce the 15-minute cooling-off period.
+4. **Cooldown:** After successfully processing a job (or after a failed
+   attempt), the task calls
+   `tokio::time::sleep(Duration::from_secs(900)).await` to enforce the
+   15-minute cooling-off period.
 
 5. The loop then repeats.
 
-This workflow, built upon `yaque`'s transactional foundation, creates a highly resilient system that can tolerate both network failures and process crashes without losing data.
+This workflow, built upon `yaque`'s transactional foundation, creates a highly
+resilient system that can tolerate both network failures and process crashes
+without losing data.
 
 ### 3.5. Daemon Configuration and Logging
 
-For operational flexibility and security, the daemon's behavior must be controlled via a configuration file, not hard-coded values. A TOML file located at `/etc/comenqd/config.toml` is the conventional choice.
+For operational flexibility and security, the daemon's behavior must be
+controlled via a configuration file, not hard-coded values. A TOML file located
+at `/etc/comenqd/config.toml` is the conventional choice.
 
-<table class="not-prose border-collapse table-auto w-full" style="min-width: 100px">
-<colgroup><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"></colgroup><tbody><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Parameter</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Type</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Description</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Default Value</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">github_token</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">String</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The GitHub Personal Access Token (PAT) used for authentication. <strong>This is a required field.</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>(none)</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">socket_path</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">PathBuf</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The filesystem path for the Unix Domain Socket.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">/run/comenq/comenq.sock</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">queue_path</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">PathBuf</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The directory path for the persistent <code class="code-inline">yaque</code> queue data.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">/var/lib/comenq/queue</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">log_level</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">String</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The minimum log level to record (e.g., "info", "debug", "trace").</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">info</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">cooldown_period_seconds</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">u64</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>The cooling-off period in seconds after each comment post.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">900</code></p></td></tr></tbody>
-</table>
+| Parameter               | Type    | Description                                                                               | Default Value           |
+| ----------------------- | ------- | ----------------------------------------------------------------------------------------- | ----------------------- |
+| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field. | (none)                  |
+| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                           | /run/comenq/comenq.sock |
+| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                   | /var/lib/comenq/queue   |
+| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
+| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 900                     |
 
-Robust logging is non-negotiable for a background process. The `tracing` crate with `tracing-subscriber` will be used to provide structured, asynchronous logging. Key events to be logged include:
+Robust logging is non-negotiable for a background process. The `tracing` crate
+with `tracing-subscriber` will be used to provide structured, asynchronous
+logging. Key events to be logged include:
 
 - Daemon startup and shutdown.
 
@@ -367,28 +520,32 @@ Robust logging is non-negotiable for a background process. The `tracing` crate w
 
 - Entering and exiting the cooldown period.
 
-When run as a `systemd` service, these logs will be automatically captured by the system's journal, making them easily accessible for administrators via `journalctl`.
+When run as a `systemd` service, these logs will be automatically captured by
+the system's journal, making them easily accessible for administrators via
+`journalctl`.
 
 ## Section 4: Deployment and Operationalization
 
-A well-designed application is only useful if it can be deployed and managed reliably. This section provides a practical guide to installing, configuring, and running the `comenqd` daemon as a robust system service on a modern Linux distribution using `systemd`.
+A well-designed application is only useful if it can be deployed and managed
+reliably. This section provides a practical guide to installing, configuring,
+and running the `comenqd` daemon as a robust system service on a modern Linux
+distribution using `systemd`.
 
 ### 4.1. Compilation and Installation
 
-First, the project should be compiled in release mode to produce optimized binaries.
+First, the project should be compiled in release mode to produce optimized
+binaries.
 
-Bash
-
-```
+```bash
 # From the root of the Rust project workspace
 cargo build --release
 ```
 
-After a successful build, the resulting binaries must be installed to standard locations in the filesystem. A simple installation script would perform the following actions:
+After a successful build, the resulting binaries must be installed to standard
+locations in the filesystem. A simple installation script would perform the
+following actions:
 
-Bash
-
-```
+```bash
 #!/bin/bash
 set -e
 
@@ -418,11 +575,16 @@ chmod 770 /etc/comenqd
 echo "Installation complete. Please create /etc/comenqd/config.toml"
 ```
 
-This script establishes the necessary user and directory structure with security in mind, ensuring the daemon runs with the principle of least privilege.
+This script establishes the necessary user and directory structure with
+security in mind, ensuring the daemon runs with the principle of least
+privilege.
 
 ### 4.2. Creating a `systemd` Service Unit
 
-Running the daemon directly in a terminal is suitable for development but not for production. A `systemd` service unit file automates the daemon's lifecycle management, including startup on boot, automatic restarts on failure, and integration with the system's logging infrastructure.33
+Running the daemon directly in a terminal is suitable for development but not
+for production. A `systemd` service unit file automates the daemon's lifecycle
+management, including startup on boot, automatic restarts on failure, and
+integration with the system's logging infrastructure.33
 
 The following `comenq.service` file should be placed in `/etc/systemd/system/`:
 
@@ -464,17 +626,21 @@ WantedBy=multi-user.target
 
 **Analysis of Directives:**
 
-- `User=comenq`, `Group=comenq`: Ensures the process runs as the unprivileged `comenq` user.
+- `User=comenq`, `Group=comenq`: Ensures the process runs as the unprivileged
+  `comenq` user.
 
-- `Restart=on-failure`: Instructs `systemd` to automatically restart the daemon if it exits with a non-zero status code (e.g., due to a panic).
+- `Restart=on-failure`: Instructs `systemd` to automatically restart the daemon
+  if it exits with a non-zero status code (e.g., due to a panic).
 
-- **Hardening Directives:** The block of `Protect*` and `Restrict*` directives significantly sandboxes the process, limiting its access to the host system. For example, `ProtectSystem=strict` makes most of the OS filesystem read-only to the daemon, and `PrivateTmp=true` gives it a private `/tmp` directory. These are modern best practices for securing system services.
+- **Hardening Directives:** The block of `Protect*` and `Restrict*` directives
+  significantly sandboxes the process, limiting its access to the host system.
+  For example, `ProtectSystem=strict` makes most of the OS filesystem read-only
+  to the daemon, and `PrivateTmp=true` gives it a private `/tmp` directory.
+  These are modern best practices for securing system services.
 
 Once the file is in place, the service can be enabled and started:
 
-Bash
-
-```
+```bash
 # Reload systemd to recognize the new service file
 sudo systemctl daemon-reload
 
@@ -490,36 +656,53 @@ sudo systemctl status comenq.service
 
 ### 4.3. Security Posture and Best Practices
 
-Security is a primary consideration in the design and deployment of this service.
+Security is a primary consideration in the design and deployment of this
+service.
 
-- **GitHub Token Security:** The GitHub Personal Access Token is the most sensitive piece of information. It must be created with the minimum necessary scopes (e.g., `public_repo` if only public repositories are targeted, or `repo` for private ones). The configuration file containing this token, `/etc/comenqd/config.toml`, must have its permissions strictly controlled:
+- **GitHub Token Security:** The GitHub Personal Access Token is the most
+  sensitive piece of information. It must be created with the minimum necessary
+  scopes (e.g., `public_repo` if only public repositories are targeted, or
+  `repo` for private ones). The configuration file containing this token,
+  `/etc/comenqd/config.toml`, must have its permissions strictly controlled:
 
-  Bash
-
-  ```
+```bash
   sudo touch /etc/comenqd/config.toml
   sudo chown root:comenq /etc/comenqd/config.toml
   sudo chmod 640 /etc/comenqd/config.toml
   
   ```
 
-  This ensures that only the `root` user and members of the `comenq` group can read the file. Since the daemon runs as `comenq`, it can read its configuration, but other unprivileged users on the system cannot.
+  This ensures that only the `root` user and members of the `comenq` group can
+  read the file. Since the daemon runs as `comenq`, it can read its
+  configuration, but other unprivileged users on the system cannot.
 
-- **Filesystem Permissions:** The permissions set by the installation script are crucial:
+- **Filesystem Permissions:** The permissions set by the installation script
+  are crucial:
 
-  - `/var/lib/comenq`: The daemon's state directory is owned exclusively by `comenq`, preventing other users from tampering with the persistent queue.
+  - `/var/lib/comenq`: The daemon's state directory is owned exclusively by
+    `comenq`, preventing other users from tampering with the persistent queue.
 
-  - `/run/comenq/comenq.sock`: The UDS is created in a directory also owned by `comenq`. The daemon should create the socket with permissions `0o660`, allowing read/write access for the `comenq` user and group. Other users on the system who are not in the `comenq` group will be denied access at the filesystem level, providing a robust and simple authentication mechanism for the client.
+  - `/run/comenq/comenq.sock`: The UDS is created in a directory also owned by
+    `comenq`. The daemon should create the socket with permissions `0o660`,
+    allowing read/write access for the `comenq` user and group. Other users on
+    the system who are not in the `comenq` group will be denied access at the
+    filesystem level, providing a robust and simple authentication mechanism
+    for the client.
 
-By adhering to these deployment and security practices, `comenq` transitions from a piece of software into a well-behaved, secure, and manageable system service.
+By adhering to these deployment and security practices, `comenq` transitions
+from a piece of software into a well-behaved, secure, and manageable system
+service.
 
 ## Section 5: Complete Source Code and Project Manifest
 
-This final section provides the complete source code and project configuration, enabling a developer to build, install, and run the `comenq` service immediately.
+This final section provides the complete source code and project configuration,
+enabling a developer to build, install, and run the `comenq` service
+immediately.
 
 ### 5.1. Project Structure
 
-The project is organized as a Rust workspace to facilitate code sharing between the client and daemon binaries.
+The project is organized as a Rust workspace to facilitate code sharing between
+the client and daemon binaries.
 
 ```
 comenq-project/
@@ -573,9 +756,7 @@ panic = "abort"
 
 ### 5.3. Source Code for Shared Library (`src/lib.rs`)
 
-Rust
-
-```
+```rust
 // src/lib.rs
 use serde::{Deserialize, Serialize};
 
@@ -592,11 +773,10 @@ pub struct CommentRequest {
 
 ### 5.4. Source Code for `comenq` (Client)
 
-The `crates/comenq/Cargo.toml` would simply list the workspace dependencies. The source code is as follows:
+The `crates/comenq/Cargo.toml` would simply list the workspace dependencies.
+The source code is as follows:
 
-Rust
-
-```
+```rust
 // crates/comenq/src/main.rs
 use clap::Parser;
 use std::path::PathBuf;
@@ -670,11 +850,10 @@ async fn main() {
 
 ### 5.5. Source Code for `comenqd` (Daemon)
 
-The `crates/comenqd/Cargo.toml` would list the workspace dependencies. The daemon source is more complex, integrating all components.
+The `crates/comenqd/Cargo.toml` would list the workspace dependencies. The
+daemon source is more complex, integrating all components.
 
-Rust
-
-```
+```rust
 // crates/comenqd/src/main.rs
 use anyhow::Result;
 use clap::Parser;
@@ -809,72 +988,128 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octoc
 }
 ```
 
+### 5.6. Implementation Notes
+
+The repository initialises the workspace with `comenq-lib` at the root and two
+binary crates under `crates/`. `CommentRequest` resides in the library and
+derives both `Serialize` and `Deserialize`. The binaries currently contain stub
+`main` functions awaiting further implementation.
+
 ## Works cited
 
- 1. A simple UNIX socket listener in Rust | Kyle M. Douglass, accessed on July 24, 2025, <http://kmdouglass.github.io/posts/a-simple-unix-socket-listener-in-rust/>
+ 1. A simple UNIX socket listener in Rust | Kyle M. Douglass, accessed on July
+    24, 2025,
+    <http://kmdouglass.github.io/posts/a-simple-unix-socket-listener-in-rust/>
 
- 2. UnixSocket in tokio::net - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/tokio/latest/tokio/net/struct.UnixSocket.html>
+ 1. UnixSocket in tokio::net - Rust - [Docs.rs](http://Docs.rs), accessed on
+    July 24, 2025,
+    <https://docs.rs/tokio/latest/tokio/net/struct.UnixSocket.html>
 
- 3. UnixStream in tokio::net - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/tokio/latest/tokio/net/struct.UnixStream.html>
+ 1. UnixStream in tokio::net - Rust - [Docs.rs](http://Docs.rs), accessed on
+    July 24, 2025,
+    <https://docs.rs/tokio/latest/tokio/net/struct.UnixStream.html>
 
- 4. Picking an argument parser - Rain's Rust CLI recommendations, accessed on July 24, 2025, <https://rust-cli-recommendations.sunshowers.io/cli-parser.html>
+ 1. Picking an argument parser - Rain's Rust CLI recommendations, accessed on
+    July 24, 2025,
+    <https://rust-cli-recommendations.sunshowers.io/cli-parser.html>
 
- 5. clap-rs/clap: A full featured, fast Command Line Argument ... - GitHub, accessed on July 24, 2025, <https://github.com/clap-rs/clap>
+ 1. clap-rs/clap: A full featured, fast Command Line Argument … - GitHub,
+    accessed on July 24, 2025, <https://github.com/clap-rs/clap>
 
- 6. Parsing command line arguments - Command Line Applications in Rust, accessed on July 24, 2025, <https://rust-cli.github.io/book/tutorial/cli-args.html>
+ 1. Parsing command line arguments - Command Line Applications in Rust,
+    accessed on July 24, 2025,
+    <https://rust-cli.github.io/book/tutorial/cli-args.html>
 
- 7. clap - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/clap/latest/clap/>
+ 1. clap - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/clap/latest/clap/>
 
- 8. clap::\_derive::\_tutorial - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/clap/latest/clap/\_derive/\_tutorial/index.html>
+ 1. clap::\_derive::\_tutorial - Rust - [Docs.rs](http://Docs.rs), accessed on
+    July 24, 2025,
+    <https://docs.rs/clap/latest/clap/\_derive/\_tutorial/index.html>
 
- 9. XAMPPRocky/octocrab: A modern, extensible GitHub API Client for Rust., accessed on July 24, 2025, <https://github.com/XAMPPRocky/octocrab>
+ 1. XAMPPRocky/octocrab: A modern, extensible GitHub API Client for Rust.,
+    accessed on July 24, 2025, <https://github.com/XAMPPRocky/octocrab>
 
-10. octocrab - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/cargo-skyline-octocrab>
+ 1. octocrab - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/cargo-skyline-octocrab>
 
-11. octocrab/examples/custom\_[client.rs](http://client.rs) at main - GitHub, accessed on July 24, 2025, <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
+ 2. octocrab/examples/custom\_[client.rs](http://client.rs) at main - GitHub,
+    accessed on July 24, 2025,
+    <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
 
-12. fussybeaver/roctokit: A rust client library for the GitHub v3 API, accessed on July 24, 2025, <https://github.com/fussybeaver/roctokit>
+ 3. fussybeaver/roctokit: A rust client library for the GitHub v3 API, accessed
+    on July 24, 2025, <https://github.com/fussybeaver/roctokit>
 
-13. Calling a Web API - Rust Cookbook - GitHub Pages, accessed on July 24, 2025, <https://rust-lang-nursery.github.io/rust-cookbook/web/clients/apis.html>
+ 4. Calling a Web API - Rust Cookbook - GitHub Pages, accessed on July 24,
+    2025,
+    <https://rust-lang-nursery.github.io/rust-cookbook/web/clients/apis.html>
 
-14. Yaque is yet another disk-backed persistent queue for Rust. - GitHub, accessed on July 24, 2025, <https://github.com/tokahuke/yaque>
+ 5. Yaque is yet another disk-backed persistent queue for Rust. - GitHub,
+    accessed on July 24, 2025, <https://github.com/tokahuke/yaque>
 
-15. yaque - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/yaque>
+ 6. yaque - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/yaque>
 
-16. queue_file - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/queue-file>
+ 7. queue_file - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/queue-file>
 
-17. queue-file - [crates.io](http://crates.io): Rust Package Registry, accessed on July 24, 2025, <https://crates.io/crates/queue-file>
+ 8. queue-file - [crates.io](http://crates.io): Rust Package Registry, accessed
+    on July 24, 2025, <https://crates.io/crates/queue-file>
 
-18. semantic-machines/v-queue: simple file based queue on Rust - GitHub, accessed on July 24, 2025, <https://github.com/semantic-machines/v-queue>
+ 9. semantic-machines/v-queue: simple file based queue on Rust - GitHub,
+    accessed on July 24, 2025, <https://github.com/semantic-machines/v-queue>
 
-19. codyps/rust-systemd: Rust interface to systemd c apis - GitHub, accessed on July 24, 2025, <https://github.com/codyps/rust-systemd>
+10. codyps/rust-systemd: Rust interface to systemd c apis - GitHub, accessed on
+    July 24, 2025, <https://github.com/codyps/rust-systemd>
 
-20. systemctl - [crates.io](http://crates.io): Rust Package Registry, accessed on July 24, 2025, <https://crates.io/crates/systemctl>
+11. systemctl - [crates.io](http://crates.io): Rust Package Registry, accessed
+    on July 24, 2025, <https://crates.io/crates/systemctl>
 
-21. systemctl - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/systemctl>
+12. systemctl - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/systemctl>
 
-22. log - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/log>
+13. log - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025,
+    <https://docs.rs/log>
 
-23. Parsing arguments with Clap - Rust Adventure, accessed on July 24, 2025, <https://www.rustadventure.dev/introducing-clap/clap-v4/parsing-arguments-with-clap>
+14. Parsing arguments with Clap - Rust Adventure, accessed on July 24, 2025,
+    <https://www.rustadventure.dev/introducing-clap/clap-v4/parsing-arguments-with-clap>
 
-24. clap::\_derive - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/clap/latest/clap/\_derive/index.html>
+15. clap::\_derive - Rust - [Docs.rs](http://Docs.rs), accessed on July 24,
+    2025, <https://docs.rs/clap/latest/clap/\_derive/index.html>
 
-25. Unix sockets, the basics in Rust - Emmanuel Bosquet, accessed on July 24, 2025, <https://emmanuelbosquet.com/2022/whatsaunixsocket/>
+16. Unix sockets, the basics in Rust - Emmanuel Bosquet, accessed on July 24,
+    2025, <https://emmanuelbosquet.com/2022/whatsaunixsocket/>
 
-26. Mastering Queues: The Art of Ordered Processing in Rust | by Murat ..., accessed on July 24, 2025, <https://medium.com/@murataslan1/mastering-queues-the-art-of-ordered-processing-in-rust-406b6e17172c>
+17. Mastering Queues: The Art of Ordered Processing in Rust | by Murat …,
+    accessed on July 24, 2025,
+    <https://medium.com/@murataslan1/mastering-queues-the-art-of-ordered-processing-in-rust-406b6e17172c>
 
-27. Working with Queues in Rust - Basillica - Medium, accessed on July 24, 2025, <https://basillica.medium.com/working-with-queues-in-rust-5a5afe82da46>
+18. Working with Queues in Rust - Basillica - Medium, accessed on July 24,
+    2025,
+    <https://basillica.medium.com/working-with-queues-in-rust-5a5afe82da46>
 
-28. queue - Keywords - [crates.io](http://crates.io): Rust Package Registry, accessed on July 24, 2025, <https://crates.io/keywords/queue?page=2>
+19. queue - Keywords - [crates.io](http://crates.io): Rust Package Registry,
+    accessed on July 24, 2025, <https://crates.io/keywords/queue?page=2>
 
-29. Connection issues with client/server communicating over socket - help - Rust Users Forum, accessed on July 24, 2025, <https://users.rust-lang.org/t/connection-issues-with-client-server-communicating-over-socket/59639>
+20. Connection issues with client/server communicating over socket - help -
+    Rust Users Forum, accessed on July 24, 2025,
+    <https://users.rust-lang.org/t/connection-issues-with-client-server-communicating-over-socket/59639>
 
-30. Example of reading from a Unix socket · Issue #9 · tokio-rs/tokio-uds - GitHub, accessed on July 24, 2025, <https://github.com/tokio-rs/tokio-uds/issues/9>
+21. Example of reading from a Unix socket · Issue #9 · tokio-rs/tokio-uds -
+    GitHub, accessed on July 24, 2025,
+    <https://github.com/tokio-rs/tokio-uds/issues/9>
 
-31. Working with Comments | GitHub API - LFE Documentation, accessed on July 24, 2025, <http://docs2.lfe.io/guides/working-with-comments/>
+22. Working with Comments | GitHub API - LFE Documentation, accessed on July
+    24, 2025, <http://docs2.lfe.io/guides/working-with-comments/>
 
-32. PullRequestHandler in octocrab::pulls - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, 2025, <https://docs.rs/octocrab/latest/octocrab/pulls/struct.PullRequestHandler.html>
+23. PullRequestHandler in octocrab::pulls - Rust - [Docs.rs](http://Docs.rs),
+    accessed on July 24, 2025,
+    <https://docs.rs/octocrab/latest/octocrab/pulls/struct.PullRequestHandler.html>
 
-33. KillingSpark/rustysd: A service manager that is able to run "traditional" systemd services, written in rust - GitHub, accessed on July 24, 2025, <https://github.com/KillingSpark/rustysd>
+24. KillingSpark/rustysd: A service manager that is able to run "traditional"
+    systemd services, written in rust - GitHub, accessed on July 24, 2025,
+    <https://github.com/KillingSpark/rustysd>
 
-34. Rustysd: A systemd-compatible service manager written in rust - Reddit, accessed on July 24, 2025, <https://www.reddit.com/r/rust/comments/e9o724/rustysd_a_systemdcompatible_service_manager/>
+25. Rustysd: A systemd-compatible service manager written in rust - Reddit,
+    accessed on July 24, 2025,
+    <https://www.reddit.com/r/rust/comments/e9o724/rustysd_a_systemdcompatible_service_manager/>
