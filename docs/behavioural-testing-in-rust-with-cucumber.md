@@ -45,17 +45,17 @@ A Gherkin document is line-oriented, with most lines beginning with a specific
 keyword. The primary keywords give structure and meaning to the
 specifications.[^7]
 
-| Keyword          | Purpose                                                                                                | Simple Example                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
-| Feature          | Provides a high-level description of a software feature and groups related scenarios.[^3]              | Feature: User Authentication                        |
-| Scenario         | Describes a single, concrete example of the feature's behaviour.[^3]                                   | Scenario: Successful login with valid credentials   |
-| Given            | Sets the initial context or preconditions for a scenario.[^5]                                          | Given the user is on the login page                 |
-| When             | Describes the key action or event that triggers the behaviour being tested.[^1]                        | When the user enters their username and password    |
-| Then             | Specifies the expected outcome or result of the action.[^9]                                            | Then the user should be redirected to the dashboard |
-| And, But         | Used to add more steps to a Given, When, or Then clause without repetition, improving readability.[^3] | And the user's name should be displayed             |
-| Background       | Defines a set of steps that run before every Scenario in a Feature, used for common setup.[^6]         | Background: Given a registered user "Alice" exists  |
-| Scenario Outline | A template for running the same Scenario multiple times with different data sets.[^3]                  | Scenario Outline: Login with various credentials    |
-| Examples         | A data table that provides the values for a Scenario Outline.[^3]                                      | username &#124; password &#124; outcome             |
+| Keyword          | Purpose                                                                                                | Simple Example                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| Feature          | Provides a high-level description of a software feature and groups related scenarios.[^3]              | Feature: User Authentication                         |
+| Scenario         | Describes a single, concrete example of the feature's behaviour.[^3]                                   | Scenario: Successful login with valid credentials    |
+| Given            | Sets the initial context or preconditions for a scenario.[^5]                                          | Given the user is on the login page                  |
+| When             | Describes the key action or event that triggers the behaviour being tested.[^1]                        | When the user enters their username and password     |
+| Then             | Specifies the expected outcome or result of the action.[^9]                                            | Then the user should be redirected to the dashboard  |
+| And, But         | Used to add more steps to a Given, When, or Then clause without repetition, improving readability.[^3] | And the user's name should be displayed              |
+| Background       | Defines a set of steps that run before every Scenario in a Feature, used for common setup.[^6]         | Background: Given a registered user "Alice" exists   |
+| Scenario Outline | A template for running the same Scenario multiple times with different data sets.[^3]                  | Scenario Outline: Login with various credentials     |
+| Examples         | A data table that provides the values for a Scenario Outline.[^3]                                      | Examples table header: username / password / outcome |
 
 ### 1.3 The Given-When-Then Idiom: A Universal Test Pattern
 
@@ -109,8 +109,8 @@ console.[^13]
 | [dependencies]     | tokio    | The async runtime. Required with features like macros and rt-multi-thread.[^13]                       |
 | [dev-dependencies] | cucumber | The main testing framework crate.[^16]                                                                |
 | [dev-dependencies] | futures  | Often needed for async operations, particularly with older examples or for specific combinators.[^18] |
-| [[test]]           | name     | The name of the test-runner file (e.g., "cucumber"). This must match the filename in tests/.          |
-| [[test]]           | harness  | Must be set to `false` so cucumber can manage test execution and output.[^14]                         |
+| \[[test]\]         | name     | The name of the test-runner file (e.g., "cucumber"). This must match the filename in tests/.          |
+| \[[test]\]         | harness  | Must be set to `false` so cucumber can manage test execution and output.[^14]                         |
 
 Here is a complete `Cargo.toml` configuration snippet:
 
@@ -869,11 +869,11 @@ Test code should be organized in the same way as application code.
 
   `tests/features/authentication/`, `tests/features/product_catalog/`, etc.
 
-- **Step Definitions:** Mirror the feature file structure in your `tests/steps/
-  ` directory. Create a Rust module for each feature area (e.g., `tests/steps/
-  authentication_steps.rs`, `tests/steps/catalog_steps.rs`). This prevents
-  having a single, massive step definition file and makes it easier to find the
-  code corresponding to a Gherkin step.
+- **Step Definitions:** Mirror the feature file structure in your
+  `tests/steps/` directory. Create a Rust module for each feature area (e.g.,
+  `tests/steps/ authentication_steps.rs`, `tests/steps/catalog_steps.rs`). This
+  prevents having a single, massive step definition file and makes it easier to
+  find the code corresponding to a Gherkin step.
 
 ## Part 7: Common Pitfalls and Troubleshooting
 
@@ -1069,92 +1069,91 @@ aligned with what is needed.
 
 #### **Works cited**
 
-[^1]: "Given When Then" Framework: a step-by-step guide with examples — Miro,
-    accessed on 14 July 2025,
-    <https://miro.com/agile/given-when-then-framework/>
+\[^1\]: "Given When Then" Framework: a step-by-step guide with examples — Miro,
+accessed on 14 July 2025, <https://miro.com/agile/given-when-then-framework/>
 
-[^2]: *Is it acceptable to write a "Given When Then When Then" test in
-    Gherkin?* — Stack Overflow, accessed on 14 July 2025,
-    <https://stackoverflow.com/questions/12060011/is-it-acceptable-to-write-a-given-when-then-when-then-test-in-gherkin>
+\[^2\]: *Is it acceptable to write a "Given When Then When Then" test in
+Gherkin?* — Stack Overflow, accessed on 14 July 2025,
+<https://stackoverflow.com/questions/12060011/is-it-acceptable-to-write-a-given-when-then-when-then-test-in-gherkin>
 
-[^3]: *Gherkin in Testing: A Beginner's Guide* — Rafał Buczyński, Medium,
-    accessed on 14 July 2025,
-    <https://medium.com/@buczynski.rafal/gherkin-in-testing-a-beginners-guide-f2e179d5e2df>
+\[^3\]: *Gherkin in Testing: A Beginner's Guide* — Rafał Buczyński, Medium,
+accessed on 14 July 2025,
+<https://medium.com/@buczynski.rafal/gherkin-in-testing-a-beginners-guide-f2e179d5e2df>
 
-[^5]: *Given When Then* — Martin Fowler, accessed on 14 July 2025,
-    <https://martinfowler.com/bliki/GivenWhenThen.html>
+\[^5\]: *Given When Then* — Martin Fowler, accessed on 14 July 2025,
+<https://martinfowler.com/bliki/GivenWhenThen.html>
 
-[^6]: How To Start Writing Gherkin Test Scenarios? -
-    [Selleo.com](http://Selleo.com), accessed on 14 July 2025,
-    <https://selleo.com/blog/how-to-start-writing-gherkin-test-scenarios>
+\[^6\]: How To Start Writing Gherkin Test Scenarios? -
+[Selleo.com](http://Selleo.com), accessed on 14 July 2025,
+<https://selleo.com/blog/how-to-start-writing-gherkin-test-scenarios>
 
-[^7]: *Reference — Cucumber*, accessed on 14 July 2025,
-    <https://cucumber.io/docs/gherkin/reference/>
+\[^7\]: *Reference — Cucumber*, accessed on 14 July 2025,
+<https://cucumber.io/docs/gherkin/reference/>
 
-[^9]: Given-When-Then - Wikipedia, accessed on 14 July 2025,
-    <https://en.wikipedia.org/wiki/Given-When-Then>
+\[^9\]: Given-When-Then - Wikipedia, accessed on 14 July 2025,
+<https://en.wikipedia.org/wiki/Given-When-Then>
 
-[^11]: *Writing scenarios with Gherkin syntax* — CucumberStudio Documentation,
-    accessed on 14 July 2025,
-    <https://support.smartbear.com/cucumberstudio/docs/bdd/write-gherkin-scenarios.html>
+\[^11\]: *Writing scenarios with Gherkin syntax* — CucumberStudio
+Documentation, accessed on 14 July 2025,
+<https://support.smartbear.com/cucumberstudio/docs/bdd/write-gherkin-scenarios.html>
 
-[^12]: *Cucumber Rust Book — Introduction*, accessed on 14 July 2025,
-    <https://cucumber-rs.github.io/cucumber/main/>
+\[^12\]: *Cucumber Rust Book — Introduction*, accessed on 14 July 2025,
+<https://cucumber-rs.github.io/cucumber/main/>
 
-[^13]: Rust BDD tests with Cucumber - DEV Community, accessed on 14 July 2025
-    <https://dev.to/rogertorres/rust-bdd-with-cucumber-4p68>
+\[^13\]: Rust BDD tests with Cucumber - DEV Community, accessed on 14 July 2025
+<https://dev.to/rogertorres/rust-bdd-with-cucumber-4p68>
 
-[^14]: *Cucumber-rs* — fully-native Cucumber testing framework for Rust with no
-    external test runners or dependencies. GitHub, accessed on 14 July 2025,
-    <https://github.com/AidaPaul/cucumber-rust>
+\[^14\]: *Cucumber-rs* — fully-native Cucumber testing framework for Rust with
+no external test runners or dependencies. GitHub, accessed on 14 July 2025,
+<https://github.com/AidaPaul/cucumber-rust>
 
-[^16]: cucumber - Rust - [Docs.rs](http://Docs.rs), accessed on 14 July 2025,
-    <https://docs.rs/cucumber>
+\[^16\]: cucumber - Rust - [Docs.rs](http://Docs.rs), accessed on 14 July 2025,
+<https://docs.rs/cucumber>
 
-[^18]: *Quickstart* — Cucumber Rust Book, accessed on 14 July 2025,
-    <https://cucumber-rs.github.io/cucumber/current/quickstart.html>
+\[^18\]: *Quickstart* — Cucumber Rust Book, accessed on 14 July 2025,
+<https://cucumber-rs.github.io/cucumber/current/quickstart.html>
 
-[^19]: *A Beginner’s Guide to Cucumber in Rust* — Florian Reinhard, accessed
-    on 14 July 2025,
-    <https://www.florianreinhard.de/cucumber-in-rust-beginners-tutorial/>
+```text
+on 14 July 2025,
+<https://www.florianreinhard.de/cucumber-in-rust-beginners-tutorial/>
+```
 
-[^20]: Quickstart - Cucumber Rust Book, accessed on 14 July 2025,
-    <https://cucumber-rs.github.io/cucumber/main/quickstart.html>
+\[^20\]: Quickstart - Cucumber Rust Book, accessed on 14 July 2025,
+<https://cucumber-rs.github.io/cucumber/main/quickstart.html>
 
-[^21]: Common Pitfalls and Troubleshooting in Cucumber - GeeksforGeeks, accessed
-    on July 14, 2025,
-    <https://www.geeksforgeeks.org/software-testing/common-pitfalls-and-troubleshooting-in-cucumber/>
+\[^21\]: Common Pitfalls and Troubleshooting in Cucumber - GeeksforGeeks,
+accessed on July 14, 2025,
+<https://www.geeksforgeeks.org/software-testing/common-pitfalls-and-troubleshooting-in-cucumber/>
 
-[^22]: How to do error handling in Rust and what are the common pitfalls? -
-    Stack Overflow, accessed on 14 July 2025,
-    <https://stackoverflow.com/questions/30505639/how-to-do-error-handling-in-rust-and-what-are-the-common-pitfalls>
+\[^22\]: How to do error handling in Rust and what are the common pitfalls? -
+Stack Overflow, accessed on 14 July 2025,
+<https://stackoverflow.com/questions/30505639/how-to-do-error-handling-in-rust-and-what-are-the-common-pitfalls>
 
-[^23]: Data tables - Cucumber Rust Book, accessed on 14 July 2025, 
-    <https://cucumber-rs.github.io/cucumber/main/writing/data_tables.html>
+\[^23\]: Data tables — Cucumber Rust Book, accessed on 14 July 2025,
+<https://cucumber-rs.github.io/cucumber/main/writing/data_tables.html>
 
-[^25]: Best practices for scenario writing | CucumberStudio Documentation
+\[^25\]: Best practices for scenario writing | CucumberStudio Documentation
 
-[^26]: Cucumber Best Practices to follow for efficient BDD Testing | by
-    KailashPathak - Medium, accessed on 14 July 2025,
-    <https://kailash-pathak.medium.com/cucumber-best-practices-to-follow-for-efficient-bdd-testing-b3eb1c7e9757>
+\[^26\]: Cucumber Best Practices to follow for efficient BDD Testing | by
+KailashPathak - Medium, accessed on 14 July 2025,
+<https://kailash-pathak.medium.com/cucumber-best-practices-to-follow-for-efficient-bdd-testing-b3eb1c7e9757>
 
-[^27]: Rust Solutions - WireMock, accessed on 14 July 2025,
-    <https://wiremock.org/docs/solutions/rust/>
+\[^27\]: Rust Solutions - WireMock, accessed on 14 July 2025,
+<https://wiremock.org/docs/solutions/rust/>
 
-[^30]: Common Challenges in Cucumber Testing and How to Overcome Them - Medium,
-    accessed on July 14, 2025,
-    <https://medium.com/@realtalkdev/common-challenges-in-cucumber-testing-and-how-to-overcome-them-dc95fffb43c8>
+\[^30\]: Common Challenges in Cucumber Testing and How to Overcome Them -
+Medium, accessed on July 14, 2025,
+<https://medium.com/@realtalkdev/common-challenges-in-cucumber-testing-and-how-to-overcome-them-dc95fffb43c8>
 
-[^31]: Cucumber in cucumber - Rust - [Docs.rs](http://Docs.rs), accessed on
-    14 July 2025,
-    <https://docs.rs/cucumber/latest/cucumber/struct.Cucumber.html>
+\[^31\]: Cucumber in cucumber - Rust - [Docs.rs](http://Docs.rs), accessed on
+14 July 2025, <https://docs.rs/cucumber/latest/cucumber/struct.Cucumber.html>
 
-[^32]: CLI (command-line interface) - Cucumber Rust Book, accessed on
-    14 July 2025, <https://cucumber-rs.github.io/cucumber/main/cli.html>
+\[^32\]: CLI (command-line interface) - Cucumber Rust Book, accessed on 14 July
+2025, <https://cucumber-rs.github.io/cucumber/main/cli.html>
 
-[^33]: Continuous Integration - Cucumber, accessed on 14 July 2025,
-    <https://cucumber.io/docs/guides/continuous-integration>
+\[^33\]: Continuous Integration - Cucumber, accessed on 14 July 2025,
+<https://cucumber.io/docs/guides/continuous-integration>
 
-[^35]: Setting up effective CI/CD for Rust projects - a short primer -
-    [shuttle.dev](http://shuttle.dev), accessed on 14 July 2025,
-    <https://www.shuttle.dev/blog/2025/01/23/setup-rust-ci-cd>
+\[^35\]: Setting up effective CI/CD for Rust projects - a short primer -
+[shuttle.dev](http://shuttle.dev), accessed on 14 July 2025,
+<https://www.shuttle.dev/blog/2025/01/23/setup-rust-ci-cd>
