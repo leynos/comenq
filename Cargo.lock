@@ -271,6 +271,8 @@ dependencies = [
 name = "comenq-lib"
 version = "0.1.0"
 dependencies = [
+ "clap",
+ "comenq",
  "cucumber",
  "serde",
  "serde_json",
