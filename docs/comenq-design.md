@@ -164,7 +164,8 @@ self-documenting.[^10] The
 
 `#[arg(...)]` attributes provide fine-grained control over each argument, such
 as defining a `default_value` for the socket path, making the client flexible
-for different environments.[^3]
+for different environments. The optional `--socket` flag overrides this path
+when specified, giving users a simple way to adapt to custom deployments.[^3]
 
 ### 2.2. Client-Daemon IPC Protocol
 
@@ -283,6 +284,10 @@ async fn main() {
     }
     let owner = parts[0].to_string();
     let repo = parts[1].to_string();
+
+    // Using a custom value parser keeps the error handling within `clap`
+    // itself, providing immediate feedback if the slug is malformed.
+
 
     // 3. Construct the request payload.
     let request = CommentRequest {

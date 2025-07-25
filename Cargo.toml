@@ -13,6 +13,8 @@ serde_json = { workspace = true }
 [dev-dependencies]
 cucumber = "0.20"
 tokio = { workspace = true }
+clap = { workspace = true }
+comenq = { path = "crates/comenq" }
 
 [[test]]
 name = "cucumber"

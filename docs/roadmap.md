@@ -14,10 +14,10 @@
 
 ## Milestone 2: `comenq` CLI Client
 
-- [ ] Implement the CLI argument parsing using `clap`'s derive macro to define
+- [x] Implement the CLI argument parsing using `clap`'s derive macro to define
   the `Args` struct (`repo_slug`, `pr_number`, `comment_body`, `socket`).
 
-- [ ] Add validation for the `owner/repo` slug format.
+- [x] Add validation for the `owner/repo` slug format.
 
 - [ ] Implement the client's `main` function to connect to the daemon's Unix
   Domain Socket using `tokio::net::UnixStream`.
