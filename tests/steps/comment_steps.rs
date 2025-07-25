@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, reason = "simplify test failure output")]
+
 use comenq_lib::CommentRequest;
 use cucumber::{World, given, then, when};
 
@@ -21,10 +23,8 @@ fn a_default_comment_request(world: &mut CommentWorld) {
 #[when("it is serialised")]
 fn it_is_serialised(world: &mut CommentWorld) {
     if let Some(req) = world.request.take() {
-        world.json = match serde_json::to_string(&req) {
-            Ok(json) => Some(json),
-            Err(e) => panic!("serialisation failed: {e}"),
-        };
+        world.json =
+            Some(serde_json::to_string(&req).expect("serialisation should succeed in test"));
     }
 }
 
@@ -32,8 +32,8 @@ fn it_is_serialised(world: &mut CommentWorld) {
 fn the_json_is(world: &mut CommentWorld) {
     match world.json.take() {
         Some(actual) => {
-            let act: serde_json::Value = serde_json::from_str(&actual)
-                .unwrap_or_else(|e| panic!("parse actual failed: {e}"));
+            let act: serde_json::Value =
+                serde_json::from_str(&actual).expect("test JSON should parse successfully");
             let exp = serde_json::json!({
                 "owner": "octocat",
                 "repo": "hello-world",

@@ -92,6 +92,7 @@ for each major component of the `comenq` service, along with a detailed
 justification for each selection based on an analysis of available tools and
 project requirements.
 
+<!-- markdownlint-disable MD013 -->
 | Component/Concern | Selected Crate/Library | Key Features & Rationale | Alternative(s) Considered |
 | -------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | ---------- |
 | Asynchronous Runtime | tokio | The de-facto standard for asynchronous programming in Rust. It provides a high-performance, multithreaded scheduler and a comprehensive suite of utilities for I/O, networking, and timers, including the essential UnixListener, UnixStream, and time::sleep components.[^2] Its maturity and extensive ecosystem make it the definitive choice for the daemon's core. | async-std |
@@ -102,6 +103,7 @@ project requirements.
 | Systemd Integration | systemd (crate) | Provides native Rust bindings for interacting with the systemd journal and daemon notification APIs.[^8] While the primary deployment mechanism is a | .service file, this crate can be used for more advanced integration, such as sending readiness notifications. | systemctl (crate) 20 |
 | Logging | tracing / tracing-subscriber | A modern, structured, and asynchronous-aware logging and diagnostics framework. It is the standard choice for tokio-based applications, providing contextual information that is superior to traditional line-based logging. | log / env_logger 22 |
 | |
+<!-- markdownlint-enable MD013 -->
 
 ## Section 2: Design of the `comenq` CLI Client
 
@@ -343,12 +345,12 @@ Upon startup, the `main` function will initialise necessary resources
 (configuration, logger, queue) and then spawn two primary, independent
 asynchronous tasks that run concurrently for the lifetime of the daemon:
 
-1. `task_listen_for_requests`**:** This task is the daemon's public-facing
+1. `task_listen_for_requests`: This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
    `comenq` clients. Its sole job is to accept requests and place them into the
    queue as quickly as possible.
 
-2. `task_process_queue`**:** This is the main worker task. It operates in a
+2. `task_process_queue`: This is the main worker task. It operates in a
    serialized loop, pulling one job at a time from the queue, processing it
    (i.e., posting the comment to GitHub), and then observing the mandatory
    15-minute cooldown period.
@@ -990,58 +992,36 @@ derives both `Serialize` and `Deserialize`. The binaries currently contain stub
 
 ## Works cited
 
-[^1]: A simple UNIX socket listener in Rust | Kyle M. Douglass, accessed on
-July 24, 2025,
-<http://kmdouglass.github.io/posts/a-simple-unix-socket-listener-in-rust/>
-[^2]: UnixSocket in tokio::net - Rust - [Docs.rs](http://Docs.rs), accessed
-on July 24, 2025,
-<https://docs.rs/tokio/latest/tokio/net/struct.UnixSocket.html> July 24, 2025,
-<https://docs.rs/tokio/latest/tokio/net/struct.UnixStream.html> [^3]: Picking
-an argument parser - Rain's Rust CLI recommendations, accessed on July 24,
-2025, <https://rust-cli-recommendations.sunshowers.io/cli-parser.html> accessed
-on July 24, 2025, <https://github.com/clap-rs/clap> [^4]: Parsing command line
-arguments - Command Line Applications in Rust, accessed on July 24, 2025,
-<https://rust-cli.github.io/book/tutorial/cli-args.html> [^9]: clap - Rust -
-[Docs.rs](http://Docs.rs), accessed on July 24, 2025,
-<https://docs.rs/clap/latest/clap/> [^11]: clap::\_derive::\_tutorial - Rust -
-[Docs.rs](http://Docs.rs), accessed on July 24, 2025,
-<https://docs.rs/clap/latest/clap/%5C_derive/%5C_tutorial/index.html> [^5]:
-XAMPPRocky/octocrab: A modern, extensible GitHub API Client for Rust., accessed
-on July 24, 2025, <https://github.com/XAMPPRocky/octocrab>
-<https://docs.rs/cargo-skyline-octocrab> [^6]:
-octocrab/examples/custom\_[client.rs](http://client.rs) at main - GitHub,
-accessed on July 24, 2025,
-<https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
-accessed on July 24, 2025, <https://github.com/fussybeaver/roctokit> 2025,
-<https://rust-lang-nursery.github.io/rust-cookbook/web/clients/apis.html>
-[^7]: Yaque is yet another disk-backed persistent queue for Rust. - GitHub,
-accessed on July 24, 2025, <https://github.com/tokahuke/yaque>
-<https://docs.rs/yaque> <https://docs.rs/queue-file> accessed on July 24, 2025,
-<https://crates.io/crates/queue-file> accessed on July 24, 2025,
-<https://github.com/semantic-machines/v-queue> [^8]: codyps/rust-systemd: Rust
-interface to systemd c apis - GitHub, accessed on July 24, 2025,
-<https://github.com/codyps/rust-systemd> accessed on July 24, 2025,
-<https://crates.io/crates/systemctl> <https://docs.rs/systemctl>
-<https://docs.rs/log>
-<https://www.rustadventure.dev/introducing-clap/clap-v4/parsing-arguments-with-clap>
- [^10]: clap::\_derive - Rust - [Docs.rs](http://Docs.rs), accessed on July
-24, 2025, <https://docs.rs/clap/latest/clap/%5C_derive/index.html> [^12]: Unix
-sockets, the basics in Rust - Emmanuel Bosquet, accessed on July 24, 2025,
-<https://emmanuelbosquet.com/2022/whatsaunixsocket/> accessed on July 24, 2025,
-<https://medium.com/@murataslan1/mastering-queues-the-art-of-ordered-processing-in-rust-406b6e17172c>
- 2025, <https://basillica.medium.com/working-with-queues-in-rust-5a5afe82da46>
-accessed on July 24, 2025, <https://crates.io/keywords/queue?page=2> Rust Users
-Forum, accessed on July 24, 2025,
-<https://users.rust-lang.org/t/connection-issues-with-client-server-communicating-over-socket/59639>
- [^13]: Example of reading from a Unix socket · Issue #9 · tokio-rs/tokio-uds
-
-- GitHub, accessed on July 24, 2025,
-<https://github.com/tokio-rs/tokio-uds/issues/9> [^14]: Working with Comments
-| GitHub API - LFE Documentation, accessed on July 24, 2025, <http://docs2.lfe.io/guides/working-with-comments/> [^15]: PullRequestHandler in octocrab::pulls - Rust - [Docs.rs](http://Docs.rs), accessed on July 24, |
-2025,
-<https://docs.rs/octocrab/latest/octocrab/pulls/struct.PullRequestHandler.html>
-
+[^1]: A simple UNIX socket listener in Rust | Kyle M. Douglass. Accessed on
+      July 24, 2025.
+      <http://kmdouglass.github.io/posts/a-simple-unix-socket-listener-in-rust/>
+[^2]: UnixSocket in tokio::net - Docs.rs. Accessed on July 24, 2025.
+      <https://docs.rs/tokio/latest/tokio/net/struct.UnixSocket.html>
+[^3]: Picking an argument parser - Rain's Rust CLI recommendations. Accessed on
+      July 24, 2025.
+      <https://rust-cli-recommendations.sunshowers.io/cli-parser.html> Accessed
+      on July 24, 2025. <https://rust-cli.github.io/book/tutorial/cli-args.html>
+[^5]: clap - Docs.rs. Accessed on July 24, 2025.
+      <https://docs.rs/clap/latest/clap/>
+      <https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html>
+[^7]: XAMPPRocky/octocrab: A modern, extensible GitHub API Client for Rust.
+      Accessed on July 24, 2025. <https://github.com/XAMPPRocky/octocrab>
+[^8]: octocrab/examples/custom_client.rs at main - GitHub. Accessed on July 24,
+      2025.
+      <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
+       July 24, 2025. <https://github.com/tokahuke/yaque>
+[^10]: codyps/rust-systemd: Rust interface to systemd c apis - GitHub. Accessed
+       on July 24, 2025. <https://github.com/codyps/rust-systemd>
+       <https://docs.rs/clap/latest/clap/_derive/index.html>
+[^12]: Unix sockets, the basics in Rust - Emmanuel Bosquet. Accessed on July
+       24, 2025. <https://emmanuelbosquet.com/2022/whatsaunixsocket/>
+[^13]: Example of reading from a Unix socket · Issue #9 · tokio-rs/tokio-uds -
+       GitHub. Accessed on July 24, 2025.
+       <https://github.com/tokio-rs/tokio-uds/issues/9> 24, 2025.
+       <http://docs2.lfe.io/guides/working-with-comments/>
+[^15]: PullRequestHandler in octocrab::pulls - Docs.rs. Accessed on July 24,
+       2025.
+       <https://docs.rs/octocrab/latest/octocrab/pulls/struct.PullRequestHandler.html>
 [^16]: KillingSpark/rustysd: A service manager that is able to run
-"traditional" systemd services, written in rust - GitHub, accessed on July 24,
-2025, <https://github.com/KillingSpark/rustysd> accessed on July 24, 2025,
-<https://www.reddit.com/r/rust/comments/e9o724/rustysd_a_systemdcompatible_service_manager/>
+       "traditional" systemd services, written in rust - GitHub. Accessed on
+       July 24, 2025. <https://github.com/KillingSpark/rustysd>
