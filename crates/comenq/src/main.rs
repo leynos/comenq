@@ -2,13 +2,14 @@
 //! Parses user input and forwards it to the daemon.
 
 use clap::Parser;
-use comenq::Args;
+use comenq::{Args, run};
+use std::process;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
-    todo!(
-        "Connect to daemon at {} to enqueue comment for {}",
-        args.socket.display(),
-        args.repo_slug
-    );
+    if let Err(e) = run(args).await {
+        eprintln!("{e}");
+        process::exit(1);
+    }
 }
