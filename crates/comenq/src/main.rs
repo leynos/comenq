@@ -5,6 +5,10 @@ use clap::Parser;
 use comenq::Args;
 
 fn main() {
-    let _args = Args::parse();
-    println!("Hello from Comenq!");
+    let args = Args::parse();
+    todo!(
+        "Connect to daemon at {} to enqueue comment for {}",
+        args.socket.display(),
+        args.repo_slug
+    );
 }

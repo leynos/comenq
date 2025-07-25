@@ -4,6 +4,8 @@ use steps::{CliWorld, CommentWorld};
 
 #[tokio::main]
 async fn main() {
-    CommentWorld::run("tests/features/comment_request.feature").await;
-    CliWorld::run("tests/features/cli.feature").await;
+    tokio::join!(
+        CommentWorld::run("tests/features/comment_request.feature"),
+        CliWorld::run("tests/features/cli.feature")
+    );
 }
