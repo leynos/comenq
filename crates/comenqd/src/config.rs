@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
+/// Default cooldown in seconds between comment posts.
+const DEFAULT_COOLDOWN: u64 = 900;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -25,6 +27,9 @@ pub struct Config {
     /// Directory for the persistent queue.
     #[serde(default = "default_queue_path")]
     pub queue_path: PathBuf,
+    /// Cooldown between comment posts in seconds.
+    #[serde(default = "default_cooldown")]
+    pub cooldown_period_seconds: u64,
 }
 
 /// Command-line overrides for configuration values.
@@ -50,6 +55,10 @@ fn default_socket_path() -> PathBuf {
 
 fn default_queue_path() -> PathBuf {
     PathBuf::from(DEFAULT_QUEUE_PATH)
+}
+
+fn default_cooldown() -> u64 {
+    DEFAULT_COOLDOWN
 }
 
 impl Config {
@@ -106,6 +115,14 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    fn set_env(key: &str, val: &str) {
+        unsafe { std::env::set_var(key, val); }
+    }
+
+    fn remove_env(key: &str) {
+        unsafe { std::env::remove_var(key); }
+    }
+
     #[rstest]
     #[serial_test::serial]
     fn loads_from_file() {
@@ -116,9 +133,7 @@ mod tests {
             "github_token='abc'\nsocket_path='/tmp/s.sock'\nqueue_path='/tmp/q'",
         )
         .unwrap();
-        unsafe {
-            std::env::remove_var("COMENQD_SOCKET_PATH");
-        }
+        remove_env("COMENQD_SOCKET_PATH");
         let cfg = Config::from_file(&path).unwrap();
         assert_eq!(cfg.github_token, "abc");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/s.sock"));
@@ -139,13 +154,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "github_token='abc'\nsocket_path='/tmp/s.sock'").unwrap();
-        unsafe {
-            std::env::set_var("COMENQD_SOCKET_PATH", "/tmp/override.sock");
-        }
+        set_env("COMENQD_SOCKET_PATH", "/tmp/override.sock");
         let cfg = Config::from_file(&path).unwrap();
-        unsafe {
-            std::env::remove_var("COMENQD_SOCKET_PATH");
-        }
+        remove_env("COMENQD_SOCKET_PATH");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/override.sock"));
     }
 
@@ -178,5 +189,6 @@ mod tests {
         let cfg = Config::from_file(&path).unwrap();
         assert_eq!(cfg.socket_path, PathBuf::from("/run/comenq/comenq.sock"));
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
+        assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
     }
 }

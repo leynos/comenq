@@ -7,6 +7,16 @@ use tempfile::TempDir;
 
 use comenqd::config::Config;
 
+fn set_env(key: &str, value: &str) {
+    // Safety: manipulating process environment is inherently unsafe but tests
+    // run serialised so concurrent mutation cannot occur.
+    unsafe { std::env::set_var(key, value); }
+}
+
+fn remove_env(key: &str) {
+    unsafe { std::env::remove_var(key); }
+}
+
 #[derive(Debug, Default, World)]
 pub struct ConfigWorld {
     dir: Option<TempDir>,
@@ -27,9 +37,7 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     fs::write(&path, format!("github_token='{token}'")).expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    unsafe {
-        std::env::remove_var("COMENQD_SOCKET_PATH");
-    }
+    remove_env("COMENQD_SOCKET_PATH");
 }
 
 #[expect(clippy::expect_used, reason = "test setup uses expect")]
@@ -68,9 +76,7 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) {
     .expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    unsafe {
-        std::env::remove_var("COMENQD_SOCKET_PATH");
-    }
+    remove_env("COMENQD_SOCKET_PATH");
 }
 
 #[given("a missing configuration file")]
@@ -84,9 +90,7 @@ fn missing_configuration_file(world: &mut ConfigWorld) {
 )]
 #[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
 fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
-    unsafe {
-        std::env::set_var(&key, &value);
-    }
+    set_env(&key, &value);
     world.env_key = Some(key);
 }
 
@@ -128,9 +132,7 @@ fn socket_path_is(world: &mut ConfigWorld, expected: String) {
 impl Drop for ConfigWorld {
     fn drop(&mut self) {
         if let Some(ref key) = self.env_key {
-            unsafe {
-                std::env::remove_var(key);
-            }
+            remove_env(key);
         }
     }
 }

@@ -1012,8 +1012,8 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octoc
 
 The repository initialises the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The binaries currently contain stub
-`main` functions awaiting further implementation.
+derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
+listener and queue worker as described above.
 
 ## Works cited
 
