@@ -19,14 +19,14 @@
 
 - [x] Add validation for the `owner/repo` slug format.
 
-- [ ] Implement the client's `main` function to connect to the daemon's Unix
+- [x] Implement the client's `main` function to connect to the daemon's Unix
   Domain Socket using `tokio::net::UnixStream`.
 
-- [ ] Serialize the `CommentRequest` payload to JSON and write it to the socket
-  stream.
+- [x] Serialize the `CommentRequest` payload to JSON and write it to the
+  socket stream.
 
-- [ ] Implement robust error handling and user feedback for connection failures
-  or serialization errors.
+- [x] Implement robust error handling and user feedback for connection
+  failures or serialization errors.
 
 ## Milestone 3: `comenqd` Daemon Core
 

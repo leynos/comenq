@@ -15,6 +15,7 @@ cucumber = "0.20"
 tokio = { workspace = true }
 clap = { workspace = true }
 comenq = { path = "crates/comenq" }
+tempfile = { workspace = true }
 
 [[test]]
 name = "cucumber"
@@ -38,6 +39,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 thiserror = "1.0"
+tempfile = "3"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

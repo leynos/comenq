@@ -3,8 +3,12 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+mod client;
+
+pub use client::{ClientError, run};
+
 /// Command line arguments for the `comenq` client.
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(name = "comenq", about = "Enqueue a GitHub PR comment")]
 pub struct Args {
     /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").

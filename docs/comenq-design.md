@@ -238,6 +238,8 @@ use std::process;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
+use tracing::warn;
+
 // Assume CommentRequest is in a shared library: `use comenq_lib::CommentRequest;`
 // For this example, we define it here.
 use serde::{Serialize, Deserialize};
@@ -277,13 +279,12 @@ async fn main() {
     let args = Args::parse();
 
     // 2. Validate and parse the 'owner/repo' slug.
-    let parts: Vec<&str> = args.repo_slug.split('/').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        eprintln!("Error: Invalid repository format. Please use 'owner/repo'.");
-        process::exit(1);
-    }
-    let owner = parts[0].to_string();
-    let repo = parts[1].to_string();
+    let (owner, repo) = args
+        .repo_slug
+        .split_once('/')
+        .expect("validated by clap value parser");
+    let owner = owner.to_string();
+    let repo = repo.to_string();
 
     // Using a custom value parser keeps the error handling within `clap`
     // itself, providing immediate feedback if the slug is malformed.
@@ -325,7 +326,7 @@ async fn main() {
 
     // 7. Gracefully shut down the write side of the stream.
     if let Err(e) = stream.shutdown().await {
-        eprintln!("Warning: Failed to gracefully shut down connection: {}", e);
+        warn!("failed to close connection: {e}");
     }
 
     println!("Successfully enqueued comment for PR #{} on {}/{}.", request.pr_number, request.owner, request.repo);
@@ -335,6 +336,15 @@ async fn main() {
 This client is a self-contained, robust utility. It provides clear error
 messages for common failure modes, such as an invalid repository slug or the
 inability to connect to the daemon, guiding the user toward a resolution.
+
+The production code exposes a `run` function in the `comenq` crate. This logic
+resides in a dedicated `client` module to keep the argument parser focused. The
+binary parses the CLI arguments and delegates to `run`, allowing the test suite
+to exercise the network code directly. Any failures to serialize the request or
+communicate with the daemon are surfaced via a small `ClientError` enumeration.
+The `run` function also verifies the repository slug at runtime to guard
+against misuse in other contexts. An invalid slug results in a `BadSlug`
+variant, keeping the code panic free while still surfacing helpful errors.
 
 ## Section 3: Design of the `comenqd` Daemon
 
@@ -787,6 +797,7 @@ use std::process;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use comenq_lib::CommentRequest; // Using the shared library
+use tracing::warn;
 
 #
 #
@@ -805,13 +816,12 @@ struct Args {
 async fn main() {
     let args = Args::parse();
 
-    let parts: Vec<&str> = args.repo_slug.split('/').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        eprintln!("Error: Invalid repository format. Please use 'owner/repo'.");
-        process::exit(1);
-    }
-    let owner = parts[0].to_string();
-    let repo = parts[1].to_string();
+    let (owner, repo) = args
+        .repo_slug
+        .split_once('/')
+        .expect("validated by clap value parser");
+    let owner = owner.to_string();
+    let repo = repo.to_string();
 
     let request = CommentRequest {
         owner,
@@ -842,7 +852,9 @@ async fn main() {
         process::exit(1);
     }
     
-    stream.shutdown().await.ok(); // Ignore error on shutdown
+    if let Err(e) = stream.shutdown().await {
+        warn!("failed to close connection: {e}");
+    }
 
     println!("Successfully enqueued comment for PR #{} on {}/{}.", request.pr_number, request.owner, request.repo);
 }
