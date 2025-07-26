@@ -123,9 +123,7 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &str, val: &str) -> Self {
             let original = std::env::var(key).ok();
-            unsafe {
-                std::env::set_var(key, val);
-            }
+            set_env_var(key, val);
             Self {
                 key: key.to_string(),
                 original,
@@ -136,16 +134,26 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             match &self.original {
-                Some(v) => unsafe { std::env::set_var(&self.key, v) },
-                None => unsafe { std::env::remove_var(&self.key) },
+                Some(v) => set_env_var(&self.key, v),
+                None => remove_env_var(&self.key),
             }
         }
     }
 
     fn remove_env(key: &str) {
-        unsafe {
-            std::env::remove_var(key);
-        }
+        remove_env_var(key);
+    }
+
+    /// Safely set an environment variable for tests.
+    fn set_env_var(key: &str, val: &str) {
+        // Safety: tests using `serial_test::serial` run single-threaded.
+        unsafe { std::env::set_var(key, val) };
+    }
+
+    /// Safely remove an environment variable for tests.
+    fn remove_env_var(key: &str) {
+        // Safety: tests using `serial_test::serial` run single-threaded.
+        unsafe { std::env::remove_var(key) };
     }
 
     #[rstest]

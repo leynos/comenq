@@ -17,10 +17,7 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &str, value: &str) -> Self {
         let original = std::env::var(key).ok();
-        // Safety: serial_test ensures these manipulations are single-threaded.
-        unsafe {
-            std::env::set_var(key, value);
-        }
+        set_env_var_safe(key, value);
         Self {
             key: key.to_string(),
             original,
@@ -31,16 +28,24 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.original {
-            Some(val) => unsafe { std::env::set_var(&self.key, val) },
-            None => unsafe { std::env::remove_var(&self.key) },
+            Some(val) => set_env_var_safe(&self.key, val),
+            None => remove_env_var_safe(&self.key),
         }
     }
 }
 
 fn remove_env(key: &str) {
-    unsafe {
-        std::env::remove_var(key);
-    }
+    remove_env_var_safe(key);
+}
+
+fn set_env_var_safe(key: &str, value: &str) {
+    // Safety: each scenario runs under serial_test, so no concurrent access.
+    unsafe { std::env::set_var(key, value) };
+}
+
+fn remove_env_var_safe(key: &str) {
+    // Safety: each scenario runs under serial_test, so no concurrent access.
+    unsafe { std::env::remove_var(key) };
 }
 
 #[derive(Debug, Default, World)]
