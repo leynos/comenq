@@ -7,14 +7,40 @@ use tempfile::TempDir;
 
 use comenqd::config::Config;
 
-fn set_env(key: &str, value: &str) {
-    // Safety: manipulating process environment is inherently unsafe but tests
-    // run serialised so concurrent mutation cannot occur.
-    unsafe { std::env::set_var(key, value); }
+/// RAII guard for temporarily setting an environment variable.
+#[derive(Debug)]
+struct EnvVarGuard {
+    key: String,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // Safety: serial_test ensures these manipulations are single-threaded.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(val) => unsafe { std::env::set_var(&self.key, val) },
+            None => unsafe { std::env::remove_var(&self.key) },
+        }
+    }
 }
 
 fn remove_env(key: &str) {
-    unsafe { std::env::remove_var(key); }
+    unsafe {
+        std::env::remove_var(key);
+    }
 }
 
 #[derive(Debug, Default, World)]
@@ -22,7 +48,7 @@ pub struct ConfigWorld {
     dir: Option<TempDir>,
     path: Option<PathBuf>,
     result: Option<Result<Config, ortho_config::OrthoError>>,
-    env_key: Option<String>,
+    env_guard: Option<EnvVarGuard>,
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
@@ -90,8 +116,7 @@ fn missing_configuration_file(world: &mut ConfigWorld) {
 )]
 #[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
 fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
-    set_env(&key, &value);
-    world.env_key = Some(key);
+    world.env_guard = Some(EnvVarGuard::set(&key, &value));
 }
 
 #[when("the config is loaded")]
@@ -131,8 +156,8 @@ fn socket_path_is(world: &mut ConfigWorld, expected: String) {
 
 impl Drop for ConfigWorld {
     fn drop(&mut self) {
-        if let Some(ref key) = self.env_key {
-            remove_env(key);
+        if let Some(_guard) = self.env_guard.take() {
+            // dropping the guard restores the previous state
         }
     }
 }

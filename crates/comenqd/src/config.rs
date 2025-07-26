@@ -115,12 +115,37 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn set_env(key: &str, val: &str) {
-        unsafe { std::env::set_var(key, val); }
+    struct EnvVarGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, val: &str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, val);
+            }
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => unsafe { std::env::set_var(&self.key, v) },
+                None => unsafe { std::env::remove_var(&self.key) },
+            }
+        }
     }
 
     fn remove_env(key: &str) {
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
     }
 
     #[rstest]
@@ -154,9 +179,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "github_token='abc'\nsocket_path='/tmp/s.sock'").unwrap();
-        set_env("COMENQD_SOCKET_PATH", "/tmp/override.sock");
+        let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/override.sock");
         let cfg = Config::from_file(&path).unwrap();
-        remove_env("COMENQD_SOCKET_PATH");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/override.sock"));
     }
 
