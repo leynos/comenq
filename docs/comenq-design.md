@@ -513,6 +513,14 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
 | cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 900                     |
 
+Configuration is loaded using the `ortho_config` crate. The daemon calls
+`Config::load()` which merges values from `/etc/comenqd/config.toml`,
+`COMENQD_*` environment variables, and any supplied CLI arguments. CLI
+arguments have the highest precedence, followed by environment variables, and
+finally the configuration file. Missing optional fields are replaced with
+defaults, while an absent `github_token` or invalid TOML results in a
+configuration error.
+
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
 logging. Key events to be logged include:
@@ -1004,8 +1012,8 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octoc
 
 The repository initialises the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The binaries currently contain stub
-`main` functions awaiting further implementation.
+derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
+listener and queue worker as described above.
 
 ## Works cited
 

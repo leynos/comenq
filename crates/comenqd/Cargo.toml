@@ -3,6 +3,7 @@ name = "comenqd"
 version = "0.1.0"
 edition = "2024"
 
+
 [dependencies]
 tokio = { workspace = true }
 clap = { workspace = true }
@@ -15,3 +16,10 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 comenq-lib = { path = "../.." }
+ortho_config = { workspace = true }
+figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
+
+[dev-dependencies]
+rstest = "0.18.0"
+tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions release
+serial_test = "2"

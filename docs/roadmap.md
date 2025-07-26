@@ -30,7 +30,7 @@
 
 ## Milestone 3: `comenqd` Daemon Core
 
-- [ ] Implement configuration loading from a TOML file
+- [x] Implement configuration loading from a TOML file (done)
   (`/etc/comenqd/config.toml`) for parameters like `github_token`,
   `socket_path`, and `queue_path`.
 
