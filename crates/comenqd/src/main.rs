@@ -4,7 +4,12 @@
 
 use tracing::info;
 
-fn main() {
+mod config;
+use config::Config;
+
+fn main() -> Result<(), ortho_config::OrthoError> {
     tracing_subscriber::fmt::init();
-    info!("Comenqd daemon started");
+    let cfg = Config::load()?;
+    info!(socket = ?cfg.socket_path, queue = ?cfg.queue_path, "Comenqd daemon started");
+    Ok(())
 }

@@ -513,6 +513,10 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
 | cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 900                     |
 
+Configuration is loaded using the `ortho_config` crate. The daemon calls
+`Config::load()` which merges values from `/etc/comenqd/config.toml`,
+`COMENQD_*` environment variables, and any supplied CLI arguments.
+
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
 logging. Key events to be logged include:
