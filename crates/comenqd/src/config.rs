@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Default socket path when none is provided.
+const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
+/// Default queue directory when none is provided.
+const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
+
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
@@ -40,11 +45,11 @@ struct CliArgs {
 }
 
 fn default_socket_path() -> PathBuf {
-    PathBuf::from("/run/comenq/comenq.sock")
+    PathBuf::from(DEFAULT_SOCKET_PATH)
 }
 
 fn default_queue_path() -> PathBuf {
-    PathBuf::from("/var/lib/comenq/queue")
+    PathBuf::from(DEFAULT_QUEUE_PATH)
 }
 
 impl Config {
@@ -53,7 +58,7 @@ impl Config {
 
     /// Load the configuration using command-line overrides and environment
     /// variables.
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn load() -> Result<Self, ortho_config::OrthoError> {
         let args = CliArgs::parse();
         Self::from_file_with_cli(&args.config, &args)
@@ -61,17 +66,20 @@ impl Config {
 
     /// Load the configuration from the specified path, merging `COMENQD_*`
     /// environment variables and CLI arguments over file values.
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn from_file(path: &Path) -> Result<Self, ortho_config::OrthoError> {
         Self::from_file_with_cli(path, &CliArgs::default())
     }
 
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     fn from_file_with_cli(path: &Path, cli: &CliArgs) -> Result<Self, ortho_config::OrthoError> {
         let mut fig = ortho_config::load_config_file(path)?.ok_or_else(|| {
             ortho_config::OrthoError::File {
                 path: path.to_path_buf(),
-                source: Box::new(io::Error::from(io::ErrorKind::NotFound)),
+                source: Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Configuration file not found",
+                )),
             }
         })?;
 

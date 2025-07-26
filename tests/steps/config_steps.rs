@@ -1,10 +1,4 @@
 //! Behavioural steps for daemon configuration loading.
-#![allow(
-    clippy::expect_used,
-    clippy::needless_pass_by_value,
-    clippy::uninlined_format_args,
-    reason = "simplify test failure output"
-)]
 
 use cucumber::{World, given, then, when};
 use std::fs;
@@ -22,6 +16,11 @@ pub struct ConfigWorld {
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
 fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     let dir = TempDir::new().expect("create temp dir");
     let path = dir.path().join("config.toml");
@@ -33,6 +32,7 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     }
 }
 
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[given("an invalid configuration file")]
 fn invalid_configuration_file(world: &mut ConfigWorld) {
     let dir = TempDir::new().expect("create temp dir");
@@ -42,6 +42,7 @@ fn invalid_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(path);
 }
 
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[given("a configuration file without github_token")]
 fn config_file_without_token(world: &mut ConfigWorld) {
     let dir = TempDir::new().expect("create temp dir");
@@ -52,6 +53,11 @@ fn config_file_without_token(world: &mut ConfigWorld) {
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\" and no socket_path$"#)]
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
 fn config_without_socket(world: &mut ConfigWorld, token: String) {
     let dir = TempDir::new().expect("create temp dir");
     let path = dir.path().join("config.toml");
@@ -72,6 +78,10 @@ fn missing_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(PathBuf::from("/nonexistent/nowhere.toml"));
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
 #[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
 fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
     unsafe {
@@ -81,12 +91,17 @@ fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
 }
 
 #[when("the config is loaded")]
+#[expect(clippy::expect_used, reason = "test assertions")]
 fn load_config(world: &mut ConfigWorld) {
     let path = world.path.as_ref().expect("path set");
     world.result = Some(Config::from_file(path));
 }
 
 #[then(regex = r#"^github token is \"(.+)\"$"#)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
 fn github_token_is(world: &mut ConfigWorld, expected: String) {
     match world.result.take() {
         Some(Ok(cfg)) => assert_eq!(cfg.github_token, expected),
