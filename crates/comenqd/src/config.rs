@@ -140,4 +140,35 @@ mod tests {
         }
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/override.sock"));
     }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn error_with_invalid_toml() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "github_token='abc' this is not toml").unwrap();
+        let res = Config::from_file(&path);
+        assert!(res.is_err());
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn error_when_missing_token() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "socket_path='/tmp/s.sock'").unwrap();
+        let res = Config::from_file(&path);
+        assert!(res.is_err());
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn defaults_are_applied() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "github_token='abc'").unwrap();
+        let cfg = Config::from_file(&path).unwrap();
+        assert_eq!(cfg.socket_path, PathBuf::from("/run/comenq/comenq.sock"));
+        assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
+    }
 }

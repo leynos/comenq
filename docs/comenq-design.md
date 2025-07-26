@@ -515,7 +515,11 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
-`COMENQD_*` environment variables, and any supplied CLI arguments.
+`COMENQD_*` environment variables, and any supplied CLI arguments. CLI
+arguments have the highest precedence, followed by environment variables, and
+finally the configuration file. Missing optional fields are replaced with
+defaults, while an absent `github_token` or invalid TOML results in a
+configuration error.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous

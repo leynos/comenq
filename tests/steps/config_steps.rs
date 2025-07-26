@@ -28,6 +28,43 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     fs::write(&path, format!("github_token='{token}'")).expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
+    unsafe {
+        std::env::remove_var("COMENQD_SOCKET_PATH");
+    }
+}
+
+#[given("an invalid configuration file")]
+fn invalid_configuration_file(world: &mut ConfigWorld) {
+    let dir = TempDir::new().expect("create temp dir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token='abc' this is not toml").expect("write file");
+    world.dir = Some(dir);
+    world.path = Some(path);
+}
+
+#[given("a configuration file without github_token")]
+fn config_file_without_token(world: &mut ConfigWorld) {
+    let dir = TempDir::new().expect("create temp dir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "socket_path='/tmp/s.sock'").expect("write file");
+    world.dir = Some(dir);
+    world.path = Some(path);
+}
+
+#[given(regex = r#"^a configuration file with token \"(.+)\" and no socket_path$"#)]
+fn config_without_socket(world: &mut ConfigWorld, token: String) {
+    let dir = TempDir::new().expect("create temp dir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token='{token}'\nqueue_path='/tmp/q'"),
+    )
+    .expect("write file");
+    world.dir = Some(dir);
+    world.path = Some(path);
+    unsafe {
+        std::env::remove_var("COMENQD_SOCKET_PATH");
+    }
 }
 
 #[given("a missing configuration file")]
