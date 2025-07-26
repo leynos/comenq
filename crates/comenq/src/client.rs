@@ -1,6 +1,6 @@
 //! Client-side communication with the `comenqd` daemon.
 //!
-//! This module contains the logic to serialise a comment request and send it to
+//! This module contains the logic to serialize a comment request and send it to
 //! the daemon over its Unix Domain Socket. It is separated from `lib.rs` so
 //! that argument parsing remains focused and the network logic is easily
 //! testable.
@@ -20,6 +20,9 @@ pub enum ClientError {
     /// Serializing the request failed.
     #[error("failed to serialize request: {0}")]
     Serialize(#[from] serde_json::Error),
+    /// The repository slug was invalid.
+    #[error("invalid repository format")]
+    BadSlug,
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
     Write(#[source] std::io::Error),
@@ -47,6 +50,9 @@ pub enum ClientError {
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
+    if crate::validate_repo_slug(&args.repo_slug).is_err() {
+        return Err(ClientError::BadSlug);
+    }
     let (owner, repo) = parse_slug(&args.repo_slug);
     let request = CommentRequest {
         owner,
@@ -70,7 +76,9 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 
 fn parse_slug(slug: &str) -> (String, String) {
     // safe expect: `validate_repo_slug` ensures two non-empty parts
-    let (owner, repo) = slug.split_once('/').expect("slug already validated");
+    let (owner, repo) = slug
+        .split_once('/')
+        .expect("slug should have been validated by validate_repo_slug");
     (owner.to_owned(), repo.to_owned())
 }
 
@@ -126,6 +134,23 @@ mod tests {
 
         let err = run(args).await.expect_err("should error");
         assert!(matches!(err, ClientError::Connect(_)));
+    }
+
+    #[tokio::test]
+    async fn run_errors_on_bad_slug() {
+        let dir = tempdir().expect("temp dir");
+        let socket = dir.path().join("sock");
+        let _listener = UnixListener::bind(&socket).expect("bind socket");
+
+        let args = Args {
+            repo_slug: "badslug".into(),
+            pr_number: 1,
+            comment_body: "Hi".into(),
+            socket,
+        };
+
+        let err = run(args).await.expect_err("should error");
+        assert!(matches!(err, ClientError::BadSlug));
     }
 
     #[test]

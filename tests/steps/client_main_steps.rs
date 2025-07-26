@@ -80,3 +80,18 @@ fn an_error_occurs(world: &mut ClientWorld) {
         other => panic!("unexpected result: {other:?}"),
     }
 }
+
+#[given("the arguments contain an invalid slug")]
+fn invalid_slug(world: &mut ClientWorld) {
+    if let Some(args) = &mut world.args {
+        args.repo_slug = "bad".into();
+    }
+}
+
+#[then("a slug error occurs")]
+fn slug_error_occurs(world: &mut ClientWorld) {
+    match world.result.take() {
+        Some(Err(ClientError::BadSlug)) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+}

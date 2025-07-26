@@ -341,6 +341,9 @@ resides in a dedicated `client` module to keep the argument parser focused. The
 binary parses the CLI arguments and delegates to `run`, allowing the test suite
 to exercise the network code directly. Any failures to serialize the request or
 communicate with the daemon are surfaced via a small `ClientError` enumeration.
+The `run` function also verifies the repository slug at runtime to guard
+against misuse in other contexts. An invalid slug results in a `BadSlug`
+variant, keeping the code panic free while still surfacing helpful errors.
 
 ## Section 3: Design of the `comenqd` Daemon
 
