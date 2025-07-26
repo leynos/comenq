@@ -9,3 +9,9 @@ Feature: Daemon configuration
     Given a missing configuration file
     When the config is loaded
     Then config loading fails
+
+  Scenario: environment variable overrides file
+    Given a configuration file with token "abc"
+    And environment variable "COMENQD_SOCKET_PATH" is "/tmp/env.sock"
+    When the config is loaded
+    Then socket path is "/tmp/env.sock"

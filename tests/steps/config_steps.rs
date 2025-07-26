@@ -18,6 +18,7 @@ pub struct ConfigWorld {
     dir: Option<TempDir>,
     path: Option<PathBuf>,
     result: Option<Result<Config, ortho_config::OrthoError>>,
+    env_key: Option<String>,
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
@@ -32,6 +33,14 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
 #[given("a missing configuration file")]
 fn missing_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(PathBuf::from("/nonexistent/nowhere.toml"));
+}
+
+#[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
+fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
+    unsafe {
+        std::env::set_var(&key, &value);
+    }
+    world.env_key = Some(key);
 }
 
 #[when("the config is loaded")]
@@ -53,5 +62,23 @@ fn config_loading_fails(world: &mut ConfigWorld) {
     match world.result.take() {
         Some(Err(_)) => {}
         other => panic!("expected error, got {other:?}"),
+    }
+}
+
+#[then(regex = r#"^socket path is \"(.+)\"$"#)]
+fn socket_path_is(world: &mut ConfigWorld, expected: String) {
+    match world.result.take() {
+        Some(Ok(cfg)) => assert_eq!(cfg.socket_path, PathBuf::from(expected)),
+        other => panic!("expected success, got {other:?}"),
+    }
+}
+
+impl Drop for ConfigWorld {
+    fn drop(&mut self) {
+        if let Some(ref key) = self.env_key {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
     }
 }

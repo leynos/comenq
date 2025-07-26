@@ -24,3 +24,4 @@ figment = { version = "0.10", default-features = false, features = ["env", "toml
 [dev-dependencies]
 rstest = "0.18"
 tempfile = "3"
+serial_test = "2"
