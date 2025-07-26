@@ -13,3 +13,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 comenq-lib = { path = "../.." }
 thiserror = { workspace = true }
+tracing = { workspace = true }

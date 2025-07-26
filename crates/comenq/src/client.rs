@@ -8,6 +8,7 @@
 use comenq_lib::CommentRequest;
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, net::UnixStream};
+use tracing::warn;
 
 use crate::Args;
 
@@ -70,7 +71,10 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
         .write_all(&payload)
         .await
         .map_err(ClientError::Write)?;
-    stream.shutdown().await.map_err(ClientError::Shutdown)?;
+    if let Err(e) = stream.shutdown().await {
+        warn!("failed to close connection: {e}");
+        return Err(ClientError::Shutdown(e));
+    }
     Ok(())
 }
 
