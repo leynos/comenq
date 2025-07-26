@@ -339,7 +339,7 @@ inability to connect to the daemon, guiding the user toward a resolution.
 The production code exposes a `run` function in the `comenq` crate. This logic
 resides in a dedicated `client` module to keep the argument parser focused. The
 binary parses the CLI arguments and delegates to `run`, allowing the test suite
-to exercise the network code directly. Any failures to serialise the request or
+to exercise the network code directly. Any failures to serialize the request or
 communicate with the daemon are surfaced via a small `ClientError` enumeration.
 
 ## Section 3: Design of the `comenqd` Daemon

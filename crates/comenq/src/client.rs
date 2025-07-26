@@ -17,9 +17,9 @@ pub enum ClientError {
     /// Connecting to the daemon failed.
     #[error("failed to connect to daemon: {0}")]
     Connect(#[from] std::io::Error),
-    /// Serialising the request failed.
-    #[error("failed to serialise request: {0}")]
-    Serialise(#[from] serde_json::Error),
+    /// Serializing the request failed.
+    #[error("failed to serialize request: {0}")]
+    Serialize(#[from] serde_json::Error),
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
     Write(#[source] std::io::Error),
@@ -69,8 +69,8 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 }
 
 fn parse_slug(slug: &str) -> (String, String) {
-    // safe unwrap: `validate_repo_slug` ensures two non-empty parts
-    let (owner, repo) = slug.split_once('/').unwrap();
+    // safe expect: `validate_repo_slug` ensures two non-empty parts
+    let (owner, repo) = slug.split_once('/').expect("slug already validated");
     (owner.to_owned(), repo.to_owned())
 }
 
