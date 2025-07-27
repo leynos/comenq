@@ -224,6 +224,8 @@ mod tests {
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
     }
 
+    /// CLI arguments should take precedence over environment variables
+    /// and configuration file values when building the daemon `Config`.
     #[rstest]
     #[serial_test::serial]
     fn cli_overrides_env_and_file() {
