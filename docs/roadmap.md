@@ -45,17 +45,17 @@
 
 ## Milestone 4: `comenqd` Daemon — UDS Listener Task
 
-- [ ] Implement the `run_listener` async task.
+- [x] Implement the `run_listener` async task.
 
-- [ ] Bind a `tokio::net::UnixListener` to the configured socket path, ensuring
+- [x] Bind a `tokio::net::UnixListener` to the configured socket path, ensuring
   any stale socket file is removed first.
 
-- [ ] Set the socket file permissions to `0o660` to enforce the security model.
+- [x] Set the socket file permissions to `0o660` to enforce the security model.
 
-- [ ] Create an acceptance loop (`listener.accept().await`) that spawns a new
+- [x] Create an acceptance loop (`listener.accept().await`) that spawns a new
   task for each incoming client connection.
 
-- [ ] Implement the `handle_client` task to read the JSON payload, deserialize
+- [x] Implement the `handle_client` task to read the JSON payload, deserialize
   it into a `CommentRequest`, and enqueue it using the `yaque` sender.
 
 ## Milestone 5: `comenqd` Daemon — Queue Worker Task
