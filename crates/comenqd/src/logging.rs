@@ -51,7 +51,10 @@ mod tests {
 
     impl std::io::Write for BufWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().expect("lock buffer").extend_from_slice(buf);
+            self.buf
+                .lock()
+                .expect("Failed to lock log buffer")
+                .extend_from_slice(buf);
             Ok(buf.len())
         }
 
@@ -66,7 +69,8 @@ mod tests {
         std::env::set_var("RUST_LOG", "info");
         init_with_writer(BufMakeWriter { buf: buf.clone() });
         info!("captured");
-        let output = String::from_utf8(buf.lock().expect("lock buffer").clone()).expect("utf8");
+        let output = String::from_utf8(buf.lock().expect("Failed to lock log buffer").clone())
+            .expect("Captured output is not valid UTF-8");
         assert!(output.contains("captured"));
     }
 }

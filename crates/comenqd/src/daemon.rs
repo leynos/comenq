@@ -138,16 +138,13 @@ mod tests {
         let start = Instant::now();
         let timeout = Duration::from_secs(2);
         loop {
-            if cfg.queue_path.is_dir() {
+            if cfg.queue_path.is_dir() || start.elapsed() > timeout {
                 break;
-            }
-            if start.elapsed() > timeout {
-                handle.abort();
-                panic!("queue directory not created");
             }
             sleep(Duration::from_millis(10)).await;
         }
 
         handle.abort();
+        assert!(cfg.queue_path.is_dir(), "queue directory not created");
     }
 }
