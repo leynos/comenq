@@ -11,20 +11,21 @@ use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::run_listener;
+use comenqd::daemon::{queue_writer, run_listener};
 use yaque::channel;
 
 #[derive(Default, World)]
 pub struct ListenerWorld {
     dir: Option<TempDir>,
     cfg: Option<Arc<Config>>,
-    sender: Option<Arc<Mutex<yaque::Sender>>>,
     receiver: Option<yaque::Receiver>,
+    shutdown: Option<watch::Sender<()>>,
+    writer: Option<tokio::task::JoinHandle<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
     client_result: Option<Result<(), std::io::Error>>, // not used but for uniform
 }
@@ -45,15 +46,21 @@ async fn running_listener(world: &mut ListenerWorld) {
         cooldown_period_seconds: 1,
     });
     let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
-    let sender_arc = Arc::new(Mutex::new(sender));
+    let (client_tx, writer_rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
     let cfg_clone = cfg.clone();
-    let sender_clone = sender_arc.clone();
+    let writer = tokio::spawn(async move {
+        queue_writer(sender, writer_rx).await.unwrap();
+    });
     let handle = tokio::spawn(async move {
-        run_listener(cfg_clone, sender_clone).await.unwrap();
+        run_listener(cfg_clone, client_tx, shutdown_rx)
+            .await
+            .unwrap();
     });
     world.dir = Some(dir);
     world.cfg = Some(cfg);
-    world.sender = Some(sender_arc);
+    world.shutdown = Some(shutdown_tx);
+    world.writer = Some(writer);
     world.receiver = Some(receiver);
     world.handle = Some(handle);
     // wait for socket create
@@ -109,6 +116,12 @@ async fn request_rejected(world: &mut ListenerWorld) {
 
 impl Drop for ListenerWorld {
     fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(writer) = self.writer.take() {
+            writer.abort();
+        }
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
