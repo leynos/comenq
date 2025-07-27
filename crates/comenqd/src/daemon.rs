@@ -109,12 +109,43 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver, octocrab: Arc<Octocra
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use tokio::time::{Duration, Instant, sleep};
 
     #[tokio::test]
     async fn ensure_queue_dir_creates_directory() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create temp dir");
         let path = dir.path().join("queue");
-        ensure_queue_dir(&path).await.unwrap();
+        ensure_queue_dir(&path).await.expect("create dir");
         assert!(path.is_dir());
+    }
+
+    #[tokio::test]
+    async fn run_creates_queue_directory() {
+        let dir = tempdir().expect("create temp dir");
+        let cfg = Config {
+            github_token: "t".into(),
+            socket_path: dir.path().join("sock"),
+            queue_path: dir.path().join("q"),
+            cooldown_period_seconds: 1,
+        };
+
+        assert!(!cfg.queue_path.exists());
+
+        let handle = tokio::spawn(run(cfg.clone()));
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(2);
+        loop {
+            if cfg.queue_path.is_dir() {
+                break;
+            }
+            if start.elapsed() > timeout {
+                handle.abort();
+                panic!("queue directory not created");
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        handle.abort();
     }
 }
