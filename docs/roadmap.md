@@ -34,13 +34,13 @@
   (`/etc/comenqd/config.toml`) for parameters like `github_token`,
   `socket_path`, and `queue_path`.
 
-- [ ] Set up structured logging using the `tracing` and `tracing-subscriber`
+- [x] Set up structured logging using the `tracing` and `tracing-subscriber`
   crates.
 
-- [ ] Initialize the `yaque` persistent queue at the path specified in the
+- [x] Initialize the `yaque` persistent queue at the path specified in the
   configuration.
 
-- [ ] Structure the daemon's `main` function to spawn the two primary,
+- [x] Structure the daemon's `main` function to spawn the two primary,
   long-running `tokio` tasks: the UDS listener and the queue worker.
 
 ## Milestone 4: `comenqd` Daemon — UDS Listener Task

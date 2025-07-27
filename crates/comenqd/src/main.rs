@@ -4,6 +4,8 @@
 
 use tracing::info;
 
+mod logging;
+
 mod config;
 mod daemon;
 use config::Config;
@@ -11,7 +13,7 @@ use daemon::run;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    logging::init();
     let cfg = Config::load()?;
     info!(socket = ?cfg.socket_path, queue = ?cfg.queue_path, "Comenqd daemon started");
     run(cfg).await
