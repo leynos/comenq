@@ -7,7 +7,6 @@
 use tracing_subscriber::{EnvFilter, fmt};
 
 /// Initialize the global tracing subscriber.
-#[allow(dead_code)]
 pub fn init() {
     fmt()
         .with_env_filter(EnvFilter::from_default_env())

@@ -1015,8 +1015,8 @@ binary crates under `crates/`. `CommentRequest` resides in the library and
 derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
 listener and queue worker as described above. Structured logging is initialised
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
-environment variable. The queue directory is created on start if it does not
-already exist before `yaque` opens it.
+environment variable. The queue directory is created asynchronously on start if
+it does not already exist before `yaque` opens it.
 
 ## Works cited
 

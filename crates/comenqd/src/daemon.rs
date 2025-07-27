@@ -7,11 +7,12 @@ use crate::config::Config;
 use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
-use std::fs;
+use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
 use yaque::{Receiver, Sender, channel};
@@ -23,17 +24,22 @@ fn build_octocrab(token: &str) -> Result<Octocrab> {
 }
 
 fn prepare_listener(path: &Path) -> Result<UnixListener> {
-    if fs::metadata(path).is_ok() {
-        fs::remove_file(path)?;
+    if stdfs::metadata(path).is_ok() {
+        stdfs::remove_file(path)?;
     }
     let listener = UnixListener::bind(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))?;
     Ok(listener)
+}
+
+async fn ensure_queue_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).await?;
+    Ok(())
 }
 
 /// Start the daemon with the provided configuration.
 pub async fn run(config: Config) -> Result<()> {
-    fs::create_dir_all(&config.queue_path)?;
+    ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let (tx, rx) = channel(&config.queue_path)?;
@@ -105,20 +111,10 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn run_creates_queue_dir() {
+    async fn ensure_queue_dir_creates_directory() {
         let dir = tempdir().unwrap();
-        let cfg = Config {
-            github_token: "tok".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("queue"),
-            cooldown_period_seconds: 1,
-        };
-
-        let queue_dir = cfg.queue_path.clone();
-        let handle = tokio::spawn(run(cfg));
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(queue_dir.is_dir());
-        handle.abort();
-        let _ = handle.await;
+        let path = dir.path().join("queue");
+        ensure_queue_dir(&path).await.unwrap();
+        assert!(path.is_dir());
     }
 }
