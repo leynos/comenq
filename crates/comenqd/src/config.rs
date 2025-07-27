@@ -223,4 +223,23 @@ mod tests {
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
     }
+
+    /// CLI arguments should take precedence over environment variables
+    /// and configuration file values when building the daemon `Config`.
+    #[rstest]
+    #[serial_test::serial]
+    fn cli_overrides_env_and_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/file.sock'").unwrap();
+        let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
+        let cli = CliArgs {
+            config: path.clone(),
+            github_token: None,
+            socket_path: Some(PathBuf::from("/tmp/cli.sock")),
+            queue_path: None,
+        };
+        let cfg = Config::from_file_with_cli(&path, &cli).unwrap();
+        assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+    }
 }
