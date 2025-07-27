@@ -1,8 +1,6 @@
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
+//! Behavioural test steps for the listener task.
+#![expect(clippy::expect_used, reason = "simplify test failure output")]
+#![expect(clippy::unwrap_used, reason = "simplify test failure output")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +25,6 @@ pub struct ListenerWorld {
     shutdown: Option<watch::Sender<()>>,
     writer: Option<tokio::task::JoinHandle<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
-    client_result: Option<Result<(), std::io::Error>>, // not used but for uniform
 }
 
 impl std::fmt::Debug for ListenerWorld {
@@ -85,7 +82,7 @@ async fn client_sends_valid(world: &mut ListenerWorld) {
         body: "b".into(),
     };
     let data = serde_json::to_vec(&req).unwrap();
-    world.client_result = Some(stream.write_all(&data).await);
+    stream.write_all(&data).await.unwrap();
     stream.shutdown().await.expect("shutdown");
 }
 
@@ -95,7 +92,7 @@ async fn client_sends_invalid(world: &mut ListenerWorld) {
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await
         .expect("connect");
-    world.client_result = Some(stream.write_all(b"not json").await);
+    stream.write_all(b"not json").await.unwrap();
     stream.shutdown().await.expect("shutdown");
 }
 
