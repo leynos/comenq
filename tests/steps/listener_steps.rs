@@ -60,13 +60,20 @@ async fn running_listener(world: &mut ListenerWorld) {
     world.writer = Some(writer);
     world.receiver = Some(receiver);
     world.handle = Some(handle);
-    // wait for socket create
+
+    // wait up to 100 ms for the socket file to appear
+    let socket_path = &world.cfg.as_ref().unwrap().socket_path;
     for _ in 0..10 {
-        if world.cfg.as_ref().unwrap().socket_path.exists() {
+        if socket_path.exists() {
             break;
         }
         sleep(Duration::from_millis(10)).await;
     }
+    assert!(
+        socket_path.exists(),
+        "socket file {} not created within timeout",
+        socket_path.display()
+    );
 }
 
 #[when("a client sends a valid request")]
