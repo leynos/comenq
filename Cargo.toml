@@ -18,6 +18,7 @@ comenq = { path = "crates/comenq" }
 comenqd = { path = "crates/comenqd" }
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
 tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions release
+yaque = { workspace = true }
 
 [[test]]
 name = "cucumber"

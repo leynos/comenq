@@ -1016,7 +1016,10 @@ derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
 listener and queue worker as described above. Structured logging is initialised
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
 environment variable. The queue directory is created asynchronously on start if
-it does not already exist before `yaque` opens it.
+it does not already exist before `yaque` opens it. Incoming requests are
+forwarded from the listener to a dedicated queue writer task over a Tokio
+`mpsc` channel. This task serializes writes to the `yaque::Sender`, preserving
+single-writer semantics without per-connection locking.
 
 ## Works cited
 
