@@ -113,15 +113,17 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_queue_dir_creates_directory() {
-        let dir = tempdir().expect("create temp dir");
+        let dir = tempdir().expect("Failed to create temporary directory");
         let path = dir.path().join("queue");
-        ensure_queue_dir(&path).await.expect("create dir");
+        ensure_queue_dir(&path)
+            .await
+            .expect("Failed to ensure queue directory");
         assert!(path.is_dir());
     }
 
     #[tokio::test]
     async fn run_creates_queue_directory() {
-        let dir = tempdir().expect("create temp dir");
+        let dir = tempdir().expect("Failed to create temporary directory");
         let cfg = Config {
             github_token: "t".into(),
             socket_path: dir.path().join("sock"),

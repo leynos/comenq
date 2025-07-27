@@ -16,7 +16,7 @@
 - **Clear commit messages.** Commit messages should be descriptive, explaining
   what was changed and why.
 - **Name things precisely.** Use clear, descriptive variable and function names.
-  For booleans, prefer names with `is`, `has`, or `should`.
+  For booleans, prefer names with `is`, `has`, `should`.
 - **Structure logically.** Each file should encapsulate a coherent module. Group
   related code (e.g., models + utilities + fixtures) close together.
 - **Group by feature, not layer.** Colocate views, logic, fixtures, and helpers
@@ -157,7 +157,7 @@ project:
   changes from new major versions. This approach is critical for ensuring build
   stability and reproducibility.
 - **Prohibit unstable version specifiers.** The use of wildcard (`*`) or
-  open-ended inequality (`>=`) version requirements is strictly forbidden as
+  open-ended inequality (`>=`) version requirements are strictly forbidden, as
   they introduce unacceptable risk and unpredictability. Tilde requirements
   (`~`) should only be used where a dependency must be locked to patch-level
   updates for a specific, documented reason.
