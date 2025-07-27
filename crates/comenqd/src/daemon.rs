@@ -33,6 +33,8 @@ fn prepare_listener(path: &Path) -> Result<UnixListener> {
 
 /// Start the daemon with the provided configuration.
 pub async fn run(config: Config) -> Result<()> {
+    fs::create_dir_all(&config.queue_path)?;
+    tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let (tx, rx) = channel(&config.queue_path)?;
     let cfg = Arc::new(config);
@@ -94,5 +96,29 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver, octocrab: Arc<Octocra
                 tracing::error!(error = %e, "Timed out posting comment");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn run_creates_queue_dir() {
+        let dir = tempdir().unwrap();
+        let cfg = Config {
+            github_token: "tok".into(),
+            socket_path: dir.path().join("sock"),
+            queue_path: dir.path().join("queue"),
+            cooldown_period_seconds: 1,
+        };
+
+        let queue_dir = cfg.queue_path.clone();
+        let handle = tokio::spawn(run(cfg));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(queue_dir.is_dir());
+        handle.abort();
+        let _ = handle.await;
     }
 }
