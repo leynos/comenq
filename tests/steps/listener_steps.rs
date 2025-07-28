@@ -62,7 +62,11 @@ async fn running_listener(world: &mut ListenerWorld) {
     world.handle = Some(handle);
 
     // wait up to 100 ms for the socket file to appear
-    let socket_path = &world.cfg.as_ref().unwrap().socket_path;
+    let socket_path = &world
+        .cfg
+        .as_ref()
+        .expect("config not initialised in ListenerWorld")
+        .socket_path;
     for _ in 0..10 {
         if socket_path.exists() {
             break;
