@@ -1,6 +1,6 @@
 mod steps;
 use cucumber::World as _;
-use steps::{CliWorld, ClientWorld, CommentWorld, ConfigWorld, ListenerWorld};
+use steps::{CliWorld, ClientWorld, CommentWorld, ConfigWorld, ListenerWorld, WorkerWorld};
 
 #[tokio::main]
 async fn main() {
@@ -10,5 +10,6 @@ async fn main() {
         CommentWorld::run("tests/features/comment_request.feature"),
         ConfigWorld::run("tests/features/config.feature"),
         ListenerWorld::run("tests/features/listener.feature"),
+        WorkerWorld::run("tests/features/worker.feature"),
     );
 }

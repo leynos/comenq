@@ -8,3 +8,5 @@ pub mod config_steps;
 pub use config_steps::ConfigWorld;
 pub mod listener_steps;
 pub use listener_steps::ListenerWorld;
+pub mod worker_steps;
+pub use worker_steps::WorkerWorld;

@@ -122,26 +122,35 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
     Ok(())
 }
 
-async fn run_worker(config: Arc<Config>, mut rx: Receiver, octocrab: Arc<Octocrab>) -> Result<()> {
+pub async fn run_worker(
+    config: Arc<Config>,
+    mut rx: Receiver,
+    octocrab: Arc<Octocrab>,
+) -> Result<()> {
     loop {
         let guard = rx.recv().await?;
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         let issues = octocrab.issues(&request.owner, &request.repo);
-        let post = issues.create_comment(request.pr_number, &request.body);
-
-        match tokio::time::timeout(Duration::from_secs(10), post).await {
-            Ok(Ok(_)) => {
+        match issues
+            .create_comment(request.pr_number, &request.body)
+            .await
+        {
+            Ok(_) => {
                 guard.commit()?;
-                tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
-            }
-            Ok(Err(e)) => {
-                tracing::error!(error = %e, owner = %request.owner, repo = %request.repo, pr = request.pr_number, "GitHub API call failed");
             }
             Err(e) => {
-                tracing::error!(error = %e, "Timed out posting comment");
+                tracing::error!(
+                    error = %e,
+                    owner = %request.owner,
+                    repo = %request.repo,
+                    pr = request.pr_number,
+                    "GitHub API call failed"
+                );
             }
         }
+
+        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
     }
 }
 
@@ -154,6 +163,8 @@ mod tests {
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, Instant, sleep};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn ensure_queue_dir_creates_directory() {
@@ -278,5 +289,95 @@ mod tests {
         listener_task.abort();
         let _ = shutdown_tx.send(());
         drop(writer);
+    }
+
+    #[tokio::test]
+    async fn run_worker_commits_on_success() {
+        let dir = tempdir().expect("tempdir");
+        let cfg = Arc::new(Config {
+            github_token: "t".into(),
+            socket_path: dir.path().join("sock"),
+            queue_path: dir.path().join("q"),
+            cooldown_period_seconds: 0,
+        });
+
+        let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
+        let req = CommentRequest {
+            owner: "o".into(),
+            repo: "r".into(),
+            pr_number: 1,
+            body: "b".into(),
+        };
+        let data = serde_json::to_vec(&req).expect("serialize");
+        sender.send(data).await.expect("send");
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/repos/o/r/issues/1/comments"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(201).set_body_raw("{}", "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let octocrab = Arc::new(
+            Octocrab::builder()
+                .personal_token("t".to_string())
+                .base_uri(server.uri())
+                .expect("base_uri")
+                .build()
+                .expect("build octocrab"),
+        );
+
+        let worker = tokio::spawn(run_worker(cfg.clone(), receiver, octocrab));
+        sleep(Duration::from_millis(50)).await;
+        worker.abort();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn run_worker_requeues_on_error() {
+        let dir = tempdir().expect("tempdir");
+        let cfg = Arc::new(Config {
+            github_token: "t".into(),
+            socket_path: dir.path().join("sock"),
+            queue_path: dir.path().join("q"),
+            cooldown_period_seconds: 0,
+        });
+
+        let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
+        let req = CommentRequest {
+            owner: "o".into(),
+            repo: "r".into(),
+            pr_number: 1,
+            body: "b".into(),
+        };
+        let data = serde_json::to_vec(&req).expect("serialize");
+        sender.send(data).await.expect("send");
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/repos/o/r/issues/1/comments"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let octocrab = Arc::new(
+            Octocrab::builder()
+                .personal_token("t".to_string())
+                .base_uri(server.uri())
+                .expect("base_uri")
+                .build()
+                .expect("build octocrab"),
+        );
+
+        let worker = tokio::spawn(run_worker(cfg.clone(), receiver, octocrab));
+        sleep(Duration::from_millis(50)).await;
+        worker.abort();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
     }
 }
