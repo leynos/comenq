@@ -60,24 +60,24 @@
 
 ## Milestone 5: `comenqd` Daemon — Queue Worker Task
 
-- [ ] Implement the `run_worker` async task.
+- [x] Implement the `run_worker` async task.
 
-- [ ] Initialize the `octocrab` client with the GitHub PAT from the
+- [x] Initialize the `octocrab` client with the GitHub PAT from the
   configuration.
 
-- [ ] Create the main worker loop that dequeues jobs one at a time using
+- [x] Create the main worker loop that dequeues jobs one at a time using
   `yaque`'s transactional `receiver.recv().await`.
 
-- [ ] Implement the logic to post a comment to GitHub using the correct
+- [x] Implement the logic to post a comment to GitHub using the correct
   `octocrab` method: `issues().create_comment()`.
 
-- [ ] On successful API post, explicitly commit the job using `guard.commit()`.
+- [x] On successful API post, explicitly commit the job using `guard.commit()`.
 
-- [ ] On API failure, log the error and allow the `RecvGuard` to be dropped,
+- [x] On API failure, log the error and allow the `RecvGuard` to be dropped,
   automatically requeuing the job.
 
-- [ ] After processing each job (successfully or not), enforce the 15-minute
-  (900 seconds) cooling-off period using `tokio::time::sleep`.
+- [x] After processing each job (successfully or not), enforce the 16-minute
+  (960 seconds) cooling-off period using `tokio::time::sleep`.
 
 ## Milestone 6: Deployment and Operationalization
 

@@ -21,7 +21,7 @@ therefore decomposed into two distinct, cooperating processes:
 
 1. `comenqd` **(The Daemon):** A long-running background process that serves as
    the system's engine. It is solely responsible for managing a persistent job
-   queue, interacting with the GitHub API, and enforcing the 15-minute
+   queue, interacting with the GitHub API, and enforcing the 16-minute
    cooling-off period between posts.
 
 2. `comenq` **(The Client):** A lightweight command-line interface (CLI) tool.
@@ -33,7 +33,7 @@ use a daemon-client model over a Unix socket[^1], yields significant advantages:
 
 - **Persistence and Statefulness:** The daemon can maintain the queue and its
   internal timer state across many client invocations, ensuring that the
-  15-minute delay is consistently enforced.
+  16-minute delay is consistently enforced.
 
 - **Decoupling:** The user's interaction (via the CLI) is immediate. The user
   can submit a comment and receive confirmation that it has been enqueued
@@ -75,7 +75,7 @@ The complete lifecycle of a request is illustrated in the following sequence:
 10. Upon successful posting, the worker commits the job, permanently removing
    it from the queue.
 
-11. The worker task then enters a 15-minute sleep state (the "cooling-off
+11. The worker task then enters a 16-minute sleep state (the "cooling-off
    period").
 
 12. After the sleep period elapses, the worker task returns to step 8, ready to
@@ -368,7 +368,7 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 2. `task_process_queue`: This is the main worker task. It operates in a
    serialized loop, pulling one job at a time from the queue, processing it
    (i.e., posting the comment to GitHub), and then observing the mandatory
-   15-minute cooldown period.
+   16-minute cooldown period.
 
 This concurrent design ensures that the daemon remains responsive to new client
 requests even while the worker task is in its long sleep phase. A request can
@@ -490,8 +490,8 @@ The worker task's loop consists of the following steps:
 
 4. **Cooldown:** After successfully processing a job (or after a failed
    attempt), the task calls
-   `tokio::time::sleep(Duration::from_secs(900)).await` to enforce the
-   15-minute cooling-off period.
+   `tokio::time::sleep(Duration::from_secs(960)).await` to enforce the
+   16-minute cooling-off period.
 
 5. The loop then repeats.
 
@@ -511,7 +511,7 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                           | /run/comenq/comenq.sock |
 | queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                   | /var/lib/comenq/queue   |
 | log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
-| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 900                     |
+| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 960                     |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
@@ -914,7 +914,7 @@ struct Config {
 fn default_socket_path() -> PathBuf { PathBuf::from("/run/comenq/comenq.sock") }
 fn default_queue_path() -> PathBuf { PathBuf::from("/var/lib/comenq/queue") }
 fn default_log_level() -> String { "info".to_string() }
-fn default_cooldown() -> u64 { 900 }
+fn default_cooldown() -> u64 { 960 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1020,6 +1020,13 @@ it does not already exist before `yaque` opens it. Incoming requests are
 forwarded from the listener to a dedicated queue writer task over a Tokio
 `mpsc` channel. This task serializes writes to the `yaque::Sender`, preserving
 single-writer semantics without per-connection locking.
+
+The worker's cooling-off period is configured via `cooldown_period_seconds` and
+defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
+secondary rate limits.
+
+GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
+to ensure the worker does not block indefinitely if the network stalls.
 
 ## Works cited
 

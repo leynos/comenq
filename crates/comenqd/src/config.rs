@@ -14,7 +14,10 @@ const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// Default cooldown in seconds between comment posts.
-const DEFAULT_COOLDOWN: u64 = 900;
+///
+/// The period was increased from 15 to 16 minutes to provide a larger
+/// buffer against GitHub's secondary rate limits.
+const DEFAULT_COOLDOWN: u64 = 960;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
