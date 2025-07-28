@@ -1025,6 +1025,9 @@ The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
 secondary rate limits.
 
+GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
+to ensure the worker does not block indefinitely if the network stalls.
+
 ## Works cited
 
 [^1]: A simple UNIX socket listener in Rust | Kyle M. Douglass. Accessed on
