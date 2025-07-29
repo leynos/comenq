@@ -164,7 +164,11 @@ pub async fn run_worker(
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
+    mod test_helpers {
+        include!("../../../tests/util/test_helpers.rs");
+    }
     use tempfile::tempdir;
+    use test_helpers::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
@@ -174,12 +178,9 @@ mod tests {
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
-            cooldown_period_seconds: 0,
-        });
+        let mut c = temp_config(&dir);
+        c.cooldown_period_seconds = 0;
+        let cfg = Arc::new(c);
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -199,14 +200,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let octo = Arc::new(
-            Octocrab::builder()
-                .personal_token("t".to_string())
-                .base_uri(server.uri())
-                .expect("base_uri")
-                .build()
-                .expect("build octocrab"),
-        );
+        let octo = octocrab_for(&server);
 
         (server, cfg, rx, octo)
     }
@@ -224,12 +218,7 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
-            cooldown_period_seconds: 1,
-        };
+        let cfg = temp_config(&dir);
 
         assert!(!cfg.queue_path.exists());
 
@@ -292,12 +281,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
-            cooldown_period_seconds: 1,
-        });
+        let cfg = Arc::new(temp_config(&dir));
 
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
