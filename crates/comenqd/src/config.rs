@@ -118,46 +118,18 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
+    mod env_guard {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/env_guard.rs"
+        ));
     }
 
-    impl EnvVarGuard {
-        fn set(key: &str, val: &str) -> Self {
-            let original = std::env::var(key).ok();
-            set_env_var(key, val);
-            Self {
-                key: key.to_string(),
-                original,
-            }
-        }
+    pub mod support {
+        pub use super::env_guard::{EnvVarGuard, remove_env_var, set_env_var};
     }
 
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(v) => set_env_var(&self.key, v),
-                None => remove_env_var(&self.key),
-            }
-        }
-    }
-
-    fn remove_env(key: &str) {
-        remove_env_var(key);
-    }
-
-    /// Safely set an environment variable for tests.
-    fn set_env_var(key: &str, val: &str) {
-        // Safety: tests using `serial_test::serial` run single-threaded.
-        unsafe { std::env::set_var(key, val) };
-    }
-
-    /// Safely remove an environment variable for tests.
-    fn remove_env_var(key: &str) {
-        // Safety: tests using `serial_test::serial` run single-threaded.
-        unsafe { std::env::remove_var(key) };
-    }
+    use support::{EnvVarGuard, remove_env_var};
 
     #[rstest]
     #[serial_test::serial]
@@ -169,7 +141,7 @@ mod tests {
             "github_token='abc'\nsocket_path='/tmp/s.sock'\nqueue_path='/tmp/q'",
         )
         .unwrap();
-        remove_env("COMENQD_SOCKET_PATH");
+        remove_env_var("COMENQD_SOCKET_PATH");
         let cfg = Config::from_file(&path).unwrap();
         assert_eq!(cfg.github_token, "abc");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/s.sock"));
