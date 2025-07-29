@@ -4,7 +4,7 @@
 //! Unix socket listener and the queue worker.
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -36,6 +36,16 @@ fn prepare_listener(path: &Path) -> Result<UnixListener> {
 async fn ensure_queue_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).await?;
     Ok(())
+}
+
+/// Post a comment to GitHub with a 10 second timeout.
+async fn post_comment(octocrab: &Octocrab, request: &CommentRequest) -> Result<()> {
+    let issues = octocrab.issues(&request.owner, &request.repo);
+    let fut = issues.create_comment(request.pr_number, &request.body);
+    match tokio::time::timeout(Duration::from_secs(10), fut).await {
+        Ok(res) => res.map(|_| ()).map_err(Into::into),
+        Err(_) => Err(anyhow!("timeout")),
+    }
 }
 
 pub async fn queue_writer(
@@ -131,27 +141,17 @@ pub async fn run_worker(
         let guard = rx.recv().await?;
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
-        let issues = octocrab.issues(&request.owner, &request.repo);
-        let post = issues.create_comment(request.pr_number, &request.body);
-        match tokio::time::timeout(Duration::from_secs(10), post).await {
-            Ok(Ok(_)) => {
+        match post_comment(&octocrab, &request).await {
+            Ok(_) => {
                 guard.commit()?;
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::error!(
                     error = %e,
                     owner = %request.owner,
                     repo = %request.repo,
                     pr = request.pr_number,
                     "GitHub API call failed"
-                );
-            }
-            Err(_) => {
-                tracing::error!(
-                    owner = %request.owner,
-                    repo = %request.repo,
-                    pr = request.pr_number,
-                    "GitHub API call timed out"
                 );
             }
         }
