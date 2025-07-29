@@ -163,6 +163,12 @@ pub async fn run_worker(
 #[cfg(test)]
 mod tests {
     //! Tests for the daemon tasks.
+    mod fs {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/fs.rs"
+        ));
+    }
     use super::*;
     use tempfile::tempdir;
     use tokio::io::AsyncWriteExt;
@@ -307,12 +313,11 @@ mod tests {
         let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
 
         // Wait for socket to exist
-        for _ in 0..10 {
-            if cfg.socket_path.exists() {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
+        assert!(
+            fs::wait_for_path(&cfg.socket_path, 100).await,
+            "socket file {} not created within timeout",
+            cfg.socket_path.display()
+        );
 
         let mut stream = UnixStream::connect(&cfg.socket_path)
             .await
