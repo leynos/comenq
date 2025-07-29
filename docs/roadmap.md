@@ -79,24 +79,34 @@
 - [x] After processing each job (successfully or not), enforce the 16-minute
   (960 seconds) cooling-off period using `tokio::time::sleep`.
 
-## Milestone 6: Deployment and Operationalization
+## Milestone 6: Automated Cross-Platform Packaging and Release
 
-- [ ] Write an installation script (`install.sh`) to compile release binaries
-  and place them in standard system locations (`/usr/local/bin`,
-  `/usr/local/sbin`).
+This milestone seeks to produce native packages for major Linux distributions and macOS, simplifying installation and improving security and maintainability.
 
-- [ ] The script should create a dedicated system user (`comenq`) and the
-  necessary directories (`/etc/comenqd`, `/var/lib/comenq`, `/run/comenq`) with
-  secure permissions.
+- [ ] **Implement Declarative Packaging with GoReleaser**
 
-- [ ] Create a `systemd` service unit file (`comenq.service`) for the daemon.
+  - [ ] Create a comprehensive `.goreleaser.yaml` configuration to define Linux build, packaging, and release process for both `comenq` and `comenqd`.
 
-- [ ] Configure the service to run as the `comenq` user, restart on failure,
-  and include security hardening directives (`ProtectSystem`, `PrivateTmp`,
-  etc.).
+  - [ ] Use GoReleaser's custom builder hooks to integrate the `cargo build` process for the Rust binaries.
 
-- [ ] Document the process for securely creating the configuration file and
-  setting its permissions (`chmod 640`).
+- [ ] **Package for Linux Distributions (Fedora & Ubuntu)**
 
-- [ ] Update the `README.md` and other documentation to reflect the final
-  implementation and usage instructions.
+  - [ ] Create a hardened `systemd` service unit file (`comenqd.service`) for the daemon, incorporating security best practices (`ProtectSystem`, `PrivateTmp`, `NoNewPrivileges`, etc.).
+
+  - [ ] Author `preinstall`, `postinstall`, and `preremove` scripts to be embedded in the packages. These will handle the creation of the dedicated `comenq` system user and manage the `systemd` service lifecycle.
+
+  - [ ] Configure GoReleaser's `nfpms` section to build and sign `.rpm` and `.deb` packages.
+
+- [ ] **Automate the Release Workflow**
+
+  - [ ] Implement a GitHub Actions workflow that triggers on new version tags (e.g., `v*`).
+
+  - [ ] The workflow will orchestrate the entire release: checking out the code, installing dependencies, and executing GoReleaser.
+
+  - [ ] GoReleaser will then build the binaries, create all packages, publish the Homebrew formula, generate a changelog from git history, and upload all assets to a draft GitHub Release.
+
+- [ ] **Update Public Documentation**
+
+  - [ ] Revise the `README.md` to feature the new, simplified installation instructions using `apt` and `dnf`
+
+  - [ ] Add a new document to the `/docs` directory detailing the automated packaging process for future maintainers and contributors.
