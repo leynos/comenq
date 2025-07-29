@@ -1,10 +1,11 @@
-//! Asynchronous daemon tasks for comenqd.
+//! Daemon tasks for comenqd.
 //!
-//! This module provides the run function used by `main` which spawns the
-//! Unix socket listener and the queue worker.
+//! This module implements the Unix socket listener and the worker that
+//! processes queued comment requests. It posts comments with a timeout and
+//! applies the configured cooldown period between requests.
 
 use crate::config::Config;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -12,11 +13,23 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 use yaque::{Receiver, Sender, channel};
+
+/// Errors returned when posting a comment to GitHub.
+#[derive(Debug, Error)]
+enum PostCommentError {
+    /// The GitHub API request failed.
+    #[error(transparent)]
+    Api(#[from] octocrab::Error),
+    /// The request timed out.
+    #[error("timeout")]
+    Timeout,
+}
 
 fn build_octocrab(token: &str) -> Result<Octocrab> {
     Ok(Octocrab::builder()
@@ -39,12 +52,15 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
 }
 
 /// Post a comment to GitHub with a 10 second timeout.
-async fn post_comment(octocrab: &Octocrab, request: &CommentRequest) -> Result<()> {
+async fn post_comment(
+    octocrab: &Octocrab,
+    request: &CommentRequest,
+) -> Result<(), PostCommentError> {
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
     match tokio::time::timeout(Duration::from_secs(10), fut).await {
-        Ok(res) => res.map(|_| ()).map_err(Into::into),
-        Err(_) => Err(anyhow!("timeout")),
+        Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
+        Err(_) => Err(PostCommentError::Timeout),
     }
 }
 
@@ -145,13 +161,21 @@ pub async fn run_worker(
             Ok(_) => {
                 guard.commit()?;
             }
-            Err(e) => {
+            Err(PostCommentError::Api(e)) => {
                 tracing::error!(
                     error = %e,
                     owner = %request.owner,
                     repo = %request.repo,
                     pr = request.pr_number,
                     "GitHub API call failed"
+                );
+            }
+            Err(PostCommentError::Timeout) => {
+                tracing::error!(
+                    owner = %request.owner,
+                    repo = %request.repo,
+                    pr = request.pr_number,
+                    "GitHub API call timed out"
                 );
             }
         }
