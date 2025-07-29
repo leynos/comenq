@@ -38,6 +38,33 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Forward bytes from a channel into the persistent queue.
+///
+/// The queue writer decouples the listener from the queue, ensuring a
+/// single writer for the `yaque` queue. It reads raw JSON payloads from the
+/// provided [`mpsc::UnboundedReceiver`] and attempts to enqueue each item
+/// using the [`yaque::Sender`]. Errors are logged and the loop continues so
+/// the daemon remains responsive.
+///
+/// # Parameters
+/// - `sender`: queue writer from `yaque`.
+/// - `rx`: receiver for payloads from client handlers.
+///
+/// # Errors
+/// Returns an [`anyhow::Error`] if the sender fails while awaiting shutdown.
+///
+/// # Examples
+/// ```no_run
+/// use yaque::channel;
+/// use tokio::sync::mpsc;
+/// # async fn docs() -> anyhow::Result<()> {
+/// let (queue_tx, _rx) = channel("/tmp/q")?;
+/// let (tx, rx) = mpsc::unbounded_channel();
+/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await? });
+/// tx.send(Vec::new()).unwrap();
+/// # Ok(())
+/// # }
+/// ```
 pub async fn queue_writer(
     mut sender: Sender,
     mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -81,6 +108,21 @@ pub async fn run(config: Config) -> Result<()> {
     Ok(())
 }
 
+/// Listen on the Unix socket and spawn a handler for each client.
+///
+/// The listener accepts connections on the path configured in [`Config`]. Each
+/// connection is handled concurrently by [`handle_client`], forwarding valid
+/// requests to the queue writer. The function exits when the `shutdown` watch
+/// channel is triggered.
+///
+/// # Parameters
+/// - `config`: shared daemon configuration.
+/// - `tx`: channel used to forward request bytes to [`queue_writer`].
+/// - `shutdown`: signal to terminate the listener loop.
+///
+/// # Errors
+/// Returns an error if the socket cannot be created or if accepting a
+/// connection fails after retries.
 pub async fn run_listener(
     config: Arc<Config>,
     tx: mpsc::UnboundedSender<Vec<u8>>,
@@ -112,6 +154,20 @@ pub async fn run_listener(
     Ok(())
 }
 
+/// Read a single request from `stream` and forward it to the queue.
+///
+/// Expects the client to send a JSON encoded [`CommentRequest`] and then close
+/// the connection. The request is re-encoded to bytes and sent over `tx` for the
+/// queue writer to persist. If the channel has been closed an error is
+/// returned.
+///
+/// # Parameters
+/// - `stream`: client connection on the Unix socket.
+/// - `tx`: channel to the queue writer task.
+///
+/// # Errors
+/// Fails if reading from the socket or parsing JSON fails, or if the queue
+/// writer has shut down.
 async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>>) -> Result<()> {
     let mut buffer = Vec::new();
     stream.read_to_end(&mut buffer).await?;
@@ -122,6 +178,22 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
     Ok(())
 }
 
+/// Dequeue requests and post comments to GitHub with a cooldown.
+///
+/// The worker continuously reads entries from the `yaque` queue and posts each
+/// comment through the provided [`Octocrab`] instance. Successful posts commit
+/// the queue entry, removing it from disk. Failures leave the message
+/// uncommitted so it is retried on the next loop iteration. A cooldown period,
+/// configured via [`Config`], is enforced between attempts.
+///
+/// # Parameters
+/// - `config`: shared daemon configuration.
+/// - `rx`: receiver half of the queue channel.
+/// - `octocrab`: authenticated GitHub client.
+///
+/// # Errors
+/// Propagates I/O and serialization errors from queue operations and any error
+/// returned by the GitHub client.
 pub async fn run_worker(
     config: Arc<Config>,
     mut rx: Receiver,
