@@ -51,7 +51,10 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
 /// - `rx`: receiver for payloads from client handlers.
 ///
 /// # Errors
-/// Returns an [`anyhow::Error`] if the sender fails while awaiting shutdown.
+/// Returns an [`anyhow::Error`] if:
+/// - the receiver channel (`rx`) is closed unexpectedly,
+/// - the queue sender encounters an I/O error while enqueuing,
+/// - or if the sender fails while awaiting shutdown.
 ///
 /// # Examples
 /// ```no_run
@@ -122,7 +125,8 @@ pub async fn run(config: Config) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created or if accepting a
-/// connection fails after retries.
+/// connection fails after retries. Exiting due to a shutdown signal is normal
+/// and not treated as an error.
 pub async fn run_listener(
     config: Arc<Config>,
     tx: mpsc::UnboundedSender<Vec<u8>>,
@@ -183,8 +187,13 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 /// The worker continuously reads entries from the `yaque` queue and posts each
 /// comment through the provided [`Octocrab`] instance. Successful posts commit
 /// the queue entry, removing it from disk. Failures leave the message
-/// uncommitted so it is retried on the next loop iteration. A cooldown period,
-/// configured via [`Config`], is enforced between attempts.
+/// uncommitted so it is retried on the next loop iteration.
+///
+/// A cooldown period, configured via [`Config`], is enforced **between all
+/// requests**, regardless of success or failure. After each attempt the worker
+/// waits for the cooldown duration before handling the next queue item. There
+/// is no exponential backoff; failed requests are retried after the same
+/// cooldown period.
 ///
 /// # Parameters
 /// - `config`: shared daemon configuration.
