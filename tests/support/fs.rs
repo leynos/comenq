@@ -7,23 +7,25 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-/// Wait until `path` exists within `timeout_ms` milliseconds.
+/// Wait until `path` appears within the provided `timeout`.
 ///
-/// Returns `true` if the path was found.
+/// Returns `true` if the path was detected before the timeout expired.
 ///
 /// # Examples
 /// ```no_run
+/// # use std::time::Duration;
 /// # use std::path::Path;
 /// # async fn example() {
-/// let ready = wait_for_path(Path::new("/tmp/file"), 100).await;
+/// let ready = wait_for_path(Path::new("/tmp/file"), Duration::from_millis(100)).await;
 /// assert!(ready);
 /// # }
 /// ```
-pub async fn wait_for_path(path: &Path, timeout_ms: u64) -> bool {
+pub async fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
     let start = Instant::now();
-    let timeout = Duration::from_millis(timeout_ms);
     while !path.exists() && start.elapsed() < timeout {
-        sleep(Duration::from_millis(10)).await;
+        sleep(POLL_INTERVAL).await;
     }
     path.exists()
 }

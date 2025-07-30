@@ -314,7 +314,7 @@ mod tests {
 
         // Wait for socket to exist
         assert!(
-            fs::wait_for_path(&cfg.socket_path, 100).await,
+            fs::wait_for_path(&cfg.socket_path, Duration::from_millis(100)).await,
             "socket file {} not created within timeout",
             cfg.socket_path.display()
         );

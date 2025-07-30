@@ -69,7 +69,7 @@ async fn running_listener(world: &mut ListenerWorld) {
         .expect("config not initialised in ListenerWorld")
         .socket_path;
     assert!(
-        wait_for_path(socket_path, 100).await,
+        wait_for_path(socket_path, Duration::from_millis(100)).await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
