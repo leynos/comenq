@@ -10,7 +10,8 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
-use tokio::time::sleep;
+
+use crate::support::fs::wait_for_path;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
@@ -67,14 +68,8 @@ async fn running_listener(world: &mut ListenerWorld) {
         .as_ref()
         .expect("config not initialised in ListenerWorld")
         .socket_path;
-    for _ in 0..10 {
-        if socket_path.exists() {
-            break;
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
     assert!(
-        socket_path.exists(),
+        wait_for_path(socket_path, 100).await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
