@@ -206,18 +206,24 @@ the `comenq` user and group upon installation.
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 if ! getent group comenq >/dev/null; then
-    groupadd --system comenq
+    groupadd --system comenq || { echo "failed to add group" >&2; exit 1; }
 fi
 if ! getent passwd comenq >/dev/null; then
-    useradd --system --gid comenq --home-dir /var/lib/comenq --create-home --shell /sbin/nologin comenq
+    useradd --system --gid comenq --home-dir /var/lib/comenq \
+        --create-home --shell /sbin/nologin comenq \
+        || { echo "failed to add user" >&2; exit 1; }
 fi
+chown comenq:comenq /var/lib/comenq
+chmod 750 /var/lib/comenq
 ```
 
 **packaging/linux/[postinstall.sh](http://postinstall.sh)**
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 # Reload systemd to recognize the new service, then enable and start it.
 systemctl daemon-reload
 systemctl enable comenqd.service
@@ -228,9 +234,14 @@ systemctl start comenqd.service
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 # Stop and disable the service before removal.
-systemctl stop comenqd.service
-systemctl disable comenqd.service
+if systemctl is-active --quiet comenqd.service; then
+    systemctl stop comenqd.service
+fi
+if systemctl is-enabled --quiet comenqd.service; then
+    systemctl disable comenqd.service
+fi
 ```
 
 Make these scripts executable: `chmod +x packaging/linux/*.sh`.

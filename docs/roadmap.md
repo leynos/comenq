@@ -84,7 +84,7 @@
 This milestone seeks to produce native packages for major Linux distributions
 and macOS, simplifying installation and improving security and maintainability.
 
-- [ ] **Implement Declarative Packaging with GoReleaser**
+- [x] **Implement Declarative Packaging with GoReleaser**
 
   - [x] Create a comprehensive `.goreleaser.yaml` configuration to define Linux
     build, packaging, and release process for both `comenq` and `comenqd`.
@@ -92,7 +92,7 @@ and macOS, simplifying installation and improving security and maintainability.
   - [x] Use GoReleaser's custom builder hooks to integrate the `cargo build`
     process for the Rust binaries.
 
-- [ ] **Package for Linux Distributions (Fedora & Ubuntu)**
+- [x] **Package for Linux Distributions (Fedora & Ubuntu)**
 
   - [x] Create a hardened `systemd` service unit file (`comenqd.service`) for
     the daemon, incorporating security best practices (`ProtectSystem`,
