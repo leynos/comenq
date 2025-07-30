@@ -12,7 +12,7 @@ requests. The architecture and crate choices are described in
 Use the provided `make` targets to manage the project:
 
 - `make build` &ndash; compile debug binaries in `target/debug/`
-- `make release` &ndash; produce optimised release binaries
+- `make release` &ndash; produce optimized release binaries
 - `make test` &ndash; execute the full test suite
 - `make lint` &ndash; run Clippy with warnings denied
 - `make fmt` &ndash; format Rust and Markdown files
