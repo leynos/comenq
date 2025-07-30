@@ -21,6 +21,7 @@ tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions 
 yaque = { workspace = true }
 wiremock = "0.6"
 octocrab = { workspace = true }
+serde_yaml = "0.9"
 
 [[test]]
 name = "cucumber"
