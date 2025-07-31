@@ -1,0 +1,16 @@
+# Default configuration for comenqd
+
+# GitHub Personal Access Token used for authentication
+# github_token = ""
+
+# Minimum log level to output
+# log_level = "info"
+
+# Path to the Unix domain socket for client connections
+# socket_path = "/run/comenq/comenq.sock"
+
+# Location for the persistent yaque queue data
+# queue_path = "/var/lib/comenq/queue"
+
+# Cooldown period between posting comments in seconds
+# cooldown_period_seconds = 960

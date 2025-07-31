@@ -81,32 +81,46 @@
 
 ## Milestone 6: Automated Cross-Platform Packaging and Release
 
-This milestone seeks to produce native packages for major Linux distributions and macOS, simplifying installation and improving security and maintainability.
+This milestone seeks to produce native packages for major Linux distributions
+and macOS, simplifying installation and improving security and maintainability.
 
-- [ ] **Implement Declarative Packaging with GoReleaser**
+- [x] **Implement Declarative Packaging with GoReleaser**
 
-  - [ ] Create a comprehensive `.goreleaser.yaml` configuration to define Linux build, packaging, and release process for both `comenq` and `comenqd`.
+  - [x] Create a comprehensive `.goreleaser.yaml` configuration to define Linux
+    build, packaging, and release process for both `comenq` and `comenqd`.
 
-  - [ ] Use GoReleaser's custom builder hooks to integrate the `cargo build` process for the Rust binaries.
+  - [x] Use GoReleaser's custom builder hooks to integrate the `cargo build`
+    process for the Rust binaries.
 
-- [ ] **Package for Linux Distributions (Fedora & Ubuntu)**
+- [x] **Package for Linux Distributions (Fedora & Ubuntu)**
 
-  - [ ] Create a hardened `systemd` service unit file (`comenqd.service`) for the daemon, incorporating security best practices (`ProtectSystem`, `PrivateTmp`, `NoNewPrivileges`, etc.).
+  - [x] Create a hardened `systemd` service unit file (`comenqd.service`) for
+    the daemon, incorporating security best practices (`ProtectSystem`,
+    `PrivateTmp`, `NoNewPrivileges`, etc.).
 
-  - [ ] Author `preinstall`, `postinstall`, and `preremove` scripts to be embedded in the packages. These will handle the creation of the dedicated `comenq` system user and manage the `systemd` service lifecycle.
+  - [x] Author `preinstall`, `postinstall`, and `preremove` scripts to be
+    embedded in the packages. These will handle the creation of the dedicated
+    `comenq` system user and manage the `systemd` service lifecycle.
 
-  - [ ] Configure GoReleaser's `nfpms` section to build and sign `.rpm` and `.deb` packages.
+  - [x] Configure GoReleaser's `nfpms` section to build and sign `.rpm` and
+    `.deb` packages.
 
 - [ ] **Automate the Release Workflow**
 
-  - [ ] Implement a GitHub Actions workflow that triggers on new version tags (e.g., `v*`).
+  - [ ] Implement a GitHub Actions workflow that triggers on new version tags
+    (e.g., `v*`).
 
-  - [ ] The workflow will orchestrate the entire release: checking out the code, installing dependencies, and executing GoReleaser.
+  - [ ] The workflow will orchestrate the entire release: checking out the
+    code, installing dependencies, and executing GoReleaser.
 
-  - [ ] GoReleaser will then build the binaries, create all packages, publish the Homebrew formula, generate a changelog from git history, and upload all assets to a draft GitHub Release.
+  - [ ] GoReleaser will then build the binaries, create all packages, publish
+    the Homebrew formula, generate a changelog from git history, and upload all
+    assets to a draft GitHub Release.
 
 - [ ] **Update Public Documentation**
 
-  - [ ] Revise the `README.md` to feature the new, simplified installation instructions using `apt` and `dnf`
+  - [ ] Revise the `README.md` to feature the new, simplified installation
+    instructions using `apt` and `dnf`
 
-  - [ ] Add a new document to the `/docs` directory detailing the automated packaging process for future maintainers and contributors.
+  - [ ] Add a new document to the `/docs` directory detailing the automated
+    packaging process for future maintainers and contributors.

@@ -1,18 +1,31 @@
-### Introduction
+# Automated Cross-Platform Packaging
 
-This guide provides a step-by-step process for configuring a GitHub Actions workflow to automatically build and package the `comenq` client and `comenqd` daemon for Linux (Fedora, Ubuntu) and macOS. We will use GoReleaser to manage the entire process, from building the Rust binaries to creating platform-native packages (`.rpm`, `.deb`) and a Homebrew formula.
+## Introduction
 
-The core of this process involves creating a `.goreleaser.yaml` file that declaratively defines the build, packaging, and release steps. This file will be used by a GitHub Actions workflow that triggers on new git tags.
+This guide provides a step-by-step process for configuring a GitHub Actions
+workflow to automatically build and package the `comenq` client and `comenqd`
+daemon for Linux (Fedora, Ubuntu) and macOS. We will use GoReleaser to manage
+the entire process, from building the Rust binaries to creating platform-native
+packages (`.rpm`, `.deb`) and a Homebrew formula.
+
+The core of this process involves creating a `.goreleaser.yaml` file that
+declaratively defines the build, packaging, and release steps. This file will
+be used by a GitHub Actions workflow that triggers on new git tags.
 
 ### Part 1: Packaging for Fedora and Ubuntu with systemd
 
-The first stage is to package `comenqd` as a `systemd` service for modern Linux distributions.
+The first stage is to package `comenqd` as a `systemd` service for modern Linux
+distributions.
 
 #### Step 1: Create the `systemd` Unit File
 
-First, create a `systemd` unit file that will manage the `comenqd` daemon. This file defines how the service should be started, stopped, and managed by `systemd`. It includes security hardening measures by specifying a dedicated user and group and restricting filesystem access.
+First, create a `systemd` unit file that will manage the `comenqd` daemon. This
+file defines how the service should be started, stopped, and managed by
+`systemd`. It includes security hardening measures by specifying a dedicated
+user and group and restricting filesystem access.
 
-Create the following file in your repository. A good location is `packaging/linux/comenqd.service`:
+Create the following file in your repository. A good location is
+`packaging/linux/comenqd.service`:
 
 ```systemd,ini
 [Unit]
@@ -56,23 +69,30 @@ RestartSec=5s
 WantedBy=multi-user.target
 ```
 
-**Note:** This unit file assumes a configuration file at `/etc/comenq/config.toml`. You should provide a default configuration file with your package.
+**Note:** This unit file assumes a configuration file at
+`/etc/comenq/config.toml`. You should provide a default configuration file with
+your package.
 
 #### Step 2: Create a Default Configuration File
 
-Create a default `config.toml` file to be included in the packages. Place it at `packaging/comenqd/config.toml`.
+Create a default `config.toml` file to be included in the packages. Place it at
+`packaging/comenqd/config.toml`.
 
 ```toml
 # Default configuration for comenqd
-# Example:
+# github_token = ""
 # log_level = "info"
+# socket_path = "/run/comenq/comenq.sock"
+# queue_path = "/var/lib/comenq/queue"
+# cooldown_period_seconds = 960
 ```
 
 #### Step 3: Create the `.goreleaser.yaml` Configuration
 
-Now, create the main GoReleaser configuration file in the root of your repository. This file defines the entire release process.
+Now, create the main GoReleaser configuration file in the root of your
+repository. This file defines the entire release process.
 
-**.goreleaser.yaml**
+#### `.goreleaser.yaml`
 
 ```yaml
 # .goreleaser.yaml
@@ -182,24 +202,31 @@ changelog:
 
 #### Step 4: Create Installation Scripts
 
-The `systemd` unit file requires a dedicated user. These scripts will create the `comenq` user and group upon installation.
+The `systemd` unit file requires a dedicated user. These scripts will create
+the `comenq` user and group upon installation.
 
 **packaging/linux/[preinstall.sh](http://preinstall.sh)**
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 if ! getent group comenq >/dev/null; then
-    groupadd --system comenq
+    groupadd --system comenq || { echo "failed to add group" >&2; exit 1; }
 fi
 if ! getent passwd comenq >/dev/null; then
-    useradd --system --gid comenq --home-dir /var/lib/comenq --create-home --shell /sbin/nologin comenq
+    useradd --system --gid comenq --home-dir /var/lib/comenq \
+        --create-home --shell /sbin/nologin comenq \
+        || { echo "failed to add user" >&2; exit 1; }
 fi
+chown comenq:comenq /var/lib/comenq
+chmod 750 /var/lib/comenq
 ```
 
 **packaging/linux/[postinstall.sh](http://postinstall.sh)**
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 # Reload systemd to recognize the new service, then enable and start it.
 systemctl daemon-reload
 systemctl enable comenqd.service
@@ -210,18 +237,24 @@ systemctl start comenqd.service
 
 ```bash
 #!/bin/bash
+set -euo pipefail
 # Stop and disable the service before removal.
-systemctl stop comenqd.service
-systemctl disable comenqd.service
+if systemctl is-active --quiet comenqd.service; then
+    systemctl stop comenqd.service
+fi
+if systemctl is-enabled --quiet comenqd.service; then
+    systemctl disable comenqd.service
+fi
 ```
 
 Make these scripts executable: `chmod +x packaging/linux/*.sh`.
 
 #### Step 5: Update the GitHub Actions Workflow
 
-Finally, modify your existing `.github/workflows/release.yml` to use GoReleaser. This workflow will trigger when you push a new tag (e.g., `v1.2.3`).
+Finally, modify your existing `.github/workflows/release.yml` to use
+GoReleaser. This workflow will trigger when you push a new tag (e.g., `v1.2.3`).
 
-**.github/workflows/release.yml**
+#### `.github/workflows/release.yml`
 
 ```yaml
 name: Release
@@ -268,11 +301,13 @@ jobs:
 
 ### Part 2: Extending to macOS with `launchd` and Homebrew
 
-Now we will extend the configuration to support macOS by creating a `launchd` service and a Homebrew Tap.
+Now we will extend the configuration to support macOS by creating a `launchd`
+service and a Homebrew Tap.
 
 #### Step 1: Create the `launchd` Plist File
 
-On macOS, services are managed by `launchd`. The equivalent of a `systemd` unit file is a `.plist` file.
+On macOS, services are managed by `launchd`. The equivalent of a `systemd` unit
+file is a `.plist` file.
 
 Create `packaging/darwin/comenqd.plist`:
 
@@ -304,7 +339,8 @@ Create `packaging/darwin/comenqd.plist`:
 
 #### Step 2: Update `.goreleaser.yaml` for Homebrew
 
-Now, add the `brews` section to your `.goreleaser.yaml` to generate a Homebrew formula. This will create a formula in a separate repository (your "tap").
+Now, add the `brews` section to your `.goreleaser.yaml` to generate a Homebrew
+formula. This will create a formula in a separate repository (your "tap").
 
 First, create a new, public GitHub repository named `homebrew-tap`.
 
@@ -366,11 +402,18 @@ brews:
 
 #### Step 3: Add the macOS Configuration File
 
-The Homebrew formula will also install a default configuration. Add a copy for macOS, perhaps identical to the Linux one, at `packaging/darwin/config.toml`. Update the `brews.contents` section in `.goreleaser.yaml` to point to it if it differs, or simply add it to the `files` section of the archive if it's universal. For simplicity, let's assume the one at `packaging/comenqd/config.toml` is sufficient and will be picked up by the archive.
+The Homebrew formula will also install a default configuration. Add a copy for
+macOS, perhaps identical to the Linux one, at `packaging/darwin/config.toml`.
+Update the `brews.contents` section in `.goreleaser.yaml` to point to it if it
+differs, or simply add it to the `files` section of the archive if it's
+universal. For simplicity, let's assume the one at
+`packaging/comenqd/config.toml` is sufficient and will be picked up by the
+archive.
 
 #### Step 4: Final `.goreleaser.yaml`
 
-Here is the complete `.goreleaser.yaml` with both Linux and macOS configurations:
+Here is the complete `.goreleaser.yaml` with both Linux and macOS
+configurations:
 
 ```yaml
 # .goreleaser.yaml
@@ -483,9 +526,13 @@ changelog:
 
 ### Final Steps and Usage
 
-1. **Create a Personal Access Token (PAT)** for the Homebrew tap. Go to your GitHub Developer settings, create a new token with the `public_repo` scope, and add it as a repository secret named `HOMEBREW_TAP_TOKEN` in your `comenq` repository.
+1. **Create a Personal Access Token (PAT)** for the Homebrew tap. Go to your
+   GitHub Developer settings, create a new token with the `public_repo` scope,
+   and add it as a repository secret named `HOMEBREW_TAP_TOKEN` in your
+   `comenq` repository.
 
-2. **Commit and Push:** Add all the new files (`.goreleaser.yaml`, service files, install scripts) to your repository.
+2. **Commit and Push:** Add all the new files (`.goreleaser.yaml`, service
+   files, install scripts) to your repository.
 
 3. **Tag a Release:** To trigger the workflow, create and push a new tag:
 
@@ -494,4 +541,7 @@ changelog:
    git push origin v0.1.0
    ```
 
-The GitHub Actions workflow will now run, build your binaries, create the `.deb` and `.rpm` packages, upload them to a new GitHub Release, and finally, publish the Homebrew formula to your `homebrew-tap` repository. Your users can then install `comenq` using their native package managers.
+The GitHub Actions workflow will now run, build your binaries, create the
+`.deb` and `.rpm` packages, upload them to a new GitHub Release, and finally,
+publish the Homebrew formula to your `homebrew-tap` repository. Your users can
+then install `comenq` using their native package managers.
