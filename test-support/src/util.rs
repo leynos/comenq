@@ -13,7 +13,7 @@ use tokio::time::sleep;
 /// ```rust,ignore
 /// use std::path::Path;
 /// use std::time::Duration;
-/// use tests::support::util::wait_for_file;
+/// use test_support::wait_for_file;
 ///
 /// let path = Path::new("/tmp/example.sock");
 /// let found = wait_for_file(path, 5, Duration::from_millis(10)).await;

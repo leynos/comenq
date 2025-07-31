@@ -5,9 +5,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::support::util::wait_for_file;
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
+use test_support::wait_for_file;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};

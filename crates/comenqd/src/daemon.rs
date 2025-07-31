@@ -165,15 +165,13 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
+    use test_support::wait_for_file;
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    #[path = "../../../../../tests/support/util.rs"]
-    mod util;
-    use util::wait_for_file;
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
