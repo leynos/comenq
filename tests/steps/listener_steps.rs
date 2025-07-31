@@ -17,6 +17,9 @@ use comenqd::config::Config;
 use comenqd::daemon::{queue_writer, run_listener};
 use yaque::channel;
 
+const SOCKET_RETRY_COUNT: u32 = 10;
+const SOCKET_RETRY_DELAY_MS: u64 = 10;
+
 #[derive(Default, World)]
 pub struct ListenerWorld {
     dir: Option<TempDir>,
@@ -67,7 +70,12 @@ async fn running_listener(world: &mut ListenerWorld) {
         .expect("config not initialised in ListenerWorld")
         .socket_path;
     assert!(
-        wait_for_file(socket_path, 10, Duration::from_millis(10)).await,
+        wait_for_file(
+            socket_path,
+            SOCKET_RETRY_COUNT,
+            Duration::from_millis(SOCKET_RETRY_DELAY_MS),
+        )
+        .await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
