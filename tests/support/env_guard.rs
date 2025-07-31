@@ -30,15 +30,18 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Safely set an environment variable for tests.
+/// Set an environment variable for tests.
+///
+/// The nightly compiler marks `std::env::set_var` as `unsafe`.
+/// Tests run serially so using it is acceptable here.
 pub fn set_env_var(key: &str, value: &str) {
-    // Safety: tests execute serially so no concurrent access occurs.
     unsafe { std::env::set_var(key, value) };
 }
 
-/// Safely remove an environment variable for tests.
+/// Remove an environment variable for tests.
+///
+/// `std::env::remove_var` is also `unsafe` on nightly.
 pub fn remove_env_var(key: &str) {
-    // Safety: tests execute serially so no concurrent access occurs.
     unsafe { std::env::remove_var(key) };
 }
 
