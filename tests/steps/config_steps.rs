@@ -5,48 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+use crate::support::env_guard::{EnvVarGuard, remove_env_var};
 use comenqd::config::Config;
-
-/// RAII guard for temporarily setting an environment variable.
-#[derive(Debug)]
-struct EnvVarGuard {
-    key: String,
-    original: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &str, value: &str) -> Self {
-        let original = std::env::var(key).ok();
-        set_env_var_safe(key, value);
-        Self {
-            key: key.to_string(),
-            original,
-        }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(val) => set_env_var_safe(&self.key, val),
-            None => remove_env_var_safe(&self.key),
-        }
-    }
-}
-
-fn remove_env(key: &str) {
-    remove_env_var_safe(key);
-}
-
-fn set_env_var_safe(key: &str, value: &str) {
-    // Safety: each scenario runs under serial_test, so no concurrent access.
-    unsafe { std::env::set_var(key, value) };
-}
-
-fn remove_env_var_safe(key: &str) {
-    // Safety: each scenario runs under serial_test, so no concurrent access.
-    unsafe { std::env::remove_var(key) };
-}
 
 #[derive(Debug, Default, World)]
 pub struct ConfigWorld {
@@ -68,7 +28,7 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     fs::write(&path, format!("github_token='{token}'")).expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    remove_env("COMENQD_SOCKET_PATH");
+    remove_env_var("COMENQD_SOCKET_PATH");
 }
 
 #[expect(clippy::expect_used, reason = "test setup uses expect")]
@@ -107,7 +67,7 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) {
     .expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    remove_env("COMENQD_SOCKET_PATH");
+    remove_env_var("COMENQD_SOCKET_PATH");
 }
 
 #[given("a missing configuration file")]

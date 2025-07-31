@@ -714,6 +714,15 @@ By adhering to these deployment and security practices, `comenq` transitions
 from a piece of software into a well-behaved, secure, and manageable system
 service.
 
+### 4.4. Packaging and Release Workflow
+
+To simplify installation, the project uses GoReleaser. The declarative
+`.goreleaser.yaml` invokes `cargo build` for both binaries via custom pre-build
+hooks. The `nfpms` section produces signed `.deb` and `.rpm` packages for
+Fedora and Ubuntu, embedding the hardened `systemd` service unit and lifecycle
+scripts that create the `comenq` user. This keeps packaging logic version
+controlled and repeatable.
+
 ## Section 5: Complete Source Code and Project Manifest
 
 This final section provides the complete source code and project configuration,
