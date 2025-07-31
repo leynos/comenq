@@ -14,24 +14,24 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       BUILD_PROFILE: debug
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust
-        uses: leynos/shared-actions/.github/actions/setup-rust@v1.1.0
+        uses: leynos/shared-actions/.github/actions/setup-rust@e48ed26d7f53f12f56eb7bcfdfdfe4d97065ea4c
       - name: Format
         run: make check-fmt
       - name: Lint
         run: make lint
-      - name: Test
-        run: make test
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-      - name: Run coverage
-        run: cargo tarpaulin --out lcov
+      - name: Test and Measure Coverage
+        uses: leynos/shared-actions/.github/actions/generate-coverage@e48ed26d7f53f12f56eb7bcfdfdfe4d97065ea4c
+        with:
+          output-path: lcov.info
+          format: lcov
       - name: Upload coverage data to CodeScene
+        env:
+          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: ${{ env.CS_ACCESS_TOKEN != '' }}
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@v1.1.0
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@e48ed26d7f53f12f56eb7bcfdfdfe4d97065ea4c
         with:
           format: lcov
           access-token: ${{ env.CS_ACCESS_TOKEN }}
