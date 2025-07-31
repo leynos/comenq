@@ -4,23 +4,21 @@ builds:
   - id: comenq
     binary: comenq
     main: ./crates/comenq
-    goos: [linux]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenq --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenq {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
   - id: comenqd
     binary: comenqd
     main: ./crates/comenqd
-    goos: [linux]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
 
 archives:
   - id: default
@@ -29,7 +27,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/comenqd/config.toml
+      - packaging/shared/config.toml
 
 nfpms:
   - id: comenq-packages
@@ -54,7 +52,7 @@ nfpms:
     contents:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
-      - src: packaging/comenqd/config.toml
+      - src: packaging/shared/config.toml
         dst: /etc/comenq/config.toml
         type: config
     scripts:
