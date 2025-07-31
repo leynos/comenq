@@ -16,5 +16,7 @@ if ! getent passwd comenq >/dev/null; then
     }
 fi
 
-chown comenq:comenq /var/lib/comenq
+install -d -o comenq -g comenq -m 750 /var/lib/comenq
+
+chown -R comenq:comenq /var/lib/comenq
 chmod 750 /var/lib/comenq

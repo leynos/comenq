@@ -80,8 +80,11 @@ Create a default `config.toml` file to be included in the packages. Place it at
 
 ```toml
 # Default configuration for comenqd
-# Example:
+# github_token = ""
 # log_level = "info"
+# socket_path = "/run/comenq/comenq.sock"
+# queue_path = "/var/lib/comenq/queue"
+# cooldown_period_seconds = 960
 ```
 
 #### Step 3: Create the `.goreleaser.yaml` Configuration

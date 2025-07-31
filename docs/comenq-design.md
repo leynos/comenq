@@ -716,7 +716,7 @@ service.
 
 ### 4.4. Packaging and Release Workflow
 
-To simplify installation the project uses GoReleaser. The declarative
+To simplify installation, the project uses GoReleaser. The declarative
 `.goreleaser.yaml` invokes `cargo build` for both binaries via custom pre-build
 hooks. The `nfpms` section produces signed `.deb` and `.rpm` packages for
 Fedora and Ubuntu, embedding the hardened `systemd` service unit and lifecycle

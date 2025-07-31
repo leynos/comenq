@@ -25,7 +25,7 @@ fn parse_yaml(world: &mut PackagingWorld) {
 
 #[then("the nfpms section exists")]
 fn nfpms_exists(world: &mut PackagingWorld) {
-    let yaml = world.yaml.take().expect("yaml parsed");
+    let yaml = world.yaml.as_ref().expect("yaml parsed");
     assert!(yaml.get("nfpms").is_some(), "missing nfpms section");
 }
 
