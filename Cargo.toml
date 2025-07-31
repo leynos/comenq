@@ -21,6 +21,7 @@ tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions 
 yaque = { workspace = true }
 wiremock = "0.6"
 octocrab = { workspace = true }
+test-support = { path = "test-support" }
 serde_yaml = "0.9"
 
 [[test]]
@@ -31,6 +32,7 @@ harness = false
 members = [
     "crates/comenq",
     "crates/comenqd",
+    "test-support",
 ]
 resolver = "2"
 

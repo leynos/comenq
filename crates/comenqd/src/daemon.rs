@@ -246,10 +246,11 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
+    use test_support::wait_for_file;
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
-    use tokio::time::{Duration, Instant, sleep};
+    use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -316,14 +317,7 @@ mod tests {
 
         let handle = tokio::spawn(run(cfg.clone()));
 
-        let start = Instant::now();
-        let timeout = Duration::from_secs(2);
-        loop {
-            if cfg.queue_path.is_dir() || start.elapsed() > timeout {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
+        wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
 
         handle.abort();
         assert!(cfg.queue_path.is_dir(), "queue directory not created");
@@ -387,13 +381,7 @@ mod tests {
 
         let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
 
-        // Wait for socket to exist
-        for _ in 0..10 {
-            if cfg.socket_path.exists() {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
+        wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
 
         let mut stream = UnixStream::connect(&cfg.socket_path)
             .await

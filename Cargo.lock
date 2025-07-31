@@ -326,6 +326,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "test-support",
  "tokio",
  "wiremock",
  "yaque",
@@ -346,6 +347,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tempfile",
+ "test-support",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2440,6 +2442,13 @@ checksum = "45c6481c4829e4cc63825e62c49186a34538b7b2750b73b266581ffb612fb5ed"
 dependencies = [
  "rustix",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
