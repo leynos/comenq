@@ -64,7 +64,7 @@ mod tests {
     #[serial_test::serial]
     fn remove_env_var_removes_variable() {
         let key = "ENV_GUARD_REMOVE";
-        std::env::set_var(key, "to_remove");
+        super::set_env_var(key, "to_remove");
         assert_eq!(std::env::var(key).unwrap(), "to_remove");
 
         super::remove_env_var(key);
@@ -85,7 +85,7 @@ mod tests {
         let key = "ENV_GUARD_TEST_NESTED";
         super::remove_env_var(key);
 
-        std::env::set_var(key, "initial");
+        super::set_env_var(key, "initial");
         assert_eq!(std::env::var(key).unwrap(), "initial");
 
         let guard1 = super::EnvVarGuard::set(key, "first");
