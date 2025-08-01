@@ -1,0 +1,23 @@
+[Unit]
+Description=Comenq Daemon
+Documentation=https://github.com/leynos/comenq
+After=network.target
+
+[Service]
+User=comenq
+Group=comenq
+ExecStart=/usr/bin/comenqd --config /etc/comenq/config.toml
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

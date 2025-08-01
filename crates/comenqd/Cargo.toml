@@ -23,3 +23,4 @@ figment = { version = "0.10", default-features = false, features = ["env", "toml
 rstest = "0.18.0"
 tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions release
 serial_test = "2"
+test-support = { path = "../../test-support" }
