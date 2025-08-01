@@ -247,15 +247,6 @@ mod tests {
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        let other = temp_config_with(dir, secs);
-        Config {
-            github_token: other.github_token,
-            socket_path: other.socket_path,
-            queue_path: other.queue_path,
-            cooldown_period_seconds: other.cooldown_period_seconds,
-        }
-    }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
