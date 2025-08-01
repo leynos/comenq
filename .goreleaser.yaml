@@ -1,0 +1,80 @@
+project_name: comenq
+
+builds:
+  - id: comenq
+    binary: comenq
+    main: ./crates/comenq
+    goos: [linux]
+    goarch: [amd64, arm64]
+    builder: go
+    hooks:
+      pre:
+        - cmd: cargo build --release --package comenq --target {{ .TARGET }}
+        - cmd: cp target/{{ .TARGET }}/release/comenq {{ .Path }}
+  - id: comenqd
+    binary: comenqd
+    main: ./crates/comenqd
+    goos: [linux]
+    goarch: [amd64, arm64]
+    builder: go
+    hooks:
+      pre:
+        - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
+        - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - LICENSE
+      - README.md
+      - packaging/comenqd/config.toml
+
+nfpms:
+  - id: comenq-packages
+    package_name: comenq
+    vendor: "Comenq"
+    homepage: "https://github.com/leynos/comenq"
+    maintainer: "Comenq Maintainers <maintainers@example.com>"
+    description: "Client for the Comenq notification system."
+    license: MIT
+    formats: [deb, rpm]
+    builds: [comenq]
+
+  - id: comenqd-packages
+    package_name: comenqd
+    vendor: "Comenq"
+    homepage: "https://github.com/leynos/comenq"
+    maintainer: "Comenq Maintainers <maintainers@example.com>"
+    description: "Daemon for the Comenq notification system."
+    license: MIT
+    formats: [deb, rpm]
+    builds: [comenqd]
+    contents:
+      - src: packaging/linux/comenqd.service
+        dst: /lib/systemd/system/comenqd.service
+      - src: packaging/comenqd/config.toml
+        dst: /etc/comenq/config.toml
+        type: config
+    scripts:
+      preinstall: packaging/linux/preinstall.sh
+      postinstall: packaging/linux/postinstall.sh
+      preremove: packaging/linux/preremove.sh
+
+release:
+  github:
+    owner: leynos
+    name: comenq
+  draft: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^style:'
+      - 'Merge pull request'
+      - 'Merge branch'

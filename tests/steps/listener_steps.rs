@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
+use test_support::wait_for_file;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
-use tokio::time::sleep;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
@@ -61,20 +61,13 @@ async fn running_listener(world: &mut ListenerWorld) {
     world.receiver = Some(receiver);
     world.handle = Some(handle);
 
-    // wait up to 100 ms for the socket file to appear
     let socket_path = &world
         .cfg
         .as_ref()
         .expect("config not initialised in ListenerWorld")
         .socket_path;
-    for _ in 0..10 {
-        if socket_path.exists() {
-            break;
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
     assert!(
-        socket_path.exists(),
+        wait_for_file(socket_path, 10, Duration::from_millis(10)).await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
