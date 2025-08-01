@@ -14,13 +14,28 @@ use wiremock::MockServer;
 
 /// Build a [`Config`] using paths inside `tmp`.
 ///
-/// The configuration uses a dummy GitHub token and a one second cooldown.
-pub fn temp_config(tmp: &TempDir) -> Config {
+/// # Parameters
+/// - `tmp`: temporary directory for socket and queue paths.
+/// - `cooldown_period_seconds`: cooldown period between GitHub API calls.
+///
+/// # Examples
+///
+/// ```
+/// use tempfile::tempdir;
+/// use comenqd::config::Config;
+/// use test_support::temp_config;
+///
+/// let dir = tempdir().unwrap();
+/// let cfg: Config = temp_config(&dir, 1);
+/// let fast_cfg: Config = temp_config(&dir, 0);
+/// assert!(cfg.socket_path.ends_with("sock"));
+/// ```
+pub fn temp_config(tmp: &TempDir, cooldown_period_seconds: u64) -> Config {
     Config {
         github_token: "t".into(),
         socket_path: tmp.path().join("sock"),
         queue_path: tmp.path().join("q"),
-        cooldown_period_seconds: 1,
+        cooldown_period_seconds,
     }
 }
 

@@ -291,18 +291,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        Config {
-            cooldown_period_seconds: secs,
-            ..temp_config(dir)
-        }
+        temp_config(dir, secs)
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            cooldown_period_seconds: 0,
-            ..temp_config(&dir)
-        });
+        let cfg = Arc::new(temp_config(&dir, 0)); // Immediate execution for worker tests
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -339,7 +333,7 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = cfg_with_cooldown(&dir, 1);
+        let cfg = temp_config(&dir, 1); // Standard cooldown
         assert!(!cfg.queue_path.exists());
         let handle = tokio::spawn(run(cfg.clone()));
         wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
@@ -388,7 +382,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(cfg_with_cooldown(&dir, 1));
+        let cfg = Arc::new(temp_config(&dir, 1)); // Standard cooldown
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());

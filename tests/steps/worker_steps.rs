@@ -36,9 +36,7 @@ impl std::fmt::Debug for WorkerWorld {
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let mut base = temp_config(&dir);
-    base.cooldown_period_seconds = 0;
-    let cfg = Arc::new(base);
+    let cfg = Arc::new(temp_config(&dir, 0)); // Immediate execution, no cooldown
     let (mut sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let req = CommentRequest {
         owner: "o".into(),
