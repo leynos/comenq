@@ -4,6 +4,7 @@
 //! and daemon.
 
 use serde::{Deserialize, Serialize};
+pub mod workflow;
 
 /// Request sent from the client to the daemon.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
