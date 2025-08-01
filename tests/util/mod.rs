@@ -1,5 +1,3 @@
-//! Test utility exports.
+//! Re-exports of common test helpers.
 
-pub mod test_helpers;
-
-pub use test_helpers::{octocrab_for, temp_config};
+pub use test_support::{octocrab_for, temp_config};

@@ -1,7 +1,7 @@
-//! Helper functions for tests.
+//! Helper utilities for daemon tests.
 //!
-//! Provides constructors for daemon [`Config`] with temporary paths and a
-//! simplified way to create an [`Octocrab`] client for a [`MockServer`].
+//! Provides constructors for temporary daemon [`Config`]s and simplified
+//! creation of [`Octocrab`] clients targeting a [`MockServer`].
 
 #![expect(clippy::expect_used, reason = "simplify test setup")]
 
@@ -12,10 +12,9 @@ use octocrab::Octocrab;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-/// Build a daemon [`Config`] using paths inside the given temporary directory.
+/// Build a [`Config`] using paths inside `tmp`.
 ///
-/// The returned configuration uses a dummy GitHub token and sets the
-/// cooldown to one second.
+/// The configuration uses a dummy GitHub token and a one second cooldown.
 pub fn temp_config(tmp: &TempDir) -> Config {
     Config {
         github_token: "t".into(),
@@ -25,10 +24,10 @@ pub fn temp_config(tmp: &TempDir) -> Config {
     }
 }
 
-/// Construct an [`Octocrab`] client targeting the provided [`MockServer`].
+/// Construct an [`Octocrab`] client for a [`MockServer`].
 ///
-/// The client is built with a placeholder personal token and its base URL set
-/// to the mock server URI.
+/// The client is initialised with a placeholder token and its base URL
+/// configured to the mock server's URI.
 pub fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
     Arc::new(
         Octocrab::builder()

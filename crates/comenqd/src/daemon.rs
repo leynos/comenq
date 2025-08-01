@@ -246,14 +246,7 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
-    mod helpers {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/util/test_helpers.rs"
-        ));
-    }
-    use helpers::{octocrab_for, temp_config};
-    use test_support::wait_for_file;
+    use test_support::{octocrab_for, temp_config, wait_for_file};
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
@@ -263,10 +256,9 @@ mod tests {
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            cooldown_period_seconds: 0,
-            ..temp_config(&dir)
-        });
+        let mut base = temp_config(&dir);
+        base.cooldown_period_seconds = 0;
+        let cfg = Arc::new(base);
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
