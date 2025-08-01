@@ -37,7 +37,7 @@ impl std::fmt::Debug for ListenerWorld {
 #[given("a running listener task")]
 async fn running_listener(world: &mut ListenerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(temp_config(&dir, 1)); // Standard 1-second cooldown
+    let cfg = Arc::new(temp_config(&dir)); // Standard 1-second cooldown
     let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let (client_tx, writer_rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(());

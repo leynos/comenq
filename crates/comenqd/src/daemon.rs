@@ -282,8 +282,7 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
-    use test_support::wait_for_file;
-    use test_utils::{octocrab_for, temp_config};
+    use test_support::{octocrab_for, temp_config, temp_config_with, wait_for_file};
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
@@ -291,12 +290,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        temp_config(dir, secs)
+        temp_config_with(dir, secs)
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(temp_config(&dir, 0)); // Immediate execution for worker tests
+        let cfg = Arc::new(temp_config_with(&dir, 0)); // Immediate execution for worker tests
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -333,7 +332,7 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = temp_config(&dir, 1); // Standard cooldown
+        let cfg = temp_config(&dir); // Standard cooldown
         assert!(!cfg.queue_path.exists());
         let handle = tokio::spawn(run(cfg.clone()));
         wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
@@ -382,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(temp_config(&dir, 1)); // Standard cooldown
+        let cfg = Arc::new(temp_config(&dir)); // Standard cooldown
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());

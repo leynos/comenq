@@ -12,6 +12,23 @@ use octocrab::Octocrab;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
+/// Build a [`Config`] using paths inside `tmp` with a one-second cooldown.
+///
+/// # Examples
+///
+/// ```
+/// use tempfile::tempdir;
+/// use comenqd::config::Config;
+/// use test_support::temp_config;
+///
+/// let dir = tempdir().unwrap();
+/// let cfg: Config = temp_config(&dir);
+/// assert_eq!(cfg.cooldown_period_seconds, 1);
+/// ```
+pub fn temp_config(tmp: &TempDir) -> Config {
+    temp_config_with(tmp, 1)
+}
+
 /// Build a [`Config`] using paths inside `tmp`.
 ///
 /// # Parameters
@@ -23,14 +40,13 @@ use wiremock::MockServer;
 /// ```
 /// use tempfile::tempdir;
 /// use comenqd::config::Config;
-/// use test_support::temp_config;
+/// use test_support::temp_config_with;
 ///
 /// let dir = tempdir().unwrap();
-/// let cfg: Config = temp_config(&dir, 1);
-/// let fast_cfg: Config = temp_config(&dir, 0);
-/// assert!(cfg.socket_path.ends_with("sock"));
+/// let fast_cfg: Config = temp_config_with(&dir, 0);
+/// assert_eq!(fast_cfg.cooldown_period_seconds, 0);
 /// ```
-pub fn temp_config(tmp: &TempDir, cooldown_period_seconds: u64) -> Config {
+pub fn temp_config_with(tmp: &TempDir, cooldown_period_seconds: u64) -> Config {
     Config {
         github_token: "t".into(),
         socket_path: tmp.path().join("sock"),
