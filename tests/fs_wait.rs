@@ -1,3 +1,7 @@
+//! Tests for the `wait_for_path` filesystem utility.
+//!
+//! These tests cover scenarios with existing or newly created files and
+//! directories, as well as timeouts.
 #![expect(clippy::expect_used, reason = "tests use expect for brevity")]
 
 mod support;

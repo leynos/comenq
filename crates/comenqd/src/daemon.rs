@@ -163,18 +163,23 @@ pub async fn run_worker(
 #[cfg(test)]
 mod tests {
     //! Tests for the daemon tasks.
-    mod fs {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/support/fs.rs"
-        ));
+    use std::path::Path;
+    use tokio::time::{Duration, Instant, sleep};
+
+    async fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+        const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+        let start = Instant::now();
+        while !path.exists() && start.elapsed() < timeout {
+            sleep(POLL_INTERVAL).await;
+        }
+        path.exists()
     }
     use super::*;
     use tempfile::tempdir;
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
-    use tokio::time::{Duration, Instant, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
