@@ -263,7 +263,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
 jobs:
   goreleaser:
@@ -285,11 +285,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
-
-      - name: Install GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          install-only: true
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
