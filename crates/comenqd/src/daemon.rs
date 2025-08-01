@@ -246,6 +246,13 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
+    mod helpers {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/util/test_helpers.rs"
+        ));
+    }
+    use helpers::{octocrab_for, temp_config};
     use test_support::wait_for_file;
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
@@ -257,10 +264,8 @@ mod tests {
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
             cooldown_period_seconds: 0,
+            ..temp_config(&dir)
         });
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
@@ -281,14 +286,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let octo = Arc::new(
-            Octocrab::builder()
-                .personal_token("t".to_string())
-                .base_uri(server.uri())
-                .expect("base_uri")
-                .build()
-                .expect("build octocrab"),
-        );
+        let octo = octocrab_for(&server);
 
         (server, cfg, rx, octo)
     }
@@ -307,10 +305,8 @@ mod tests {
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
         let cfg = Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
             cooldown_period_seconds: 1,
+            ..temp_config(&dir)
         };
 
         assert!(!cfg.queue_path.exists());
@@ -368,10 +364,8 @@ mod tests {
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
-            github_token: "t".into(),
-            socket_path: dir.path().join("sock"),
-            queue_path: dir.path().join("q"),
             cooldown_period_seconds: 1,
+            ..temp_config(&dir)
         });
 
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
