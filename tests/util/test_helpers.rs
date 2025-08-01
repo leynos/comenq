@@ -2,7 +2,6 @@
 //!
 //! These functions create temporary daemon configuration objects and
 //! Octocrab clients tailored for a `wiremock::MockServer`.
-#![allow(clippy::expect_used, reason = "simplify test helper setup")]
 
 use std::sync::Arc;
 
@@ -18,7 +17,7 @@ use wiremock::MockServer;
 /// ```
 /// use tempfile::tempdir;
 /// use comenqd::config::Config;
-/// use comenq_lib::tests::util::test_helpers::temp_config;
+/// use util::test_helpers::temp_config;
 ///
 /// let dir = tempdir().unwrap();
 /// let cfg: Config = temp_config(&dir);
@@ -39,7 +38,7 @@ pub fn temp_config(tmp: &TempDir) -> Config {
 ///
 /// ```
 /// use wiremock::MockServer;
-/// use comenq_lib::tests::util::test_helpers::octocrab_for;
+/// use util::test_helpers::octocrab_for;
 ///
 /// # tokio_test::block_on(async {
 /// let server = MockServer::start().await;
@@ -47,6 +46,7 @@ pub fn temp_config(tmp: &TempDir) -> Config {
 /// assert!(octocrab.base_url().as_str().contains(&server.uri()));
 /// # });
 /// ```
+#[expect(clippy::expect_used, reason = "simplify test helper setup")]
 pub fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
     Arc::new(
         Octocrab::builder()
