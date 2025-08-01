@@ -1,0 +1,10 @@
+[package]
+name = "test-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+comenqd = { path = "../comenqd" }
+octocrab = { workspace = true }
+tempfile = { workspace = true }
+wiremock = "^0.6"
