@@ -245,6 +245,12 @@ pub async fn run_worker(
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
+    mod test_helpers {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/util/test_helpers.rs"
+        ));
+    }
     use tempfile::tempdir;
     use test_support::{octocrab_for, temp_config, wait_for_file};
     use tokio::io::AsyncWriteExt;
