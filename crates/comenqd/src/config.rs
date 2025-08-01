@@ -126,7 +126,7 @@ mod tests {
     }
 
     pub mod support {
-        pub use super::env_guard::{EnvVarGuard, remove_env_var, set_env_var};
+        pub use super::env_guard::{EnvVarGuard, remove_env_var};
     }
 
     use support::{EnvVarGuard, remove_env_var};

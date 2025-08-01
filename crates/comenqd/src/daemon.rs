@@ -239,33 +239,27 @@ pub async fn run_worker(
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
-    mod test_helpers {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/util/test_helpers.rs"
-        ));
-    }
-    use tempfile::tempdir;
-    use test_support::{octocrab_for, temp_config, wait_for_file};
+    use tempfile::{TempDir, tempdir};
+    use test_support::{octocrab_for, temp_config, temp_config_with, wait_for_file};
     use tokio::io::AsyncWriteExt;
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
+        let other = temp_config_with(dir, secs);
         Config {
-            cooldown_period_seconds: secs,
-            ..temp_config(dir)
+            github_token: other.github_token,
+            socket_path: other.socket_path,
+            queue_path: other.queue_path,
+            cooldown_period_seconds: other.cooldown_period_seconds,
         }
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            cooldown_period_seconds: 0,
-            ..temp_config(&dir)
-        });
+        let cfg = Arc::new(temp_config_with(&dir, 0)); // Immediate execution for worker tests
         let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -302,12 +296,13 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = cfg_with_cooldown(&dir, 1);
-        assert!(!cfg.queue_path.exists());
-        let handle = tokio::spawn(run(cfg.clone()));
-        wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
+        let cfg = temp_config(&dir); // Standard cooldown
+        let queue_path = cfg.queue_path.clone();
+        assert!(!queue_path.exists());
+        let handle = tokio::spawn(run(cfg));
+        wait_for_file(&queue_path, 200, Duration::from_millis(10)).await;
         handle.abort();
-        assert!(cfg.queue_path.is_dir(), "queue directory not created");
+        assert!(queue_path.is_dir(), "queue directory not created");
     }
 
     #[tokio::test]
@@ -327,7 +322,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let queue_path = dir.path().join("q");
         let (sender, mut receiver) = channel(&queue_path).expect("channel");
-        let (client_tx, mut writer_rx) = mpsc::unbounded_channel();
+        let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let writer = tokio::spawn(queue_writer(sender, writer_rx));
 
         let (mut client, server) = UnixStream::pair().expect("pair");
@@ -351,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(cfg_with_cooldown(&dir, 1));
+        let cfg = Arc::new(temp_config(&dir)); // Standard cooldown
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());

@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn init_logging() {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        std::env::set_var("RUST_LOG", "info");
+        unsafe { std::env::set_var("RUST_LOG", "info") };
         init_with_writer(BufMakeWriter { buf: buf.clone() });
         info!("captured");
         let output = String::from_utf8(buf.lock().expect("Failed to lock log buffer").clone())
