@@ -48,6 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 thiserror = "1.0"
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
+tempfile = "3.10"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
