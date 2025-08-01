@@ -27,6 +27,8 @@ jobs:
         with:
           output-path: lcov.info
           format: lcov
+          with-cucumber-rs: true
+          cucumber-rs-features: tests/features
       - name: Upload coverage data to CodeScene
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}

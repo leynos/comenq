@@ -1033,15 +1033,24 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check
 
-      - name: Run Cucumber tests and generate JUnit report
-        run: cargo test --test cucumber -- --format junit --out-dir target/junit
-
-      - name: Publish Test Report
-        uses: actions/upload-artifact@v4
-        if: always() # Upload report even if the test step fails
+      - name: Measure coverage
+        uses: leynos/shared-actions/.github/actions/generate-coverage@c6559452842af6a83b83429129dccaf910e34562
         with:
-          name: junit-test-report
-          path: target/junit/*.xml
+          output-path: lcov.info
+          format: lcov
+          with-cucumber-rs: true
+          cucumber-rs-features: tests/features
+
+      - name: Upload coverage data to CodeScene
+        env:
+          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
+        if: ${{ env.CS_ACCESS_TOKEN }}
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c6559452842af6a83b83429129dccaf910e34562
+
+        with:
+          format: lcov
+          access-token: ${{ env.CS_ACCESS_TOKEN }}
+          installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
 ```
 
 This workflow demonstrates a standard CI setup for a Rust project, including
