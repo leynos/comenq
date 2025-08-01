@@ -721,7 +721,9 @@ To simplify installation, the project uses GoReleaser. The declarative
 hooks. The `nfpms` section produces signed `.deb` and `.rpm` packages for
 Fedora and Ubuntu, embedding the hardened `systemd` service unit and lifecycle
 scripts that create the `comenq` user. This keeps packaging logic version
-controlled and repeatable.
+controlled and repeatable. A GitHub Actions workflow triggers on version tags
+to run GoReleaser. It builds Linux packages and uploads them to a draft
+release. Mac support is currently deferred, so the workflow targets Linux only.
 
 ## Section 5: Complete Source Code and Project Manifest
 

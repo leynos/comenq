@@ -1,11 +1,10 @@
 [package]
-name = "test-support"
+name = "test-utils"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { workspace = true }
-comenqd = { path = "../crates/comenqd" }
+comenqd = { path = "../comenqd" }
 octocrab = { workspace = true }
 tempfile = { workspace = true }
 wiremock = "^0.6"

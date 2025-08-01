@@ -7,11 +7,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::util::{octocrab_for, temp_config};
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
 use comenqd::daemon::run_worker;
 use cucumber::{World, given, then, when};
-use octocrab::Octocrab;
 use tempfile::TempDir;
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
@@ -36,12 +36,9 @@ impl std::fmt::Debug for WorkerWorld {
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(Config {
-        github_token: "t".into(),
-        socket_path: dir.path().join("sock"),
-        queue_path: dir.path().join("q"),
-        cooldown_period_seconds: 0,
-    });
+    let mut base = temp_config(&dir);
+    base.cooldown_period_seconds = 0;
+    let cfg = Arc::new(base);
     let (mut sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let req = CommentRequest {
         owner: "o".into(),
@@ -83,14 +80,7 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let cfg = world.cfg.as_ref().unwrap().clone();
     let rx = world.receiver.take().unwrap();
     let server = world.server.as_ref().unwrap();
-    let octocrab = Arc::new(
-        Octocrab::builder()
-            .personal_token("t".to_string())
-            .base_uri(server.uri())
-            .expect("base_uri")
-            .build()
-            .expect("build octocrab"),
-    );
+    let octocrab = octocrab_for(server);
     let handle = tokio::spawn(async move {
         let _ = run_worker(cfg, rx, octocrab).await;
     });
