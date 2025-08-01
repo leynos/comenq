@@ -32,6 +32,7 @@ harness = false
 members = [
     "crates/comenq",
     "crates/comenqd",
+    "crates/test-utils",
     "test-support",
 ]
 resolver = "2"
