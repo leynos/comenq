@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::util::test_helpers::{octocrab_for, temp_config};
+use crate::util::{octocrab_for, temp_config};
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
 use comenqd::daemon::run_worker;
@@ -36,9 +36,9 @@ impl std::fmt::Debug for WorkerWorld {
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let mut cfg = temp_config(&dir);
-    cfg.cooldown_period_seconds = 0;
-    let cfg = Arc::new(cfg);
+    let mut base = temp_config(&dir);
+    base.cooldown_period_seconds = 0;
+    let cfg = Arc::new(base);
     let (mut sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let req = CommentRequest {
         owner: "o".into(),

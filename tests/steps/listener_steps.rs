@@ -12,7 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 
-use crate::util::test_helpers::temp_config;
+use crate::util::temp_config;
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
 use comenqd::daemon::{queue_writer, run_listener};

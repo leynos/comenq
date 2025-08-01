@@ -2448,7 +2448,11 @@ dependencies = [
 name = "test-support"
 version = "0.1.0"
 dependencies = [
+ "comenqd",
+ "octocrab",
+ "tempfile",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
