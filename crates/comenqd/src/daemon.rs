@@ -322,7 +322,10 @@ mod tests {
 
         let handle = tokio::spawn(run(cfg.clone()));
 
-        fs::wait_for_path(&cfg.queue_path, 2000).await;
+        assert!(
+            fs::wait_for_path(&cfg.queue_path, 2000).await,
+            "queue directory not created"
+        );
 
         handle.abort();
         assert!(cfg.queue_path.is_dir(), "queue directory not created");
@@ -386,7 +389,10 @@ mod tests {
 
         let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
 
-        fs::wait_for_path(&cfg.socket_path, 100).await;
+        assert!(
+            fs::wait_for_path(&cfg.socket_path, 100).await,
+            "socket file not created"
+        );
 
         let mut stream = UnixStream::connect(&cfg.socket_path)
             .await
