@@ -40,12 +40,6 @@ enum PostCommentError {
 /// # Returns
 ///
 /// Returns an `Octocrab` client instance on success, or an error if the client could not be built.
-///
-/// # Examples
-///
-/// ```no_run
-/// let octocrab = build_octocrab("ghp_exampletoken123")?;
-/// ```
 fn build_octocrab(token: &str) -> Result<Octocrab> {
     Ok(Octocrab::builder()
         .personal_token(token.to_string())
@@ -62,15 +56,6 @@ fn prepare_listener(path: &Path) -> Result<UnixListener> {
 }
 
 /// Asynchronously creates the queue directory and all necessary parent directories if they do not exist.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// # tokio_test::block_on(async {
-/// ensure_queue_dir(Path::new("/tmp/comenqd-queue")).await.unwrap();
-/// # });
-/// ```
 async fn ensure_queue_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).await?;
     Ok(())
@@ -81,24 +66,6 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
 /// Returns `Ok(())` if the comment is successfully posted. If the GitHub API returns an error,
 /// returns `PostCommentError::Api`. If the operation does not complete within 10 seconds,
 /// returns `PostCommentError::Timeout`.
-///
-/// # Examples
-///
-/// ```no_run
-/// # use comenqd::{post_comment, CommentRequest, PostCommentError};
-/// # use octocrab::Octocrab;
-/// # async fn example() -> Result<(), PostCommentError> {
-/// let octocrab = Octocrab::builder().personal_token("token").build().unwrap();
-/// let request = CommentRequest {
-///     owner: "owner".to_string(),
-///     repo: "repo".to_string(),
-///     pr_number: 1,
-///     body: "Test comment".to_string(),
-/// };
-/// post_comment(&octocrab, &request).await?;
-/// # Ok(())
-/// # }
-/// ```
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -130,7 +97,7 @@ async fn post_comment(
 /// - or if the sender fails while awaiting shutdown.
 ///
 /// # Examples
-/// ```no_run
+/// ```rust,no_run
 /// use yaque::channel;
 /// use tokio::sync::mpsc;
 /// # async fn docs() -> anyhow::Result<()> {
