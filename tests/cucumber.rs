@@ -1,5 +1,11 @@
+//! Cucumber test entry point.
+//!
+//! This module spawns all test worlds concurrently so scenarios run in
+//! parallel.
+
 mod steps;
 mod support;
+mod util;
 use cucumber::World as _;
 use steps::{
     CliWorld, ClientWorld, CommentWorld, ConfigWorld, ListenerWorld, PackagingWorld, ReleaseWorld,

@@ -32,6 +32,7 @@ harness = false
 members = [
     "crates/comenq",
     "crates/comenqd",
+    "crates/test-utils",
     "test-support",
 ]
 resolver = "2"
@@ -49,6 +50,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
 serde_yaml = "0.9"
+tempfile = "3.10"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
