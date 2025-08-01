@@ -4,10 +4,10 @@
 
 This guide provides a step-by-step process for configuring a GitHub Actions
 workflow to automatically build and package the `comenq` client and `comenqd`
-daemon for Linux (Fedora, Ubuntu) and macOS. Mac OS packaging is currently on
-hold, so the workflow focuses on Linux targets only. We will use GoReleaser to
-manage the entire process, from building the Rust binaries to creating
-platform-native packages (`.rpm`, `.deb`) and a Homebrew formula.
+daemon for Linux (Fedora, Ubuntu) and macOS. macOS packaging is currently on
+hold, so the workflow focuses on Linux targets only. GoReleaser manages the
+entire process, from building the Rust binaries to creating platform-native
+packages (`.rpm`, `.deb`) and a Homebrew formula.
 
 The core of this process involves creating a `.goreleaser.yaml` file that
 declaratively defines the build, packaging, and release steps. This file will
@@ -279,6 +279,7 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+          cache: cargo
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -294,7 +295,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v5
         with:
           distribution: goreleaser
-          version: latest
+          version: v1.24.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

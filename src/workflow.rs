@@ -12,22 +12,24 @@ pub fn uses_goreleaser(yaml: &str) -> Result<bool, serde_yaml::Error> {
     let Some(jobs) = doc.get("jobs") else {
         return Ok(false);
     };
-    let Some(goreleaser) = jobs.get("goreleaser") else {
+    let Some(map) = jobs.as_mapping() else {
         return Ok(false);
     };
-    let Some(steps) = goreleaser.get("steps") else {
-        return Ok(false);
-    };
-    let Some(arr) = steps.as_sequence() else {
-        return Ok(false);
-    };
-    for step in arr {
-        if let Some(uses) = step.get("uses")
-            && uses
-                .as_str()
-                .is_some_and(|s| s.contains("goreleaser-action"))
-        {
-            return Ok(true);
+    for job in map.values() {
+        let Some(steps) = job.get("steps") else {
+            continue;
+        };
+        let Some(arr) = steps.as_sequence() else {
+            continue;
+        };
+        for step in arr {
+            if step
+                .get("uses")
+                .and_then(|u| u.as_str())
+                .is_some_and(|s| s.starts_with("goreleaser/goreleaser-action"))
+            {
+                return Ok(true);
+            }
         }
     }
     Ok(false)

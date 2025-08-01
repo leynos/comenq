@@ -1,6 +1,7 @@
 //! Behavioural steps for the release workflow.
 #![expect(clippy::expect_used, reason = "simplify test failure output")]
 
+use comenq_lib::workflow::uses_goreleaser as workflow_uses_goreleaser;
 use cucumber::{World, given, then, when};
 use serde_yaml::Value;
 use std::fs;
@@ -19,25 +20,14 @@ fn the_workflow_file(world: &mut ReleaseWorld) {
 
 #[when("it is parsed as YAML")]
 fn parse_yaml(world: &mut ReleaseWorld) {
-    let text = world.content.take().expect("file loaded");
-    world.yaml = Some(serde_yaml::from_str(&text).expect("parse yaml"));
+    let text = world.content.as_deref().expect("file loaded");
+    world.yaml = Some(serde_yaml::from_str(text).expect("parse yaml"));
 }
 
 #[then("the workflow uses goreleaser")]
-fn uses_goreleaser(world: &mut ReleaseWorld) {
-    let yaml = world.yaml.as_ref().expect("yaml parsed");
-    let jobs = yaml.get("jobs").expect("jobs");
-    let goreleaser = jobs.get("goreleaser").expect("goreleaser job");
-    let steps = goreleaser
-        .get("steps")
-        .expect("steps")
-        .as_sequence()
-        .expect("sequence");
-    assert!(steps.iter().any(|s| {
-        s.get("uses")
-            .and_then(|u| u.as_str())
-            .is_some_and(|u| u.contains("goreleaser-action"))
-    }));
+fn assert_uses_goreleaser(world: &mut ReleaseWorld) {
+    let content = world.content.as_ref().expect("file still loaded");
+    assert!(workflow_uses_goreleaser(content).expect("parse"));
 }
 
 #[then("the workflow triggers on tags")]
@@ -50,5 +40,8 @@ fn triggers_on_tags(world: &mut ReleaseWorld) {
         .expect("tags")
         .as_sequence()
         .expect("sequence");
-    assert!(tags.iter().any(|t| t.as_str() == Some("v*")));
+    assert!(
+        tags.iter()
+            .any(|t| t.as_str() == Some("v[0-9]+.[0-9]+.[0-9]+"))
+    );
 }
