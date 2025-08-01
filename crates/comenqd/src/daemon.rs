@@ -246,7 +246,12 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use tempfile::tempdir;
-    use test_support::wait_for_file;
+    mod fs {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/fs.rs"
+        ));
+    }
     use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
@@ -317,7 +322,7 @@ mod tests {
 
         let handle = tokio::spawn(run(cfg.clone()));
 
-        wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
+        fs::wait_for_path(&cfg.queue_path, 2000).await;
 
         handle.abort();
         assert!(cfg.queue_path.is_dir(), "queue directory not created");
@@ -381,7 +386,7 @@ mod tests {
 
         let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
 
-        wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
+        fs::wait_for_path(&cfg.socket_path, 100).await;
 
         let mut stream = UnixStream::connect(&cfg.socket_path)
             .await
