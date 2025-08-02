@@ -406,18 +406,21 @@ archive.
 
 Here is the complete `.goreleaser.yaml` with both Linux and macOS
 configurations. It relies on the `goreleaser-rust` plugin to simplify
-cross-compiling:
+cross-compiling and uses a YAML anchor for the shared target list:
 
 ```yaml
 # .goreleaser.yaml
 project_name: comenq
+
+plugins:
+  - name: rust
 
 builds:
   - id: comenq
     binary: comenq
     main: ./crates/comenq
     builder: rust
-    targets:
+    targets: &targets
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
       - x86_64-apple-darwin
@@ -426,11 +429,7 @@ builds:
     binary: comenqd
     main: ./crates/comenqd
     builder: rust
-    targets:
-      - x86_64-unknown-linux-gnu
-      - aarch64-unknown-linux-gnu
-      - x86_64-apple-darwin
-      - aarch64-apple-darwin
+    targets: *targets
 
 archives:
   - id: default
