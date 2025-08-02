@@ -25,3 +25,4 @@ tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions 
 serial_test = "2"
 test-support = { path = "../../test-support" }
 test-utils = { path = "../test-utils" }
+wiremock = "0.6"

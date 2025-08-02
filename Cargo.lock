@@ -305,8 +305,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "comenq-lib",
+ "rstest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -353,6 +355,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
  "yaque",
 ]
 
@@ -2451,6 +2454,7 @@ version = "0.1.0"
 dependencies = [
  "comenqd",
  "octocrab",
+ "serial_test",
  "tempfile",
  "tokio",
  "wiremock",
