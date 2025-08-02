@@ -5,8 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use crate::support::env_guard::{EnvVarGuard, remove_env_var};
 use comenqd::config::Config;
+use test_support::env_guard::{EnvVarGuard, remove_env_var};
 
 #[derive(Debug, Default, World)]
 pub struct ConfigWorld {

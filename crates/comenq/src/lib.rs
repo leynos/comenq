@@ -39,7 +39,7 @@ fn validate_repo_slug(s: &str) -> Result<String, String> {
 mod tests {
     use super::Args;
     use clap::Parser;
-    use rstest::rstest;
+    use rstest::{case, rstest};
 
     #[rstest]
     #[case("octocat/hello-world", 1, "Hi")]

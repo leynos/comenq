@@ -40,8 +40,5 @@ fn triggers_on_tags(world: &mut ReleaseWorld) {
         .expect("tags")
         .as_sequence()
         .expect("sequence");
-    assert!(
-        tags.iter()
-            .any(|t| t.as_str() == Some("v[0-9]*.[0-9]*.[0-9]*"))
-    );
+    assert!(tags.iter().any(|t| t.as_str() == Some("v*.*.*")));
 }

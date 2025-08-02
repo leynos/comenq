@@ -20,7 +20,7 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 const DEFAULT_COOLDOWN: u64 = 960;
 
 /// Runtime configuration for the daemon.
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 pub struct Config {
     /// GitHub Personal Access Token.
     pub github_token: String,
@@ -118,18 +118,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    mod env_guard {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/support/env_guard.rs"
-        ));
-    }
-
-    pub mod support {
-        pub use super::env_guard::{EnvVarGuard, remove_env_var, set_env_var};
-    }
-
-    use support::{EnvVarGuard, remove_env_var};
+    use test_support::env_guard::{EnvVarGuard, remove_env_var};
 
     #[rstest]
     #[serial_test::serial]
