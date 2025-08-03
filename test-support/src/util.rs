@@ -6,6 +6,14 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// Maximum number of times to poll for an expected file.
+pub const SOCKET_RETRY_COUNT: u32 = 10;
+
+/// Delay between polls when waiting for a file to appear.
+///
+/// The value is ten milliseconds.
+pub const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(10);
+
 /// Wait for a file to appear within the given number of tries.
 ///
 /// # Examples
