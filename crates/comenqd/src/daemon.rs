@@ -456,7 +456,10 @@ mod tests {
     async fn run_worker_commits_on_success() {
         let (_dir, server, cfg, rx, octo) = setup_run_worker(201).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
-        sleep(Duration::from_millis(50)).await;
+        // The worker enforces a minimum one second cooldown between attempts.
+        // Allow slightly longer than that so the job is processed before we
+        // abort the task.
+        sleep(Duration::from_millis(1100)).await;
         h.abort();
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
@@ -466,7 +469,9 @@ mod tests {
     async fn run_worker_requeues_on_error() {
         let (_dir, server, cfg, rx, octo) = setup_run_worker(500).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
-        sleep(Duration::from_millis(50)).await;
+        // Allow the worker enough time to handle the job and wait for the
+        // mandated cooldown period.
+        sleep(Duration::from_millis(1100)).await;
         h.abort();
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
