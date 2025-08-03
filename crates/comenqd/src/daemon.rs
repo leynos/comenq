@@ -285,7 +285,7 @@ mod tests {
     use test_support::wait_for_file;
     use test_utils::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
@@ -364,7 +364,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let queue_path = dir.path().join("q");
         let (sender, mut receiver) = channel(&queue_path).expect("channel");
-        let (client_tx, mut writer_rx) = mpsc::unbounded_channel();
+        let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let writer = tokio::spawn(queue_writer(sender, writer_rx));
 
         let (mut client, server) = UnixStream::pair().expect("pair");

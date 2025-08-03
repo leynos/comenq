@@ -20,7 +20,7 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 const DEFAULT_COOLDOWN: u64 = 960;
 
 /// Runtime configuration for the daemon.
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
     /// GitHub Personal Access Token.
     pub github_token: String,
@@ -126,7 +126,7 @@ mod tests {
     }
 
     pub mod support {
-        pub use super::env_guard::{EnvVarGuard, remove_env_var, set_env_var};
+        pub use super::env_guard::{EnvVarGuard, remove_env_var};
     }
 
     use support::{EnvVarGuard, remove_env_var};
