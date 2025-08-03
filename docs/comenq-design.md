@@ -1000,21 +1000,36 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octoc
     loop {
         let guard = rx.recv().await?;
         let request = &*guard;
-        info!("Processing comment for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
+        info!(
+            "Processing comment for PR #{}: {}/{}",
+            request.pr_number,
+            request.owner,
+            request.repo
+        );
 
-        match octocrab.issues(&request.owner, &request.repo).create_comment(request.pr_number, &request.body).await {
-            Ok(comment) => {
-                info!("Successfully posted comment: {}", comment.html_url);
+        match octocrab
+            .issues(&request.owner, &request.repo)
+            .create_comment(request.pr_number, &request.body)
+            .await
+        {
+            Ok(_) | Err(octocrab::Error::Serde { .. }) => {
                 guard.commit()?;
             }
             Err(e) => {
-                error!("Failed to post comment for PR #{}: {}. Requeuing.", request.pr_number, e);
+                error!(
+                    "Failed to post comment for PR #{}: {}. Requeuing.",
+                    request.pr_number,
+                    e
+                );
                 // Guard is dropped, job is automatically requeued.
             }
         }
 
         info!("Entering {}s cooldown period.", config.cooldown_period_seconds);
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+        tokio::time::sleep(
+            Duration::from_secs(std::cmp::max(1, config.cooldown_period_seconds))
+        )
+        .await;
     }
 }
 ```
@@ -1034,7 +1049,10 @@ single-writer semantics without per-connection locking.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
-secondary rate limits.
+secondary rate limits. A minimum delay of one second is enforced even if a
+lower value is configured to prevent a busy retry loop. Responses that cannot
+be deserialised are treated as successful because the daemon discards the
+response body.
 
 GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
 to ensure the worker does not block indefinitely if the network stalls.

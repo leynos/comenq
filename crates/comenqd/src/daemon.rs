@@ -251,7 +251,7 @@ pub async fn run_worker(
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         match post_comment(&octocrab, &request).await {
-            Ok(_) => {
+            Ok(_) | Err(PostCommentError::Api(octocrab::Error::Serde { .. })) => {
                 guard.commit()?;
             }
             Err(PostCommentError::Api(e)) => {
@@ -260,7 +260,7 @@ pub async fn run_worker(
                     owner = %request.owner,
                     repo = %request.repo,
                     pr = request.pr_number,
-                    "GitHub API call failed"
+                    "GitHub API call failed",
                 );
             }
             Err(PostCommentError::Timeout) => {
@@ -268,12 +268,13 @@ pub async fn run_worker(
                     owner = %request.owner,
                     repo = %request.repo,
                     pr = request.pr_number,
-                    "GitHub API call timed out"
+                    "GitHub API call timed out",
                 );
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+        let sleep_secs = std::cmp::max(1, config.cooldown_period_seconds);
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }
 
