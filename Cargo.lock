@@ -324,6 +324,7 @@ dependencies = [
  "cucumber",
  "octocrab",
  "ortho_config",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

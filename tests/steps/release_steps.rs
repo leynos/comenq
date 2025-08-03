@@ -3,6 +3,7 @@
 
 use comenq_lib::workflow::uses_goreleaser as workflow_uses_goreleaser;
 use cucumber::{World, given, then, when};
+use regex::Regex;
 use serde_yaml::Value;
 use std::fs;
 
@@ -40,5 +41,11 @@ fn triggers_on_tags(world: &mut ReleaseWorld) {
         .expect("tags")
         .as_sequence()
         .expect("sequence");
-    assert!(tags.iter().any(|t| t.as_str() == Some("v*.*.*")));
+    let pattern = Regex::new(r"^v\*\.\*\.\*$").expect("compile regex");
+    assert!(
+        tags.iter()
+            .filter_map(|t| t.as_str())
+            .any(|t| pattern.is_match(t)),
+        "missing semantic version tag pattern",
+    );
 }

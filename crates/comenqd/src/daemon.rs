@@ -287,7 +287,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
     use tokio::io::AsyncWriteExt;
-    use tokio::net::UnixStream;
+    use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};

@@ -39,15 +39,11 @@ fn validate_repo_slug(s: &str) -> Result<String, String> {
 mod tests {
     use super::Args;
     use clap::Parser;
-    use rstest::rstest;
+    use rstest::{case, rstest};
 
     #[rstest]
-    #[rstest::case("octocat/hello-world", 1, "Hi")]
-    fn parses_valid_arguments(
-        #[rstest::case] slug: &str,
-        #[rstest::case] pr: u64,
-        #[rstest::case] body: &str,
-    ) {
+    #[case("octocat/hello-world", 1, "Hi")]
+    fn parses_valid_arguments(#[case] slug: &str, #[case] pr: u64, #[case] body: &str) {
         let pr_str = pr.to_string();
         let args = Args::try_parse_from(["comenq", slug, &pr_str, body]);
         let args = args.expect("valid arguments should parse");
@@ -57,11 +53,11 @@ mod tests {
     }
 
     #[rstest]
-    #[rstest::case("octocat")]
-    #[rstest::case("/repo")]
-    #[rstest::case("owner/")]
-    #[rstest::case("owner/repo/extra")]
-    fn rejects_invalid_slug(#[rstest::case] slug: &str) {
+    #[case("octocat")]
+    #[case("/repo")]
+    #[case("owner/")]
+    #[case("owner/repo/extra")]
+    fn rejects_invalid_slug(#[case] slug: &str) {
         let result = Args::try_parse_from(["comenq", slug, "1", "Hi"]);
         assert!(result.is_err());
     }
