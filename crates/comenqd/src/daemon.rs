@@ -332,7 +332,9 @@ mod tests {
         path.exists()
     }
 
-    async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
+    async fn setup_run_worker(
+        status: u16,
+    ) -> (TempDir, MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
             cooldown_period_seconds: 0,
@@ -358,7 +360,7 @@ mod tests {
             .await;
 
         let octo = octocrab_for(&server);
-        (server, cfg, rx, octo)
+        (dir, server, cfg, rx, octo)
     }
 
     #[tokio::test]
@@ -452,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_worker_commits_on_success() {
-        let (server, cfg, rx, octo) = setup_run_worker(201).await;
+        let (_dir, server, cfg, rx, octo) = setup_run_worker(201).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
         sleep(Duration::from_millis(50)).await;
         h.abort();
@@ -462,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_worker_requeues_on_error() {
-        let (server, cfg, rx, octo) = setup_run_worker(500).await;
+        let (_dir, server, cfg, rx, octo) = setup_run_worker(500).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
         sleep(Duration::from_millis(50)).await;
         h.abort();
