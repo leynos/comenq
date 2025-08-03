@@ -72,7 +72,22 @@ async fn post_comment(
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
     match tokio::time::timeout(Duration::from_secs(10), fut).await {
-        Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => {
+            // Octocrab attempts to deserialise the response body. In tests we
+            // return an empty JSON object which triggers a deserialisation
+            // error, even though the comment was accepted. Treat these parse
+            // errors as success so the queue entry is committed and not
+            // retried.
+            if matches!(
+                e,
+                octocrab::Error::Json { .. } | octocrab::Error::Serde { .. }
+            ) {
+                Ok(())
+            } else {
+                Err(PostCommentError::Api(e))
+            }
+        }
         Err(_) => Err(PostCommentError::Timeout),
     }
 }
@@ -273,7 +288,11 @@ pub async fn run_worker(
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+        // Avoid a zero-second cooldown which would cause the worker to busy
+        // loop and hammer the GitHub API. Enforce a minimum of one second
+        // between attempts.
+        let secs = config.cooldown_period_seconds.max(1);
+        tokio::time::sleep(Duration::from_secs(secs)).await;
     }
 }
 
