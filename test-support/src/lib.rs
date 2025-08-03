@@ -1,7 +1,12 @@
 //! Test support utilities.
 
+pub mod daemon;
 pub mod util;
 
+// Re-exports from daemon module (added in main)
+pub use daemon::{octocrab_for, temp_config};
+
+// Re-exports from util module with documentation (from your branch)
 /// Maximum number of times to poll for an expected file.
 pub use util::SOCKET_RETRY_COUNT;
 

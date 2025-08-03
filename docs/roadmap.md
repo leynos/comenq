@@ -105,15 +105,15 @@ and macOS, simplifying installation and improving security and maintainability.
   - [x] Configure GoReleaser's `nfpms` section to build and sign `.rpm` and
     `.deb` packages.
 
-- [ ] **Automate the Release Workflow**
+- [x] **Automate the Release Workflow**
 
-  - [ ] Implement a GitHub Actions workflow that triggers on new version tags
+  - [x] Implement a GitHub Actions workflow that triggers on new version tags
     (e.g., `v*`).
 
-  - [ ] The workflow will orchestrate the entire release: checking out the
+  - [x] The workflow will orchestrate the entire release: checking out the
     code, installing dependencies, and executing GoReleaser.
 
-  - [ ] GoReleaser will then build the binaries, create all packages, publish
+  - [x] GoReleaser will then build the binaries, create all packages, publish
     the Homebrew formula, generate a changelog from git history, and upload all
     assets to a draft GitHub Release.
 
