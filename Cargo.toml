@@ -18,11 +18,12 @@ clap = { workspace = true }
 comenq = { path = "crates/comenq" }
 comenqd = { path = "crates/comenqd" }
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
-tempfile = "3.10" # latest 3.x at time of writing; update as new patch versions release
+tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 yaque = { workspace = true }
-wiremock = "0.6"
+wiremock = { workspace = true }
 octocrab = { workspace = true }
 test-support = { path = "test-support" }
+regex = { workspace = true }
 
 [[test]]
 name = "cucumber"
@@ -51,7 +52,9 @@ thiserror = "1.0"
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
 serde_yaml = "0.9"
 tempfile = "3.10"
+regex = "1"
 rstest = "0.18.0"
+wiremock = "0.6"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
