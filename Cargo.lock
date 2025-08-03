@@ -349,12 +349,11 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tempfile",
- "test-support",
- "test-utils",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
  "yaque",
 ]
 

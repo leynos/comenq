@@ -7,6 +7,10 @@
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::{EnvFilter, fmt};
 
+#[cfg(test)]
+#[path = "../../../tests/support/env_guard.rs"]
+mod env_guard;
+
 /// Initialize the global tracing subscriber.
 pub fn init() {
     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
@@ -20,13 +24,13 @@ where
     fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(writer)
-        .json()
         .init();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_guard::EnvVarGuard;
     use std::sync::{Arc, Mutex};
     use tracing::info;
 
@@ -66,7 +70,7 @@ mod tests {
     #[test]
     fn init_logging() {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        std::env::set_var("RUST_LOG", "info");
+        let _guard = EnvVarGuard::set("RUST_LOG", "info");
         init_with_writer(BufMakeWriter { buf: buf.clone() });
         info!("captured");
         let output = String::from_utf8(buf.lock().expect("Failed to lock log buffer").clone())

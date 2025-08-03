@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+#[path = "../../../tests/support/env_guard.rs"]
+mod env_guard;
+
 /// Default socket path when none is provided.
 const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
@@ -20,7 +24,7 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 const DEFAULT_COOLDOWN: u64 = 960;
 
 /// Runtime configuration for the daemon.
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
     /// GitHub Personal Access Token.
     pub github_token: String,
@@ -114,22 +118,10 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_guard::{EnvVarGuard, remove_env_var};
     use rstest::rstest;
     use std::fs;
     use tempfile::tempdir;
-
-    mod env_guard {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/support/env_guard.rs"
-        ));
-    }
-
-    pub mod support {
-        pub use super::env_guard::{EnvVarGuard, remove_env_var, set_env_var};
-    }
-
-    use support::{EnvVarGuard, remove_env_var};
 
     #[rstest]
     #[serial_test::serial]
