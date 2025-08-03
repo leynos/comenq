@@ -77,7 +77,7 @@ your package.
 #### Step 2: Create a Default Configuration File
 
 Create a default `config.toml` file to be included in the packages. Place it at
-`packaging/comenqd/config.toml`.
+`packaging/config/comenqd.toml`.
 
 ```toml
 # Default configuration for comenqd
@@ -100,32 +100,20 @@ repository. This file defines the entire release process.
 # Visit https://goreleaser.com/customization/ for more options
 project_name: comenq
 
-# This section is only needed if you use the GoReleaser Go proxy
-# to build. Since we are building a Rust project, we will override
-# the build step entirely.
+plugins:
+  - import: github.com/goreleaser/goreleaser-rust
+
 builds:
   - id: comenq
     binary: comenq
     main: ./crates/comenq
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    # We use a custom build command with Cargo
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenq --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenq {{ .Path }}
+    builder: rust
+    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin]
   - id: comenqd
     binary: comenqd
     main: ./crates/comenqd
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    # We use a custom build command with Cargo
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
+    builder: rust
+    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin]
 
 # Create archives of the binaries.
 archives:
@@ -171,7 +159,7 @@ nfpms:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
       # The default configuration file
-      - src: packaging/comenqd/config.toml
+      - src: packaging/config/comenqd.toml
         dst: /etc/comenq/config.toml
         type: config
     # Scripts to run on installation
@@ -399,13 +387,9 @@ brews:
 
 #### Step 3: Add the macOS Configuration File
 
-The Homebrew formula will also install a default configuration. Add a copy for
-macOS, perhaps identical to the Linux one, at `packaging/darwin/config.toml`.
-Update the `brews.contents` section in `.goreleaser.yaml` to point to it if it
-differs, or simply add it to the `files` section of the archive if it's
-universal. For simplicity, let's assume the one at
-`packaging/comenqd/config.toml` is sufficient and will be picked up by the
-archive.
+The Homebrew formula will also install a default configuration. Since the same
+settings apply on both platforms, the shared `packaging/config/comenqd.toml` is
+sufficient and will be picked up by the archive.
 
 #### Step 4: Final `.goreleaser.yaml`
 
@@ -416,27 +400,28 @@ configurations:
 # .goreleaser.yaml
 project_name: comenq
 
+plugins:
+  - import: github.com/goreleaser/goreleaser-rust
+
 builds:
   - id: comenq
     binary: comenq
     main: ./crates/comenq
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenq --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenq {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
   - id: comenqd
     binary: comenqd
     main: ./crates/comenqd
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
 
 archives:
   - id: default
@@ -445,7 +430,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/comenqd/config.toml
+      - packaging/config/comenqd.toml
 
 nfpms:
   - id: comenq-packages
@@ -470,7 +455,7 @@ nfpms:
     contents:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
-      - src: packaging/comenqd/config.toml
+      - src: packaging/config/comenqd.toml
         dst: /etc/comenq/config.toml
         type: config
     scripts:

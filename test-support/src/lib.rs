@@ -2,6 +2,7 @@
 
 pub mod daemon;
 pub mod util;
+pub mod workflow;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{octocrab_for, temp_config};

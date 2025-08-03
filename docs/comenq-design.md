@@ -717,13 +717,14 @@ service.
 ### 4.4. Packaging and Release Workflow
 
 To simplify installation, the project uses GoReleaser. The declarative
-`.goreleaser.yaml` invokes `cargo build` for both binaries via custom pre-build
-hooks. The `nfpms` section produces signed `.deb` and `.rpm` packages for
-Fedora and Ubuntu, embedding the hardened `systemd` service unit and lifecycle
-scripts that create the `comenq` user. This keeps packaging logic version
-controlled and repeatable. A GitHub Actions workflow triggers on version tags
-to run GoReleaser. It builds Linux packages and uploads them to a draft
-release. Mac support is currently deferred, so the workflow targets Linux only.
+`.goreleaser.yaml` builds both binaries via the `goreleaser-rust` plugin,
+eliminating manual pre-build hooks. The `nfpms` section produces signed `.deb`
+and `.rpm` packages for Fedora and Ubuntu, embedding the hardened `systemd`
+service unit and lifecycle scripts that create the `comenq` user. This keeps
+packaging logic version controlled and repeatable. A GitHub Actions workflow
+triggers on version tags to run GoReleaser. It builds Linux packages and
+uploads them to a draft release. Mac support is currently deferred, so the
+workflow targets Linux only.
 
 ## Section 5: Complete Source Code and Project Manifest
 
