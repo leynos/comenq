@@ -91,7 +91,6 @@ mod tests {
     use super::{ClientError, parse_slug, run};
     use crate::Args;
     use comenq_lib::CommentRequest;
-    use rstest::rstest;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
     use tokio::net::UnixListener;

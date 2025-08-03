@@ -5,9 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cucumber::{World, given, then, when};
+use cucumber::World;
+use cucumber::{given, then, when};
 use tempfile::TempDir;
-use test_support::wait_for_file;
+use test_support::{SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY, wait_for_file};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
@@ -63,7 +64,7 @@ async fn running_listener(world: &mut ListenerWorld) {
         .expect("config not initialised in ListenerWorld")
         .socket_path;
     assert!(
-        wait_for_file(socket_path, 10, Duration::from_millis(10)).await,
+        wait_for_file(socket_path, SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY).await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
