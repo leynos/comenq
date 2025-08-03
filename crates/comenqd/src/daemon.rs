@@ -337,7 +337,7 @@ mod tests {
             cooldown_period_seconds: 0,
             ..temp_config(&dir)
         });
-        let (sender, rx) = channel(&cfg.queue_path).expect("channel");
+        let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
             repo: "r".into(),
