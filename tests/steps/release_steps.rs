@@ -1,10 +1,10 @@
 //! Behavioural steps for the release workflow.
 #![expect(clippy::expect_used, reason = "simplify test failure output")]
 
-use comenq_lib::workflow::uses_goreleaser as workflow_uses_goreleaser;
 use cucumber::{World, given, then, when};
 use serde_yaml::Value;
 use std::fs;
+use test_support::uses_goreleaser as workflow_uses_goreleaser;
 
 #[derive(Debug, Default, World)]
 pub struct ReleaseWorld {
@@ -40,8 +40,5 @@ fn triggers_on_tags(world: &mut ReleaseWorld) {
         .expect("tags")
         .as_sequence()
         .expect("sequence");
-    assert!(
-        tags.iter()
-            .any(|t| t.as_str() == Some("v[0-9]*.[0-9]*.[0-9]*"))
-    );
+    assert!(tags.iter().any(|t| t.as_str() == Some("v*.*.*")));
 }

@@ -2451,6 +2451,7 @@ version = "0.1.0"
 dependencies = [
  "comenqd",
  "octocrab",
+ "serde_yaml",
  "tempfile",
  "tokio",
  "wiremock",

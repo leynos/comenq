@@ -77,10 +77,12 @@ your package.
 #### Step 2: Create a Default Configuration File
 
 Create a default `config.toml` file to be included in the packages. Place it at
-`packaging/comenqd/config.toml`.
+`packaging/config/comenqd.toml`.
 
 ```toml
 # Default configuration for comenqd
+# GitHub Personal Access Token used for authentication.
+# If left empty, GitHub integration is disabled.
 # github_token = ""
 # log_level = "info"
 # socket_path = "/run/comenq/comenq.sock"
@@ -127,6 +129,10 @@ builds:
         - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
         - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
 
+> Note: GoReleaser provides a `goreleaser-rust` plugin and Docker-based builds
+> that remove the need for the Go builder and manual Cargo hooks. Evaluating
+> these approaches may streamline cross-compilation.
+
 # Create archives of the binaries.
 archives:
   - id: default
@@ -171,7 +177,7 @@ nfpms:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
       # The default configuration file
-      - src: packaging/comenqd/config.toml
+      - src: packaging/config/comenqd.toml
         dst: /etc/comenq/config.toml
         type: config
     # Scripts to run on installation
@@ -399,13 +405,10 @@ brews:
 
 #### Step 3: Add the macOS Configuration File
 
-The Homebrew formula will also install a default configuration. Add a copy for
-macOS, perhaps identical to the Linux one, at `packaging/darwin/config.toml`.
-Update the `brews.contents` section in `.goreleaser.yaml` to point to it if it
-differs, or simply add it to the `files` section of the archive if it's
-universal. For simplicity, let's assume the one at
-`packaging/comenqd/config.toml` is sufficient and will be picked up by the
-archive.
+The Homebrew formula will also install a default configuration. Because the
+same settings apply on macOS, the shared `packaging/config/comenqd.toml` file
+can be reused. Reference it from the `brews.contents` section or add it to the
+archive so that both platforms receive identical defaults.
 
 #### Step 4: Final `.goreleaser.yaml`
 
@@ -445,7 +448,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/comenqd/config.toml
+      - packaging/config/comenqd.toml
 
 nfpms:
   - id: comenq-packages
@@ -470,7 +473,7 @@ nfpms:
     contents:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
-      - src: packaging/comenqd/config.toml
+      - src: packaging/config/comenqd.toml
         dst: /etc/comenq/config.toml
         type: config
     scripts:

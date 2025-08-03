@@ -29,7 +29,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/comenqd/config.toml
+      - packaging/config/comenqd.toml
 
 nfpms:
   - id: comenq-packages
@@ -54,7 +54,7 @@ nfpms:
     contents:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
-      - src: packaging/comenqd/config.toml
+      - src: packaging/config/comenqd.toml
         dst: /etc/comenq/config.toml
         type: config
     scripts:
