@@ -1,7 +1,7 @@
-// Test helpers for managing environment variables.
-//
-// `EnvVarGuard` temporarily sets an environment variable and restores the
-// previous value on drop.
+//! Test helpers for managing environment variables.
+//!
+//! `EnvVarGuard` temporarily sets an environment variable and restores the
+//! previous value on drop.
 
 #[derive(Debug)]
 pub struct EnvVarGuard {
