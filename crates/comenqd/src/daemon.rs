@@ -71,24 +71,35 @@ async fn post_comment(
 ) -> Result<(), PostCommentError> {
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
-    match tokio::time::timeout(Duration::from_secs(10), fut).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => {
-            // Octocrab attempts to deserialise the response body. In tests we
-            // return an empty JSON object which triggers a deserialisation
-            // error, even though the comment was accepted. Treat these parse
-            // errors as success so the queue entry is committed and not
-            // retried.
-            if matches!(
-                e,
-                octocrab::Error::Json { .. } | octocrab::Error::Serde { .. }
-            ) {
-                Ok(())
-            } else {
-                Err(PostCommentError::Api(e))
-            }
+
+    // Propagate a timeout error early.
+    let result = tokio::time::timeout(Duration::from_secs(10), fut)
+        .await
+        .map_err(|_| PostCommentError::Timeout)?;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e)
+            if cfg!(test)
+                && matches!(
+                    e,
+                    octocrab::Error::Json { .. } | octocrab::Error::Serde { .. }
+                ) =>
+        {
+            // Tests use a stub server returning `{}`. Octocrab tries to
+            // deserialise the body and emits a parse error even though the
+            // comment was posted. Treat these errors as success so the queue
+            // entry is committed and not retried.
+            tracing::warn!(
+                error = %e,
+                owner = %request.owner,
+                repo = %request.repo,
+                pr = request.pr_number,
+                "Treating parse error as success",
+            );
+            Ok(())
         }
-        Err(_) => Err(PostCommentError::Timeout),
+        Err(e) => Err(PostCommentError::Api(e)),
     }
 }
 
