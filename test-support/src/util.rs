@@ -11,6 +11,8 @@ pub const SOCKET_RETRY_COUNT: u32 = 10;
 
 /// Delay between polls when waiting for a file to appear.
 ///
+/// Each attempt sleeps for this duration; multiply by
+/// [`SOCKET_RETRY_COUNT`] to obtain the worst-case total wait.
 /// The value is ten milliseconds.
 pub const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(10);
 
