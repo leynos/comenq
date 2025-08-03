@@ -4,7 +4,7 @@
 use cucumber::{World, given, then, when};
 use serde_yaml::Value;
 use std::fs;
-use test_support::workflow::uses_goreleaser as workflow_uses_goreleaser;
+use test_support::uses_goreleaser as workflow_uses_goreleaser;
 
 #[derive(Debug, Default, World)]
 pub struct ReleaseWorld {

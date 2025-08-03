@@ -88,108 +88,7 @@ Create a default `config.toml` file to be included in the packages. Place it at
 # cooldown_period_seconds = 960
 ```
 
-#### Step 3: Create the `.goreleaser.yaml` Configuration
-
-Now, create the main GoReleaser configuration file in the root of your
-repository. This file defines the entire release process.
-
-#### `.goreleaser.yaml`
-
-```yaml
-# .goreleaser.yaml
-# Visit https://goreleaser.com/customization/ for more options
-project_name: comenq
-
-plugins:
-  - import: github.com/goreleaser/goreleaser-rust
-
-builds:
-  - id: comenq
-    binary: comenq
-    main: ./crates/comenq
-    builder: rust
-    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin]
-  - id: comenqd
-    binary: comenqd
-    main: ./crates/comenqd
-    builder: rust
-    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin]
-
-# Create archives of the binaries.
-archives:
-  - id: default
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
-    files:
-      - LICENSE
-      - README.md
-
-# Configuration for creating Linux packages (.deb and .rpm)
-nfpms:
-  - id: comenq-packages
-    package_name: comenq
-    vendor: "Your Name"
-    homepage: "https://github.com/leynos/comenq"
-    maintainer: "Your Name <your.email@example.com>"
-    description: "Client for the Comenq notification system."
-    license: MIT
-    formats:
-      - deb
-      - rpm
-    # Target only the 'comenq' build
-    builds:
-      - comenq
-
-  - id: comenqd-packages
-    package_name: comenqd
-    vendor: "Your Name"
-    homepage: "https://github.com/leynos/comenq"
-    maintainer: "Your Name <your.email@example.com>"
-    description: "Daemon for the Comenq notification system."
-    license: MIT
-    formats:
-      - deb
-      - rpm
-    # Target only the 'comenqd' build
-    builds:
-      - comenqd
-    # Files to include in the package
-    contents:
-      # The systemd unit file
-      - src: packaging/linux/comenqd.service
-        dst: /lib/systemd/system/comenqd.service
-      # The default configuration file
-      - src: packaging/config/comenqd.toml
-        dst: /etc/comenq/config.toml
-        type: config
-    # Scripts to run on installation
-    scripts:
-      preinstall: "packaging/linux/preinstall.sh"
-      postinstall: "packaging/linux/postinstall.sh"
-      preremove: "packaging/linux/preremove.sh"
-
-# Create a GitHub release
-release:
-  github:
-    owner: leynos
-    name: comenq
-  draft: true # Set to false to auto-publish
-
-# Generate a changelog from commit messages
-changelog:
-  sort: asc
-  filters:
-    # Exclude chore, style, and test commits from the changelog
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - '^style:'
-      - 'Merge pull request'
-      - 'Merge branch'
-```
-
-#### Step 4: Create Installation Scripts
+#### Step 3: Create Installation Scripts
 
 The `systemd` unit file requires a dedicated user. These scripts will create
 the `comenq` user and group upon installation.
@@ -238,7 +137,7 @@ fi
 
 Make these scripts executable: `chmod +x packaging/linux/*.sh`.
 
-#### Step 5: Update the GitHub Actions Workflow
+#### Step 4: Update the GitHub Actions Workflow
 
 Finally, modify your existing `.github/workflows/release.yml` to use
 GoReleaser. This workflow will trigger when you push a new tag (e.g., `v1.2.3`).

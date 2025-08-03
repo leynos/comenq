@@ -8,12 +8,16 @@ builds:
     binary: comenq
     main: ./crates/comenq
     builder: rust
-    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
   - id: comenqd
     binary: comenqd
     main: ./crates/comenqd
     builder: rust
-    targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
 
 archives:
   - id: default
@@ -22,7 +26,8 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/config/comenqd.toml
+      - >-
+        packaging/config/comenqd.toml
 
 nfpms:
   - id: comenq-packages
