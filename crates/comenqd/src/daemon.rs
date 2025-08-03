@@ -281,20 +281,54 @@ pub async fn run_worker(
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
-    use tempfile::tempdir;
-    use test_support::wait_for_file;
-    use test_utils::{octocrab_for, temp_config};
+    use octocrab::Octocrab;
+    use std::fs as stdfs;
+    use std::path::Path;
+    use std::sync::Arc;
+    use tempfile::{TempDir, tempdir};
     use tokio::io::AsyncWriteExt;
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use yaque::Receiver;
+    fn temp_config(tmp: &TempDir) -> Config {
+        Config {
+            github_token: String::from("t"),
+            socket_path: tmp.path().join("sock"),
+            queue_path: tmp.path().join("q"),
+            cooldown_period_seconds: 1,
+        }
+    }
+
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
         Config {
             cooldown_period_seconds: secs,
             ..temp_config(dir)
         }
+    }
+
+    #[expect(clippy::expect_used, reason = "simplify test helper setup")]
+    fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
+        Arc::new(
+            Octocrab::builder()
+                .personal_token("t".to_string())
+                .base_uri(server.uri())
+                .expect("base_uri")
+                .build()
+                .expect("build octocrab"),
+        )
+    }
+
+    async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
+        for _ in 0..tries {
+            if path.exists() {
+                return true;
+            }
+            sleep(delay).await;
+        }
+        path.exists()
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
@@ -364,7 +398,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let queue_path = dir.path().join("q");
         let (sender, mut receiver) = channel(&queue_path).expect("channel");
-        let (client_tx, mut writer_rx) = mpsc::unbounded_channel();
+        let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let writer = tokio::spawn(queue_writer(sender, writer_rx));
 
         let (mut client, server) = UnixStream::pair().expect("pair");
