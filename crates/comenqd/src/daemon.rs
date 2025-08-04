@@ -462,7 +462,12 @@ mod tests {
         sleep(Duration::from_millis(50)).await;
         h.abort();
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(&cfg.queue_path)
+                .expect("read queue directory")
+                .count(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -472,6 +477,11 @@ mod tests {
         sleep(Duration::from_millis(50)).await;
         h.abort();
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
+        assert!(
+            std::fs::read_dir(&cfg.queue_path)
+                .expect("read queue directory")
+                .count()
+                > 0
+        );
     }
 }
