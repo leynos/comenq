@@ -287,6 +287,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
+    use test_support::util::poll_until;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
@@ -482,17 +483,28 @@ mod tests {
         ctx: WorkerTestContext,
     ) {
         let ctx = ctx.await;
+        let server = Arc::new(ctx.server);
+        let server_clone = server.clone();
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
-        sleep(Duration::from_millis(50)).await;
+
+        let request_received = poll_until(
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            || async {
+                server_clone
+                    .received_requests()
+                    .await
+                    .map_or(false, |reqs| reqs.len() == 1)
+            },
+        )
+        .await;
+
         h.abort();
-        assert_eq!(
-            ctx.server
-                .received_requests()
-                .await
-                .expect("requests")
-                .len(),
-            1
+        assert!(
+            request_received,
+            "Worker did not post a comment within the timeout",
         );
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert_eq!(
             stdfs::read_dir(&ctx.cfg.queue_path)
                 .expect("read queue directory")
@@ -510,17 +522,28 @@ mod tests {
         ctx: WorkerTestContext,
     ) {
         let ctx = ctx.await;
+        let server = Arc::new(ctx.server);
+        let server_clone = server.clone();
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
-        sleep(Duration::from_millis(50)).await;
+
+        let request_attempted = poll_until(
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            || async {
+                server_clone
+                    .received_requests()
+                    .await
+                    .map_or(false, |reqs| reqs.len() == 1)
+            },
+        )
+        .await;
+
         h.abort();
-        assert_eq!(
-            ctx.server
-                .received_requests()
-                .await
-                .expect("requests")
-                .len(),
-            1
+        assert!(
+            request_attempted,
+            "Worker did not attempt to post a comment within the timeout",
         );
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)
                 .expect("read queue directory")
