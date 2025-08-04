@@ -282,6 +282,7 @@ mod tests {
     //! Tests for the daemon tasks.
     use super::*;
     use octocrab::Octocrab;
+    use rstest::{fixture, rstest};
     use std::fs as stdfs;
     use std::path::Path;
     use std::sync::Arc;
@@ -331,7 +332,18 @@ mod tests {
         path.exists()
     }
 
-    async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
+    /// Context dependencies for worker tests.
+    struct WorkerTestContext {
+        server: MockServer,
+        cfg: Arc<Config>,
+        rx: Receiver,
+        octo: Arc<Octocrab>,
+        // Hold the directory to ensure temporary paths remain valid.
+        _dir: TempDir,
+    }
+
+    #[fixture]
+    async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
             // Use a positive cooldown to ensure retries are throttled.
@@ -363,7 +375,14 @@ mod tests {
             .await;
 
         let octo = octocrab_for(&server);
-        (server, cfg, rx, octo)
+
+        WorkerTestContext {
+            server,
+            cfg,
+            rx,
+            octo,
+            _dir: dir,
+        }
     }
 
     #[tokio::test]
@@ -455,23 +474,58 @@ mod tests {
         drop(writer);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn run_worker_commits_on_success() {
-        let (server, cfg, rx, octo) = setup_run_worker(201).await;
-        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
+    async fn run_worker_commits_on_success(
+        #[future]
+        #[from(worker_test_context)]
+        ctx: WorkerTestContext,
+    ) {
+        let ctx = ctx.await;
+        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
         sleep(Duration::from_millis(50)).await;
         h.abort();
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
+        assert_eq!(
+            ctx.server
+                .received_requests()
+                .await
+                .expect("requests")
+                .len(),
+            1
+        );
+        assert_eq!(
+            stdfs::read_dir(&ctx.cfg.queue_path)
+                .expect("read queue directory")
+                .count(),
+            0
+        );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn run_worker_requeues_on_error() {
-        let (server, cfg, rx, octo) = setup_run_worker(500).await;
-        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
+    async fn run_worker_requeues_on_error(
+        #[future]
+        #[with(500)]
+        #[from(worker_test_context)]
+        ctx: WorkerTestContext,
+    ) {
+        let ctx = ctx.await;
+        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
         sleep(Duration::from_millis(50)).await;
         h.abort();
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
+        assert_eq!(
+            ctx.server
+                .received_requests()
+                .await
+                .expect("requests")
+                .len(),
+            1
+        );
+        assert!(
+            stdfs::read_dir(&ctx.cfg.queue_path)
+                .expect("read queue directory")
+                .count()
+                > 0
+        );
     }
 }
