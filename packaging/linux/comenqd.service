@@ -6,7 +6,7 @@ After=network.target
 [Service]
 User=comenq
 Group=comenq
-ExecStart=/usr/bin/comenqd --config /etc/comenq/config.toml
+ExecStart=/usr/bin/comenqd --config /etc/comenqd/config.toml
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=read-only

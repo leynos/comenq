@@ -1,6 +1,7 @@
 # Default configuration for comenqd
 
-# GitHub Personal Access Token used for authentication
+# GitHub Personal Access Token used for authentication.
+# If left empty, GitHub integration is disabled.
 # github_token = ""
 
 # Minimum log level to output

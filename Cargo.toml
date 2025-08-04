@@ -8,7 +8,6 @@ path = "src/lib.rs"
 
 [dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
@@ -23,6 +22,7 @@ yaque = { workspace = true }
 wiremock = { workspace = true }
 octocrab = { workspace = true }
 test-support = { path = "test-support" }
+serde_yaml = { workspace = true }
 regex = { workspace = true }
 
 [[test]]

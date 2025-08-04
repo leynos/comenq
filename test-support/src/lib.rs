@@ -3,6 +3,8 @@
 pub mod daemon;
 pub mod env_guard;
 pub mod util;
+mod workflow;
+pub use workflow::uses_goreleaser;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{octocrab_for, temp_config};

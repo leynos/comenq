@@ -1,26 +1,23 @@
 project_name: comenq
 
+plugins:
+  - import: github.com/goreleaser/goreleaser-rust@v1.6.0
+
 builds:
   - id: comenq
     binary: comenq
     main: ./crates/comenq
-    goos: [linux]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenq --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenq {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
   - id: comenqd
     binary: comenqd
     main: ./crates/comenqd
-    goos: [linux]
-    goarch: [amd64, arm64]
-    builder: go
-    hooks:
-      pre:
-        - cmd: cargo build --release --package comenqd --target {{ .TARGET }}
-        - cmd: cp target/{{ .TARGET }}/release/comenqd {{ .Path }}
+    builder: rust
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
 
 archives:
   - id: default
@@ -29,7 +26,8 @@ archives:
     files:
       - LICENSE
       - README.md
-      - packaging/comenqd/config.toml
+      - >-
+        packaging/config/comenqd.toml
 
 nfpms:
   - id: comenq-packages
@@ -54,8 +52,8 @@ nfpms:
     contents:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
-      - src: packaging/comenqd/config.toml
-        dst: /etc/comenq/config.toml
+      - src: packaging/config/comenqd.toml
+        dst: /etc/comenqd/config.toml
         type: config
     scripts:
       preinstall: packaging/linux/preinstall.sh
