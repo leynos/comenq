@@ -495,7 +495,7 @@ mod tests {
         );
         assert_eq!(
             stdfs::read_dir(&ctx.cfg.queue_path)
-                .expect("queue_path")
+                .expect("read queue directory")
                 .count(),
             0
         );
@@ -523,7 +523,7 @@ mod tests {
         );
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)
-                .expect("queue_path")
+                .expect("read queue directory")
                 .count()
                 > 0
         );
