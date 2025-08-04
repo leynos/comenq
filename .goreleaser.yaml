@@ -53,7 +53,7 @@ nfpms:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
       - src: packaging/config/comenqd.toml
-        dst: /etc/comenq/config.toml
+        dst: /etc/comenqd/config.toml
         type: config
     scripts:
       preinstall: packaging/linux/preinstall.sh

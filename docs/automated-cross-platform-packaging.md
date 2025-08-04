@@ -41,8 +41,8 @@ Group=comenq
 
 # The command to start the daemon
 # Assumes the binary is installed to /usr/bin/comenqd
-# The configuration file is expected at /etc/comenq/config.toml
-ExecStart=/usr/bin/comenqd --config /etc/comenq/config.toml
+# The configuration file is expected at /etc/comenqd/config.toml
+ExecStart=/usr/bin/comenqd --config /etc/comenqd/config.toml
 
 # Security Hardening
 # Disallow any privileges
@@ -71,8 +71,8 @@ WantedBy=multi-user.target
 ```
 
 **Note:** This unit file assumes a configuration file at
-`/etc/comenq/config.toml`. You should provide a default configuration file with
-your package.
+`/etc/comenqd/config.toml`. You should provide a default configuration file
+with your package.
 
 #### Step 2: Create a Default Configuration File
 
@@ -206,7 +206,7 @@ Create `packaging/darwin/comenqd.plist`:
     <array>
         <string>/usr/local/bin/comenqd</string>
         <string>--config</string>
-        <string>/usr/local/etc/comenq/config.toml</string>
+        <string>/usr/local/etc/comenqd/config.toml</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -270,7 +270,7 @@ brews:
 
     # The service block for `comenqd`
     service: |
-      run [opt_bin/"comenqd", "--config", etc/"comenq/config.toml"]
+      run [opt_bin/"comenqd", "--config", etc/"comenqd/config.toml"]
       keep_alive true
       log_path var/"log/comenq/comenqd.log"
       error_log_path var/"log/comenq/comenqd.err"
@@ -279,8 +279,8 @@ brews:
     install: |
       bin.install "comenq"
       bin.install "comenqd"
-      (etc/"comenq").mkpath
-      etc.install "config.toml" => "comenq/config.toml"
+      (etc/"comenqd").mkpath
+      etc.install "config.toml" => "comenqd/config.toml"
       (var/"log/comenq").mkpath
 ```
 
@@ -355,7 +355,7 @@ nfpms:
       - src: packaging/linux/comenqd.service
         dst: /lib/systemd/system/comenqd.service
       - src: packaging/config/comenqd.toml
-        dst: /etc/comenq/config.toml
+        dst: /etc/comenqd/config.toml
         type: config
     scripts:
       preinstall: "packaging/linux/preinstall.sh"
@@ -376,15 +376,15 @@ brews:
     license: "MIT"
     builds: [comenq, comenqd]
     service: |
-      run [opt_bin/"comenqd", "--config", etc/"comenq/config.toml"]
+      run [opt_bin/"comenqd", "--config", etc/"comenqd/config.toml"]
       keep_alive true
       log_path var/"log/comenq/comenqd.log"
       error_log_path var/"log/comenq/comenqd.err"
     install: |
       bin.install "comenq"
       bin.install "comenqd"
-      (etc/"comenq").mkpath
-      etc.install "config.toml" => "comenq/config.toml"
+      (etc/"comenqd").mkpath
+      etc.install "config.toml" => "comenqd/config.toml"
       (var/"log/comenq").mkpath
 
 release:
