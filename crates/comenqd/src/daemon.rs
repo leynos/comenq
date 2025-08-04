@@ -353,6 +353,9 @@ mod tests {
             cooldown_period_seconds: 0,
             ..temp_config(&dir)
         });
+        // Clear any existing queue files to ensure clean test isolation
+        std::fs::remove_dir_all(&cfg.queue_path).ok();
+        std::fs::create_dir_all(&cfg.queue_path).expect("create queue dir");
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
