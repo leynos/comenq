@@ -300,7 +300,7 @@ configurations:
 project_name: comenq
 
 plugins:
-  - import: github.com/goreleaser/goreleaser-rust@v1.6.0
+  - import: github.com/goreleaser/goreleaser-rust@v1.6.0 # pinned plugin version
 
 builds:
   - id: comenq
