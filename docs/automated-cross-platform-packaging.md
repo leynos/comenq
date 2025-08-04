@@ -280,7 +280,6 @@ brews:
       bin.install "comenq"
       bin.install "comenqd"
       (etc/"comenqd").mkpath
-      etc.install "packaging/config/comenqd.toml" => "comenqd/config.toml"
       (var/"log/comenq").mkpath
 ```
 
