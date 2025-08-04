@@ -1052,7 +1052,7 @@ defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
 secondary rate limits. A minimum delay of one second is enforced even if a
 lower value is configured to prevent a busy retry loop. Responses that cannot
 be deserialised are treated as successful because the daemon discards the
-response body.
+response body; retrying malformed responses would loop indefinitely.
 
 GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
 to ensure the worker does not block indefinitely if the network stalls.

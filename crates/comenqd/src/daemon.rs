@@ -251,6 +251,12 @@ pub async fn run_worker(
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         match post_comment(&octocrab, &request).await {
+            // GitHub occasionally returns malformed JSON even when the comment
+            // is posted successfully. Retrying would loop indefinitely because
+            // the response body is ignored. Commit the job and drop the
+            // response; see
+            // docs/comenq-design.md#the-github-comment-posting-worker-task_process_queue
+            // for details.
             Ok(_) | Err(PostCommentError::Api(octocrab::Error::Serde { .. })) => {
                 guard.commit()?;
             }
@@ -335,6 +341,13 @@ mod tests {
     async fn setup_run_worker(
         status: u16,
     ) -> (TempDir, MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
+        setup_run_worker_with_body(status, "{}").await
+    }
+
+    async fn setup_run_worker_with_body(
+        status: u16,
+        body: &str,
+    ) -> (TempDir, MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
             cooldown_period_seconds: 0,
@@ -355,7 +368,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(status).set_body_raw("{}", "application/json"))
+            .respond_with(ResponseTemplate::new(status).set_body_raw(body, "application/json"))
             .mount(&server)
             .await;
 
@@ -475,5 +488,17 @@ mod tests {
         h.abort();
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
+    }
+
+    #[tokio::test]
+    async fn run_worker_drops_on_serde_error() {
+        let (_dir, server, cfg, rx, octo) = setup_run_worker_with_body(201, "not json").await;
+        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
+        // Allow the worker enough time to handle the job and wait for the
+        // mandated cooldown period.
+        sleep(Duration::from_millis(1100)).await;
+        h.abort();
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
     }
 }
