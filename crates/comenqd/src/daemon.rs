@@ -334,7 +334,8 @@ mod tests {
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config {
-            cooldown_period_seconds: 0,
+            // Use a positive cooldown to ensure retries are throttled.
+            cooldown_period_seconds: 1,
             ..temp_config(&dir)
         });
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
@@ -352,7 +353,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(status).set_body_raw("{}", "application/json"))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(&serde_json::json!({
+                    "id": 1,
+                    "body": "b",
+                })),
+            )
             .mount(&server)
             .await;
 
