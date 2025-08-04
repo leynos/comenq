@@ -280,15 +280,15 @@ brews:
       bin.install "comenq"
       bin.install "comenqd"
       (etc/"comenqd").mkpath
-      etc.install "config.toml" => "comenqd/config.toml"
+      etc.install "packaging/config/comenqd.toml" => "comenqd/config.toml"
       (var/"log/comenq").mkpath
 ```
 
 #### Step 3: Add the macOS Configuration File
 
-The Homebrew formula will also install a default configuration. Since the same
-settings apply on both platforms, the shared `packaging/config/comenqd.toml` is
-sufficient and will be picked up by the archive.
+The Homebrew formula also installs a default configuration. The file lives at
+`packaging/config/comenqd.toml`, so the `install` section must reference this
+path to place the configuration in `etc`.
 
 #### Step 4: Final `.goreleaser.yaml`
 
@@ -384,7 +384,7 @@ brews:
       bin.install "comenq"
       bin.install "comenqd"
       (etc/"comenqd").mkpath
-      etc.install "config.toml" => "comenqd/config.toml"
+      etc.install "packaging/config/comenqd.toml" => "comenqd/config.toml"
       (var/"log/comenq").mkpath
 
 release:
