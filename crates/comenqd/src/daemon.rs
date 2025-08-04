@@ -375,6 +375,31 @@ mod tests {
         path.exists()
     }
 
+    fn queue_file_count(path: &Path) -> usize {
+        stdfs::read_dir(path)
+            .expect("read queue directory")
+            .filter(|e| {
+                let entry = e.as_ref().expect("read queue entry");
+                entry.file_type().expect("entry type").is_file()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .map(|n| n.ends_with(".q"))
+                        .unwrap_or(false)
+            })
+            .count()
+    }
+
+    async fn wait_for_empty_queue(path: &Path) -> bool {
+        for _ in 0..40 {
+            if !path.exists() || queue_file_count(path) == 0 {
+                return true;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        !path.exists() || queue_file_count(path) == 0
+    }
+
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
         let root = tempdir().expect("tempdir").keep();
         let cfg = Arc::new(Config {
@@ -396,9 +421,10 @@ mod tests {
             .expect("send");
 
         let server = MockServer::start().await;
+        let body = if status == 201 { "{\"id\":1}" } else { "{}" };
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(status).set_body_raw("{}", "application/json"))
+            .respond_with(ResponseTemplate::new(status).set_body_raw(body, "application/json"))
             .mount(&server)
             .await;
 
@@ -499,12 +525,19 @@ mod tests {
     async fn run_worker_commits_on_success() {
         let (server, cfg, rx, octo) = setup_run_worker(201).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
-        sleep(Duration::from_millis(50)).await;
+
+        let _ = wait_for_empty_queue(&cfg.queue_path).await;
+
         h.abort();
-        let requests = server.received_requests().await.unwrap();
-        assert!(!requests.is_empty());
+        h.await.expect_err("worker cancelled");
+
+        let requests = server.received_requests().await.expect("collect requests");
+        assert!(!requests.is_empty(), "no requests were sent");
+
         if cfg.queue_path.exists() {
-            assert_eq!(std::fs::read_dir(&cfg.queue_path).unwrap().count(), 0);
+            let _ = wait_for_empty_queue(&cfg.queue_path).await;
+            let files = queue_file_count(&cfg.queue_path);
+            assert_eq!(files, 0, "queue directory not empty");
         }
     }
 
@@ -514,8 +547,12 @@ mod tests {
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
         sleep(Duration::from_millis(50)).await;
         h.abort();
-        let requests = server.received_requests().await.unwrap();
-        assert!(!requests.is_empty());
-        assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
+        h.await.expect_err("worker cancelled");
+
+        let requests = server.received_requests().await.expect("collect requests");
+        assert!(!requests.is_empty(), "no requests were sent");
+
+        let files = queue_file_count(&cfg.queue_path);
+        assert_eq!(files, 1, "queued job was not retained");
     }
 }
