@@ -526,7 +526,10 @@ mod tests {
         let (server, cfg, rx, octo) = setup_run_worker(201).await;
         let h = tokio::spawn(run_worker(cfg.clone(), rx, octo));
 
-        let _ = wait_for_empty_queue(&cfg.queue_path).await;
+        assert!(
+            wait_for_empty_queue(&cfg.queue_path).await,
+            "queue never drained"
+        );
 
         h.abort();
         h.await.expect_err("worker cancelled");
@@ -535,7 +538,6 @@ mod tests {
         assert!(!requests.is_empty(), "no requests were sent");
 
         if cfg.queue_path.exists() {
-            let _ = wait_for_empty_queue(&cfg.queue_path).await;
             let files = queue_file_count(&cfg.queue_path);
             assert_eq!(files, 0, "queue directory not empty");
         }
