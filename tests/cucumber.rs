@@ -4,7 +4,6 @@
 //! parallel.
 
 mod steps;
-mod support;
 mod util;
 use cucumber::World as _;
 use steps::{

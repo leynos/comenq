@@ -1,12 +1,14 @@
 //! Test support utilities.
 
 pub mod daemon;
+pub mod env_guard;
 pub mod util;
 mod workflow;
 pub use workflow::uses_goreleaser;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{octocrab_for, temp_config};
+pub use env_guard::{EnvVarGuard, remove_env_var, set_env_var};
 
 // Re-exports from util module with documentation (from your branch)
 /// Maximum number of times to poll for an expected file.

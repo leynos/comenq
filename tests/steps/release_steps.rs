@@ -2,6 +2,7 @@
 #![expect(clippy::expect_used, reason = "simplify test failure output")]
 
 use cucumber::{World, given, then, when};
+use regex::Regex;
 use serde_yaml::Value;
 use std::fs;
 use test_support::uses_goreleaser as workflow_uses_goreleaser;
@@ -40,8 +41,11 @@ fn triggers_on_tags(world: &mut ReleaseWorld) {
         .expect("tags")
         .as_sequence()
         .expect("sequence");
+    let pattern = Regex::new(r"^v\*\.\*\.\*$").expect("compile regex");
     assert!(
         tags.iter()
-            .any(|t| t.as_str() == Some("v[0-9]*.[0-9]*.[0-9]*"))
+            .filter_map(|t| t.as_str())
+            .any(|t| pattern.is_match(t)),
+        "missing semantic version tag pattern",
     );
 }
