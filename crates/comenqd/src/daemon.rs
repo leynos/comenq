@@ -376,7 +376,7 @@ mod tests {
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
-        let root = tempdir().expect("tempdir").into_path();
+        let root = tempdir().expect("tempdir").keep();
         let cfg = Arc::new(Config {
             github_token: String::from("t"),
             socket_path: root.join("sock"),
