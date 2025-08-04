@@ -69,37 +69,46 @@ async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
 ) -> Result<(), PostCommentError> {
-    let issues = octocrab.issues(&request.owner, &request.repo);
-    let fut = issues.create_comment(request.pr_number, &request.body);
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        octocrab
+            .issues(&request.owner, &request.repo)
+            .create_comment(request.pr_number, &request.body),
+    )
+    .await
+    .map_err(|_| PostCommentError::Timeout)?;
 
-    // Propagate a timeout error early.
-    let result = tokio::time::timeout(Duration::from_secs(10), fut)
-        .await
-        .map_err(|_| PostCommentError::Timeout)?;
-
-    if cfg!(test) {
-        if let Err(e) = &result {
-            if matches!(
-                e,
-                octocrab::Error::Json { .. } | octocrab::Error::Serde { .. }
-            ) {
-                // Tests use a stub server returning `{}`. Octocrab tries to
-                // deserialise the body and emits a parse error even though the
-                // comment was posted. Treat these errors as success so the
-                // queue entry is committed and not retried.
-                tracing::warn!(
-                    error = %e,
-                    owner = %request.owner,
-                    repo = %request.repo,
-                    pr = request.pr_number,
-                    "Treating parse error as success",
-                );
-                return Ok(());
-            }
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) if is_test_parse_error(&e) => {
+            tracing::warn!(
+                error = %e,
+                owner = %request.owner,
+                repo = %request.repo,
+                pr = request.pr_number,
+                "Treating test stub parse error as success",
+            );
+            Ok(())
         }
+        Err(e) => Err(PostCommentError::Api(e)),
     }
+}
 
-    result.map(|_| ()).map_err(PostCommentError::Api)
+/// Determines if an error should be treated as success in test environments.
+///
+/// Test stub servers may return `{}` which causes Octocrab parse errors even
+/// when the API call succeeded.
+#[cfg(test)]
+fn is_test_parse_error(error: &octocrab::Error) -> bool {
+    matches!(
+        error,
+        octocrab::Error::Json { .. } | octocrab::Error::Serde { .. }
+    )
+}
+
+#[cfg(not(test))]
+fn is_test_parse_error(_error: &octocrab::Error) -> bool {
+    false
 }
 
 /// Forward bytes from a channel into the persistent queue.
@@ -245,7 +254,13 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 
 /// Processes queued comment requests and posts them to GitHub, enforcing a cooldown between attempts.
 ///
-/// Continuously receives comment requests from the persistent queue, attempts to post each comment to GitHub using the provided client, and commits successfully processed entries to remove them from the queue. Failed requests remain in the queue for retry. A fixed cooldown period, specified in the configuration, is applied after each attempt regardless of outcome. There is no exponential backoff; all retries use the same cooldown interval.
+/// Continuously receives comment requests from the persistent queue, attempts to
+/// post each comment to GitHub using the provided client, and commits
+/// successfully processed entries to remove them from the queue. Failed requests
+/// remain in the queue for retry. A fixed cooldown period, specified in the
+/// configuration, is applied after each attempt regardless of outcome, with a
+/// minimum of one second to prevent busy loops. There is no exponential
+/// backoff; all retries use the same cooldown interval.
 ///
 /// # Errors
 ///
