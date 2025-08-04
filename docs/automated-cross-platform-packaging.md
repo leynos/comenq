@@ -71,8 +71,8 @@ WantedBy=multi-user.target
 ```
 
 **Note:** This unit file assumes a configuration file at
-`/etc/comenqd/config.toml`. You should provide a default configuration file
-with your package.
+`/etc/comenqd/config.toml`. A default configuration file must ship with the
+package.
 
 #### Step 2: Create a Default Configuration File
 
