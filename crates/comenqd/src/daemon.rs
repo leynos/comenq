@@ -376,10 +376,12 @@ mod tests {
     }
 
     async fn setup_run_worker(status: u16) -> (MockServer, Arc<Config>, Receiver, Arc<Octocrab>) {
-        let dir = tempdir().expect("tempdir");
+        let root = tempdir().expect("tempdir").into_path();
         let cfg = Arc::new(Config {
+            github_token: String::from("t"),
+            socket_path: root.join("sock"),
+            queue_path: root.join("q"),
             cooldown_period_seconds: 0,
-            ..temp_config(&dir)
         });
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
