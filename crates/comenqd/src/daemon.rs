@@ -333,6 +333,21 @@ mod tests {
         path.exists()
     }
 
+    /// Wait for the mock server to receive `expected` requests.
+    async fn wait_for_requests(server: Arc<MockServer>, expected: usize) -> bool {
+        poll_until(
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            || async {
+                server
+                    .received_requests()
+                    .await
+                    .map_or(false, |reqs| reqs.len() == expected)
+            },
+        )
+        .await
+    }
+
     /// Context dependencies for worker tests.
     struct WorkerTestContext {
         server: MockServer,
@@ -484,20 +499,9 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
-        let server_clone = server.clone();
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
 
-        let request_received = poll_until(
-            Duration::from_secs(2),
-            Duration::from_millis(20),
-            || async {
-                server_clone
-                    .received_requests()
-                    .await
-                    .map_or(false, |reqs| reqs.len() == 1)
-            },
-        )
-        .await;
+        let request_received = wait_for_requests(server.clone(), 1).await;
 
         h.abort();
         assert!(
@@ -523,20 +527,9 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
-        let server_clone = server.clone();
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
 
-        let request_attempted = poll_until(
-            Duration::from_secs(2),
-            Duration::from_millis(20),
-            || async {
-                server_clone
-                    .received_requests()
-                    .await
-                    .map_or(false, |reqs| reqs.len() == 1)
-            },
-        )
-        .await;
+        let request_attempted = wait_for_requests(server.clone(), 1).await;
 
         h.abort();
         assert!(

@@ -90,10 +90,10 @@ where
     timeout(timeout_duration, async {
         let mut ticker = interval(poll_interval);
         loop {
-            ticker.tick().await;
             if predicate().await {
                 break;
             }
+            ticker.tick().await;
         }
     })
     .await
