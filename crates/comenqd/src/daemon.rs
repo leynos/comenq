@@ -287,6 +287,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
+    use test_support::util::poll_until;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
@@ -330,6 +331,28 @@ mod tests {
             sleep(delay).await;
         }
         path.exists()
+    }
+
+    /// Wait for the mock server to receive `expected` requests.
+    async fn wait_for_requests(server: Arc<MockServer>, expected: usize) -> bool {
+        let received = poll_until(
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            || async {
+                server
+                    .received_requests()
+                    .await
+                    .map_or(false, |reqs| reqs.len() == expected)
+            },
+        )
+        .await;
+
+        if received {
+            // Give the worker time to update the queue before assertions.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        received
     }
 
     /// Context dependencies for worker tests.
@@ -482,22 +505,22 @@ mod tests {
         ctx: WorkerTestContext,
     ) {
         let ctx = ctx.await;
+        let server = Arc::new(ctx.server);
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
-        sleep(Duration::from_millis(50)).await;
+
+        let request_received = wait_for_requests(server.clone(), 1).await;
         h.abort();
-        assert_eq!(
-            ctx.server
-                .received_requests()
-                .await
-                .expect("requests")
-                .len(),
-            1
+        assert!(
+            request_received,
+            "Worker did not post a comment within the timeout",
         );
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert_eq!(
             stdfs::read_dir(&ctx.cfg.queue_path)
                 .expect("read queue directory")
                 .count(),
-            0
+            0,
+            "Queue should be empty after successful processing",
         );
     }
 
@@ -510,22 +533,22 @@ mod tests {
         ctx: WorkerTestContext,
     ) {
         let ctx = ctx.await;
+        let server = Arc::new(ctx.server);
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
-        sleep(Duration::from_millis(50)).await;
+
+        let request_attempted = wait_for_requests(server.clone(), 1).await;
         h.abort();
-        assert_eq!(
-            ctx.server
-                .received_requests()
-                .await
-                .expect("requests")
-                .len(),
-            1
+        assert!(
+            request_attempted,
+            "Worker did not attempt to post a comment within the timeout",
         );
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)
                 .expect("read queue directory")
                 .count()
-                > 0
+                > 0,
+            "Queue should retain job after API failure",
         );
     }
 }
