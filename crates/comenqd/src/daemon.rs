@@ -335,7 +335,7 @@ mod tests {
 
     /// Wait for the mock server to receive `expected` requests.
     async fn wait_for_requests(server: Arc<MockServer>, expected: usize) -> bool {
-        poll_until(
+        let received = poll_until(
             Duration::from_secs(2),
             Duration::from_millis(20),
             || async {
@@ -345,7 +345,14 @@ mod tests {
                     .map_or(false, |reqs| reqs.len() == expected)
             },
         )
-        .await
+        .await;
+
+        if received {
+            // Give the worker time to update the queue before assertions.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        received
     }
 
     /// Context dependencies for worker tests.
@@ -502,8 +509,6 @@ mod tests {
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
 
         let request_received = wait_for_requests(server.clone(), 1).await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
         h.abort();
         assert!(
             request_received,
@@ -532,8 +537,6 @@ mod tests {
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
 
         let request_attempted = wait_for_requests(server.clone(), 1).await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
         h.abort();
         assert!(
             request_attempted,

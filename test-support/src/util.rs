@@ -88,12 +88,16 @@ where
     Fut: std::future::Future<Output = bool>,
 {
     timeout(timeout_duration, async {
+        if predicate().await {
+            return;
+        }
+
         let mut ticker = interval(poll_interval);
         loop {
+            ticker.tick().await;
             if predicate().await {
                 break;
             }
-            ticker.tick().await;
         }
     })
     .await
