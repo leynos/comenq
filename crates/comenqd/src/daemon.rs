@@ -288,6 +288,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
     use test_support::util::poll_until;
+    use test_support::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
@@ -295,32 +296,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
-    fn temp_config(tmp: &TempDir) -> Config {
-        Config {
-            github_token: String::from("t"),
-            socket_path: tmp.path().join("sock"),
-            queue_path: tmp.path().join("q"),
-            cooldown_period_seconds: 1,
-        }
-    }
 
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
         Config {
             cooldown_period_seconds: secs,
             ..temp_config(dir)
         }
-    }
-
-    #[expect(clippy::expect_used, reason = "simplify test helper setup")]
-    fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
-        Arc::new(
-            Octocrab::builder()
-                .personal_token("t".to_string())
-                .base_uri(server.uri())
-                .expect("base_uri")
-                .build()
-                .expect("build octocrab"),
-        )
     }
 
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {

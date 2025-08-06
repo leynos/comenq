@@ -8,12 +8,11 @@ use std::time::Duration;
 use cucumber::World;
 use cucumber::{given, then, when};
 use tempfile::TempDir;
-use test_support::{SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY, wait_for_file};
+use test_support::{SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY, temp_config, wait_for_file};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 
-use crate::util::temp_config;
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
 use comenqd::daemon::{queue_writer, run_listener};

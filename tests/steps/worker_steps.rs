@@ -7,12 +7,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::util::{octocrab_for, temp_config};
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
 use comenqd::daemon::run_worker;
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
+use test_support::{octocrab_for, temp_config};
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

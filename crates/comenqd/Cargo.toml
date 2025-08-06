@@ -24,5 +24,4 @@ rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 serial_test = "2"
 test-support = { path = "../../test-support" }
-test-utils = { path = "../test-utils" }
 wiremock = { workspace = true }

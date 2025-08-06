@@ -351,7 +351,6 @@ dependencies = [
  "serial_test",
  "tempfile",
  "test-support",
- "test-utils",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2466,10 +2465,7 @@ dependencies = [
 name = "test-utils"
 version = "0.1.0"
 dependencies = [
- "comenqd",
- "octocrab",
- "tempfile",
- "wiremock",
+ "test-support",
 ]
 
 [[package]]
