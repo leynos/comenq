@@ -298,9 +298,12 @@ mod tests {
     use yaque::Receiver;
 
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
+        let base = temp_config(dir);
         Config {
+            github_token: base.github_token,
+            socket_path: base.socket_path,
+            queue_path: base.queue_path,
             cooldown_period_seconds: secs,
-            ..temp_config(dir)
         }
     }
 
@@ -349,10 +352,13 @@ mod tests {
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
+        let base = temp_config(&dir);
         let cfg = Arc::new(Config {
             // Use a positive cooldown to ensure retries are throttled.
-            cooldown_period_seconds: 1,
-            ..temp_config(&dir)
+            cooldown_period_seconds: base.cooldown_period_seconds,
+            github_token: base.github_token,
+            socket_path: base.socket_path,
+            queue_path: base.queue_path,
         });
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {

@@ -1,22 +1,34 @@
 //! Helper utilities for daemon tests.
 //!
-//! Provides constructors for temporary daemon [`Config`]s and simplified
+//! Provides constructors for temporary daemon configurations and simplified
 //! creation of [`Octocrab`] clients targeting a [`MockServer`].
 
 #![expect(clippy::expect_used, reason = "simplify test setup")]
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
-use comenqd::config::Config;
 use octocrab::Octocrab;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-/// Build a [`Config`] using paths inside `tmp`.
+/// Minimal configuration used in daemon tests.
+#[derive(Debug, Clone)]
+pub struct TestConfig {
+    /// GitHub Personal Access Token.
+    pub github_token: String,
+    /// Path to the Unix Domain Socket.
+    pub socket_path: PathBuf,
+    /// Directory for the persistent queue.
+    pub queue_path: PathBuf,
+    /// Cooldown between comment posts in seconds.
+    pub cooldown_period_seconds: u64,
+}
+
+/// Build a [`TestConfig`] using paths inside `tmp`.
 ///
 /// The configuration uses a dummy GitHub token and a one second cooldown.
-pub fn temp_config(tmp: &TempDir) -> Config {
-    Config {
+pub fn temp_config(tmp: &TempDir) -> TestConfig {
+    TestConfig {
         github_token: "t".into(),
         socket_path: tmp.path().join("sock"),
         queue_path: tmp.path().join("q"),

@@ -2452,7 +2452,6 @@ dependencies = [
 name = "test-support"
 version = "0.1.0"
 dependencies = [
- "comenqd",
  "octocrab",
  "serde_yaml",
  "serial_test",
