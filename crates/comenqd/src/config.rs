@@ -35,6 +35,30 @@ pub struct Config {
     pub cooldown_period_seconds: u64,
 }
 
+#[cfg(feature = "test-support")]
+impl From<test_support::daemon::TestConfig> for Config {
+    fn from(value: test_support::daemon::TestConfig) -> Self {
+        Self {
+            github_token: value.github_token,
+            socket_path: value.socket_path,
+            queue_path: value.queue_path,
+            cooldown_period_seconds: value.cooldown_period_seconds,
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl From<&test_support::daemon::TestConfig> for Config {
+    fn from(value: &test_support::daemon::TestConfig) -> Self {
+        Self {
+            github_token: value.github_token.clone(),
+            socket_path: value.socket_path.clone(),
+            queue_path: value.queue_path.clone(),
+            cooldown_period_seconds: value.cooldown_period_seconds,
+        }
+    }
+}
+
 /// Command-line overrides for configuration values.
 #[derive(Debug, Default, Parser, Serialize)]
 struct CliArgs {

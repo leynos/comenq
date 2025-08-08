@@ -18,10 +18,14 @@ thiserror = { workspace = true }
 comenq-lib = { path = "../.." }
 ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
+test-support = { path = "../../test-support", optional = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 serial_test = "2"
-test-support = { path = "../../test-support" }
 wiremock = { workspace = true }
+
+[features]
+default = []
+test-support = ["dep:test-support"]
