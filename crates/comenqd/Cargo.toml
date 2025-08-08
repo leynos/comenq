@@ -28,4 +28,5 @@ wiremock = { workspace = true }
 
 [features]
 default = []
+# Enable helpers from the `test-support` crate for integration tests.
 test-support = ["dep:test-support"]

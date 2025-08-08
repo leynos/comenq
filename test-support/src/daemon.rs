@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 /// Minimal configuration used in daemon tests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestConfig {
     /// GitHub Personal Access Token.
     pub github_token: String,
@@ -33,6 +33,14 @@ pub fn temp_config(tmp: &TempDir) -> TestConfig {
         socket_path: tmp.path().join("sock"),
         queue_path: tmp.path().join("q"),
         cooldown_period_seconds: 1,
+    }
+}
+
+impl TestConfig {
+    /// Override the cooldown period and return the updated configuration.
+    pub fn with_cooldown(mut self, secs: u64) -> Self {
+        self.cooldown_period_seconds = secs;
+        self
     }
 }
 

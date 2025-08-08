@@ -36,6 +36,7 @@ pub struct Config {
 }
 
 #[cfg(feature = "test-support")]
+/// Convert a [`test_support::daemon::TestConfig`] into a full [`Config`].
 impl From<test_support::daemon::TestConfig> for Config {
     fn from(value: test_support::daemon::TestConfig) -> Self {
         Self {
@@ -48,6 +49,7 @@ impl From<test_support::daemon::TestConfig> for Config {
 }
 
 #[cfg(feature = "test-support")]
+/// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
         Self {
@@ -56,6 +58,19 @@ impl From<&test_support::daemon::TestConfig> for Config {
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
         }
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub trait IntoConfig {
+    /// Consume the test configuration and produce a full daemon [`Config`].
+    fn into_config(self) -> Config;
+}
+
+#[cfg(feature = "test-support")]
+impl IntoConfig for test_support::daemon::TestConfig {
+    fn into_config(self) -> Config {
+        self.into()
     }
 }
 
