@@ -52,12 +52,7 @@ impl From<test_support::daemon::TestConfig> for Config {
 /// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
-        Self {
-            github_token: value.github_token.clone(),
-            socket_path: value.socket_path.clone(),
-            queue_path: value.queue_path.clone(),
-            cooldown_period_seconds: value.cooldown_period_seconds,
-        }
+        Self::from(value.clone())
     }
 }
 

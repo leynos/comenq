@@ -18,7 +18,7 @@ thiserror = { workspace = true }
 comenq-lib = { path = "../.." }
 ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
-test-support = { path = "../../test-support", optional = true }
+test-support = { workspace = true, optional = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
