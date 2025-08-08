@@ -56,19 +56,6 @@ impl From<&test_support::daemon::TestConfig> for Config {
     }
 }
 
-#[cfg(feature = "test-support")]
-pub trait IntoConfig {
-    /// Consume the test configuration and produce a full daemon [`Config`].
-    fn into_config(self) -> Config;
-}
-
-#[cfg(feature = "test-support")]
-impl IntoConfig for test_support::daemon::TestConfig {
-    fn into_config(self) -> Config {
-        self.into()
-    }
-}
-
 /// Command-line overrides for configuration values.
 #[derive(Debug, Default, Parser, Serialize)]
 struct CliArgs {

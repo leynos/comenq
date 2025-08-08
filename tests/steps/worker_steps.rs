@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::config::IntoConfig;
 use comenqd::daemon::run_worker;
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
@@ -37,7 +36,7 @@ impl std::fmt::Debug for WorkerWorld {
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(temp_config(&dir).with_cooldown(0).into_config());
+    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(0)));
     let (mut sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let req = CommentRequest {
         owner: "o".into(),

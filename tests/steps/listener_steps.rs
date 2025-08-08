@@ -5,7 +5,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use comenqd::config::IntoConfig;
 use cucumber::World;
 use cucumber::{given, then, when};
 use tempfile::TempDir;
@@ -38,7 +37,7 @@ impl std::fmt::Debug for ListenerWorld {
 #[given("a running listener task")]
 async fn running_listener(world: &mut ListenerWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(temp_config(&dir).into_config());
+    let cfg = Arc::new(Config::from(temp_config(&dir)));
     let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
     let (client_tx, writer_rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(());

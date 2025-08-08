@@ -281,7 +281,6 @@ pub async fn run_worker(
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
-    use crate::config::IntoConfig;
     use octocrab::Octocrab;
     use rstest::{fixture, rstest};
     use std::fs as stdfs;
@@ -299,7 +298,7 @@ mod tests {
     use yaque::Receiver;
 
     fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        temp_config(dir).with_cooldown(secs).into_config()
+        Config::from(temp_config(dir).with_cooldown(secs))
     }
 
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
@@ -348,7 +347,7 @@ mod tests {
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(temp_config(&dir).into_config());
+        let cfg = Arc::new(Config::from(temp_config(&dir)));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
