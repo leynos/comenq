@@ -65,6 +65,23 @@ impl From<test_support::daemon::TestConfig> for Config {
 /// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
 ///
 /// Requires the `test-support` feature and delegates to the owned conversion.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use comenqd::config::Config;
+/// use tempfile::tempdir;
+/// use test_support::temp_config;
+///
+/// let tmp = tempdir().expect("create temp directory");
+/// let test_cfg = temp_config(&tmp);
+///
+/// // Convert by reference without cloning.
+/// let cfg = Config::from(&test_cfg);
+///
+/// assert_eq!(cfg.socket_path, test_cfg.socket_path);
+/// assert_eq!(cfg.queue_path, test_cfg.queue_path);
+/// ```
 #[cfg(feature = "test-support")]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
