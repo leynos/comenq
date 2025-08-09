@@ -249,9 +249,9 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn converts_from_test_config() {
-        use test_support::{TestConfig, temp_config};
+        use test_support::temp_config;
 
-        let tmp = tempdir().unwrap();
+        let tmp = tempdir().expect("create tempdir");
         let test_cfg = temp_config(&tmp).with_cooldown(42);
         let cfg = Config::from(test_cfg.clone());
 
