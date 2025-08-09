@@ -14,5 +14,6 @@
 //! println!("socket: {}", cfg.socket_path.display());
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 pub mod config;
 pub mod daemon;

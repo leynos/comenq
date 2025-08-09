@@ -37,6 +37,7 @@ pub struct Config {
 
 /// Convert a [`test_support::daemon::TestConfig`] into a full [`Config`].
 #[cfg(feature = "test-support")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<test_support::daemon::TestConfig> for Config {
     fn from(value: test_support::daemon::TestConfig) -> Self {
         Self {
@@ -50,6 +51,7 @@ impl From<test_support::daemon::TestConfig> for Config {
 
 /// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
 #[cfg(feature = "test-support")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
         Self::from(value.clone())
