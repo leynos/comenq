@@ -1,4 +1,4 @@
-.PHONY: help all clean test build release lint fmt check-fmt markdownlint nixie
+.PHONY: help all clean test test-cov build release lint fmt check-fmt markdownlint nixie
 
 APP ?= comenq
 CARGO ?= cargo
@@ -17,6 +17,9 @@ clean: ## Remove build artifacts
 
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
+
+test-cov: ## Run tests with coverage and print report
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --all-features --summary-only --text $(BUILD_JOBS)
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)

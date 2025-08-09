@@ -14,6 +14,7 @@ Use the provided `make` targets to manage the project:
 - `make build` &ndash; compile debug binaries in `target/debug/`
 - `make release` &ndash; produce optimized release binaries
 - `make test` &ndash; execute the full test suite
+- `make test-cov` &ndash; run tests with coverage and print a text report
 - `make lint` &ndash; run Clippy with warnings denied
 - `make fmt` &ndash; format Rust and Markdown files
 
