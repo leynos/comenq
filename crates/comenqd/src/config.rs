@@ -35,6 +35,44 @@ pub struct Config {
     pub cooldown_period_seconds: u64,
 }
 
+/// Convert a [`test_support::daemon::TestConfig`] into a [`Config`].
+///
+/// This implementation is only available when the `test-support` feature is
+/// enabled and allows `TestConfig` to be converted via `Config::from(test_cfg)`
+/// or `test_cfg.into()`.
+///
+/// ```rust,no_run
+/// use comenqd::config::Config;
+/// use test_support::temp_config;
+///
+/// let tmp = tempfile::tempdir().expect("create tempdir");
+/// let cfg: Config = temp_config(&tmp).into();
+/// assert_eq!(cfg.cooldown_period_seconds, 1);
+/// ```
+#[cfg(feature = "test-support")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
+impl From<test_support::daemon::TestConfig> for Config {
+    fn from(value: test_support::daemon::TestConfig) -> Self {
+        Self {
+            github_token: value.github_token,
+            socket_path: value.socket_path,
+            queue_path: value.queue_path,
+            cooldown_period_seconds: value.cooldown_period_seconds,
+        }
+    }
+}
+
+/// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
+///
+/// Requires the `test-support` feature and delegates to the owned conversion.
+#[cfg(feature = "test-support")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
+impl From<&test_support::daemon::TestConfig> for Config {
+    fn from(value: &test_support::daemon::TestConfig) -> Self {
+        Self::from(value.clone())
+    }
+}
+
 /// Command-line overrides for configuration values.
 #[derive(Debug, Default, Parser, Serialize)]
 struct CliArgs {
@@ -205,5 +243,24 @@ mod tests {
         };
         let cfg = Config::from_file_with_cli(&path, &cli).unwrap();
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[rstest]
+    #[serial_test::serial]
+    fn converts_from_test_config() {
+        use test_support::temp_config;
+
+        let tmp = tempdir().expect("create tempdir");
+        let test_cfg = temp_config(&tmp).with_cooldown(42);
+        let cfg = Config::from(test_cfg.clone());
+
+        assert_eq!(cfg.github_token, test_cfg.github_token);
+        assert_eq!(cfg.socket_path, test_cfg.socket_path);
+        assert_eq!(cfg.queue_path, test_cfg.queue_path);
+        assert_eq!(
+            cfg.cooldown_period_seconds,
+            test_cfg.cooldown_period_seconds
+        );
     }
 }

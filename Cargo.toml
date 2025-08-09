@@ -15,13 +15,13 @@ cucumber = "0.20"
 tokio = { workspace = true }
 clap = { workspace = true }
 comenq = { path = "crates/comenq" }
-comenqd = { path = "crates/comenqd" }
+comenqd = { path = "crates/comenqd", features = ["test-support"] }
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 yaque = { workspace = true }
 wiremock = { workspace = true }
 octocrab = { workspace = true }
-test-support = { path = "test-support" }
+test-support = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
 
@@ -55,6 +55,7 @@ tempfile = "3.10"
 regex = "1"
 rstest = "0.18.0"
 wiremock = "0.6"
+test-support = { path = "test-support" }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -4,7 +4,6 @@
 //! parallel.
 
 mod steps;
-mod util;
 use cucumber::World as _;
 use steps::{
     CliWorld, ClientWorld, CommentWorld, ConfigWorld, ListenerWorld, PackagingWorld, ReleaseWorld,

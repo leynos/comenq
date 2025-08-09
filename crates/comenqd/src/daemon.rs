@@ -288,6 +288,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
     use test_support::util::poll_until;
+    use test_support::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
@@ -295,33 +296,6 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
-    fn temp_config(tmp: &TempDir) -> Config {
-        Config {
-            github_token: String::from("t"),
-            socket_path: tmp.path().join("sock"),
-            queue_path: tmp.path().join("q"),
-            cooldown_period_seconds: 1,
-        }
-    }
-
-    fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        Config {
-            cooldown_period_seconds: secs,
-            ..temp_config(dir)
-        }
-    }
-
-    #[expect(clippy::expect_used, reason = "simplify test helper setup")]
-    fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
-        Arc::new(
-            Octocrab::builder()
-                .personal_token("t".to_string())
-                .base_uri(server.uri())
-                .expect("base_uri")
-                .build()
-                .expect("build octocrab"),
-        )
-    }
 
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         for _ in 0..tries {
@@ -365,14 +339,11 @@ mod tests {
         _dir: TempDir,
     }
 
+    /// Fixture: 1s cooldown from `temp_config` throttles retries for deterministic tests.
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config {
-            // Use a positive cooldown to ensure retries are throttled.
-            cooldown_period_seconds: 1,
-            ..temp_config(&dir)
-        });
+        let cfg = Arc::new(Config::from(temp_config(&dir)));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -421,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = cfg_with_cooldown(&dir, 1);
+        let cfg = Config::from(temp_config(&dir).with_cooldown(1));
         assert!(!cfg.queue_path.exists());
         let handle = tokio::spawn(run(cfg.clone()));
         wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
@@ -470,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(cfg_with_cooldown(&dir, 1));
+        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
