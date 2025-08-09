@@ -1,8 +1,10 @@
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test output"
-)]
+//! Behavioural test steps for the worker task.
+//!
+//! These steps drive the Cucumber scenarios that verify the worker posts
+//! queued comments and handles failures gracefully.
+
+#![expect(clippy::expect_used, reason = "simplify test output")]
+#![expect(clippy::unwrap_used, reason = "simplify test output")]
 
 use std::sync::Arc;
 use std::time::Duration;
