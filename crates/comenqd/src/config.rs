@@ -45,7 +45,7 @@ pub struct Config {
 /// use comenqd::config::Config;
 /// use test_support::temp_config;
 ///
-/// let tmp = tempfile::tempdir().unwrap();
+/// let tmp = tempfile::tempdir().expect("create tempdir");
 /// let cfg: Config = temp_config(&tmp).into();
 /// assert_eq!(cfg.cooldown_period_seconds, 1);
 /// ```
