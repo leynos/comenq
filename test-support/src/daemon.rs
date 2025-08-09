@@ -8,11 +8,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use octocrab::Octocrab;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use wiremock::MockServer;
 
 /// Minimal configuration used in daemon tests.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TestConfig {
     /// GitHub Personal Access Token.
     pub github_token: String,

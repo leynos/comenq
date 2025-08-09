@@ -297,10 +297,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
 
-    fn cfg_with_cooldown(dir: &TempDir, secs: u64) -> Config {
-        Config::from(temp_config(dir).with_cooldown(secs))
-    }
-
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         for _ in 0..tries {
             if path.exists() {
@@ -396,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn run_creates_queue_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = cfg_with_cooldown(&dir, 1);
+        let cfg = Config::from(temp_config(&dir).with_cooldown(1));
         assert!(!cfg.queue_path.exists());
         let handle = tokio::spawn(run(cfg.clone()));
         wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
@@ -445,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn run_listener_accepts_connections() {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(cfg_with_cooldown(&dir, 1));
+        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
         let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
