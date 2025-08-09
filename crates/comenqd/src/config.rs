@@ -270,7 +270,7 @@ mod tests {
 
         let tmp = tempdir().expect("create tempdir");
         let test_cfg = temp_config(&tmp).with_cooldown(42);
-        let cfg = Config::from(test_cfg.clone());
+        let cfg = Config::from(&test_cfg);
 
         assert_eq!(cfg.github_token, test_cfg.github_token);
         assert_eq!(cfg.socket_path, test_cfg.socket_path);
