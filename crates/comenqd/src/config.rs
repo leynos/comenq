@@ -86,7 +86,12 @@ impl From<test_support::daemon::TestConfig> for Config {
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
-        Self::from(value.clone())
+        Self {
+            github_token: value.github_token.clone(),
+            socket_path: value.socket_path.clone(),
+            queue_path: value.queue_path.clone(),
+            cooldown_period_seconds: value.cooldown_period_seconds,
+        }
     }
 }
 
