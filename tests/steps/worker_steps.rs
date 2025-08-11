@@ -2,8 +2,9 @@
 //!
 //! These steps drive the Cucumber scenarios that verify the worker posts
 //! queued comments and handles failures gracefully.
-
-#![expect(clippy::expect_used, reason = "simplify test output")]
+//!
+//! Uses Wiremock to stub the GitHub Issues API and yaque for the on-disk queue.
+//! See also: `test-support::octocrab_for()` and `yaque::channel()`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +36,10 @@ impl std::fmt::Debug for WorkerWorld {
 }
 
 #[given("a queued comment request")]
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: fail fast on setup/IO errors"
+)]
 async fn queued_request(world: &mut WorkerWorld) {
     let dir = TempDir::new().expect("tempdir");
     let mut base = temp_config(&dir);
@@ -77,6 +82,10 @@ async fn github_error(world: &mut WorkerWorld) {
 }
 
 #[when("the worker runs briefly")]
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: fail fast on world state errors"
+)]
 async fn worker_runs(world: &mut WorkerWorld) {
     let cfg = world
         .cfg
@@ -98,6 +107,10 @@ async fn worker_runs(world: &mut WorkerWorld) {
 }
 
 #[then("the comment is posted")]
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: expect wiremock state in assertion"
+)]
 async fn comment_posted(world: &mut WorkerWorld) {
     let server = world.server.as_ref().expect("server should be initialised");
     assert!(
@@ -110,6 +123,10 @@ async fn comment_posted(world: &mut WorkerWorld) {
 }
 
 #[then("the queue retains the job")]
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: expect fs state in assertion"
+)]
 fn queue_retains(world: &mut WorkerWorld) {
     let cfg = world
         .cfg
