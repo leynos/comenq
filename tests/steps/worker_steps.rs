@@ -4,7 +4,6 @@
 //! queued comments and handles failures gracefully.
 
 #![expect(clippy::expect_used, reason = "simplify test output")]
-#![expect(clippy::unwrap_used, reason = "simplify test output")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,9 +78,16 @@ async fn github_error(world: &mut WorkerWorld) {
 
 #[when("the worker runs briefly")]
 async fn worker_runs(world: &mut WorkerWorld) {
-    let cfg = world.cfg.as_ref().unwrap().clone();
-    let rx = world.receiver.take().unwrap();
-    let server = world.server.as_ref().unwrap();
+    let cfg = world
+        .cfg
+        .as_ref()
+        .expect("configuration should be initialised")
+        .clone();
+    let rx = world
+        .receiver
+        .take()
+        .expect("receiver should be initialised");
+    let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
     let handle = tokio::spawn(async move {
         let _ = run_worker(cfg, rx, octocrab).await;
@@ -93,14 +99,28 @@ async fn worker_runs(world: &mut WorkerWorld) {
 
 #[then("the comment is posted")]
 async fn comment_posted(world: &mut WorkerWorld) {
-    let server = world.server.as_ref().unwrap();
-    assert!(!server.received_requests().await.unwrap().is_empty());
+    let server = world.server.as_ref().expect("server should be initialised");
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .expect("inbound requests should be recorded")
+            .is_empty()
+    );
 }
 
 #[then("the queue retains the job")]
 fn queue_retains(world: &mut WorkerWorld) {
-    let cfg = world.cfg.as_ref().unwrap();
-    assert!(std::fs::read_dir(&cfg.queue_path).unwrap().count() > 0);
+    let cfg = world
+        .cfg
+        .as_ref()
+        .expect("configuration should be initialised");
+    assert!(
+        std::fs::read_dir(&cfg.queue_path)
+            .expect("queue directory should be readable")
+            .count()
+            > 0
+    );
 }
 
 impl Drop for WorkerWorld {
