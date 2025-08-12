@@ -13,8 +13,9 @@ release: target/release/$(APP) ## Build release binary
 
 all: release ## Default target builds release binary
 
-clean: ## Remove build artifacts
+clean: ## Remove build artefacts
 	$(CARGO) clean
+	rm -rf coverage
 
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
