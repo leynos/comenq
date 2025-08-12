@@ -1,4 +1,4 @@
-.PHONY: help all clean test test-cov build release lint fmt check-fmt markdownlint nixie
+.PHONY: help all clean test test-cov test-cov-lcov build release lint fmt check-fmt markdownlint nixie
 
 APP ?= comenq
 CARGO ?= cargo
@@ -6,6 +6,7 @@ BUILD_JOBS ?=
 CLIPPY_FLAGS ?= --all-targets --all-features -- -D warnings
 MDLINT ?= markdownlint
 NIXIE ?= nixie
+COV_MIN ?= 0
 
 build: target/debug/$(APP) ## Build debug binary
 release: target/release/$(APP) ## Build release binary
@@ -19,7 +20,19 @@ test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
 
 test-cov: ## Run tests with coverage and print report
-	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --all-features --summary-only --text $(BUILD_JOBS)
+	@command -v cargo-llvm-cov >/dev/null || { \
+	  echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
+	  exit 127; \
+	}
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+
+test-cov-lcov: ## Run tests with coverage and write LCOV to coverage/lcov.info
+	@command -v cargo-llvm-cov >/dev/null || { \
+	  echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
+	  exit 127; \
+	}
+	mkdir -p coverage
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
