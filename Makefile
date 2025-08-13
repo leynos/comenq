@@ -6,7 +6,7 @@ BUILD_JOBS ?=
 CLIPPY_FLAGS ?= --all-targets --all-features -- -D warnings
 MDLINT ?= markdownlint
 NIXIE ?= nixie
-COV_MIN ?= 0
+COV_MIN ?= 0 # Minimum line coverage percentage for coverage targets
 
 define CHECK_CARGO_LLVM_COV
 	@command -v cargo-llvm-cov >/dev/null || { \
@@ -28,11 +28,11 @@ clean: ## Remove build artefacts
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
 
-test-cov: ## Run tests with coverage; set COV_MIN to enforce a threshold
+test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
 	$(CHECK_CARGO_LLVM_COV)
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
-test-cov-lcov: ## Run tests with coverage and write LCOV to coverage/lcov.info
+test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to coverage/lcov.info
 	$(CHECK_CARGO_LLVM_COV)
 	mkdir -p coverage
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)

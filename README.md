@@ -14,9 +14,9 @@ Use the provided `make` targets to manage the project:
 - `make build` &ndash; compile debug binaries in `target/debug/`
 - `make release` &ndash; produce optimised release binaries
 - `make test` &ndash; execute the full test suite
-- `make test-cov` &ndash; run tests with coverage and print a text report.
-  Pass `COV_MIN=75` to fail if line coverage drops below 75%
-- `make test-cov-lcov` &ndash; run tests with coverage and write
+- `make test-cov` &ndash; run workspace-wide tests with coverage and print a
+  text report. Set `COV_MIN=75` to fail if line coverage drops below 75%
+- `make test-cov-lcov` &ndash; run workspace-wide tests with coverage and write
   `coverage/lcov.info`. Also honours `COV_MIN`
 - `make lint` &ndash; run Clippy with warnings denied
 - `make fmt` &ndash; format Rust and Markdown files
