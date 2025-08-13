@@ -8,6 +8,13 @@ MDLINT ?= markdownlint
 NIXIE ?= nixie
 COV_MIN ?= 0
 
+define CHECK_CARGO_LLVM_COV
+	@command -v cargo-llvm-cov >/dev/null || { \
+	echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
+	exit 127; \
+	}
+endef
+
 build: target/debug/$(APP) ## Build debug binary
 release: target/release/$(APP) ## Build release binary
 
@@ -15,23 +22,18 @@ all: release ## Default target builds release binary
 
 clean: ## Remove build artefacts
 	$(CARGO) clean
+	@command -v cargo-llvm-cov >/dev/null && $(CARGO) llvm-cov clean --workspace || true
 	rm -rf coverage
 
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
 
-test-cov: ## Run tests with coverage and print report
-	@command -v cargo-llvm-cov >/dev/null || { \
-	  echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
-	  exit 127; \
-	}
+test-cov: ## Run tests with coverage; set COV_MIN to enforce a threshold
+	$(CHECK_CARGO_LLVM_COV)
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 test-cov-lcov: ## Run tests with coverage and write LCOV to coverage/lcov.info
-	@command -v cargo-llvm-cov >/dev/null || { \
-	  echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
-	  exit 127; \
-	}
+	$(CHECK_CARGO_LLVM_COV)
 	mkdir -p coverage
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 

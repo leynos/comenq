@@ -12,12 +12,12 @@ requests. The architecture and crate choices are described in
 Use the provided `make` targets to manage the project:
 
 - `make build` &ndash; compile debug binaries in `target/debug/`
-- `make release` &ndash; produce optimized release binaries
+- `make release` &ndash; produce optimised release binaries
 - `make test` &ndash; execute the full test suite
-- `make test-cov` &ndash; run tests with coverage and print a text report
-  (fails if line coverage drops below `COV_MIN`)
+- `make test-cov` &ndash; run tests with coverage and print a text report.
+  Pass `COV_MIN=75` to fail if line coverage drops below 75%
 - `make test-cov-lcov` &ndash; run tests with coverage and write
-  `coverage/lcov.info`
+  `coverage/lcov.info`. Also honours `COV_MIN`
 - `make lint` &ndash; run Clippy with warnings denied
 - `make fmt` &ndash; format Rust and Markdown files
 
