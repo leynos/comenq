@@ -64,7 +64,9 @@ impl From<test_support::daemon::TestConfig> for Config {
 
 /// Convert a borrowed [`test_support::daemon::TestConfig`] into a [`Config`].
 ///
-/// Requires the `test-support` feature and delegates to the owned conversion.
+/// Requires the `test-support` feature and clones only the owned fields,
+/// avoiding an intermediate allocation of a full
+/// [`test_support::daemon::TestConfig`] clone.
 ///
 /// # Examples
 ///
@@ -86,7 +88,12 @@ impl From<test_support::daemon::TestConfig> for Config {
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
-        Self::from(value.clone())
+        Self {
+            github_token: value.github_token.clone(),
+            socket_path: value.socket_path.clone(),
+            queue_path: value.queue_path.clone(),
+            cooldown_period_seconds: value.cooldown_period_seconds,
+        }
     }
 }
 
@@ -264,13 +271,15 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[rstest]
+    #[case(|cfg: &test_support::daemon::TestConfig| Config::from(cfg))]
+    #[case(|cfg: &test_support::daemon::TestConfig| Config::from(cfg.clone()))]
     #[serial_test::serial]
-    fn converts_from_test_config() {
+    fn converts_from_test_config(#[case] conv: fn(&test_support::daemon::TestConfig) -> Config) {
         use test_support::temp_config;
 
         let tmp = tempdir().expect("create tempdir");
         let test_cfg = temp_config(&tmp).with_cooldown(42);
-        let cfg = Config::from(test_cfg.clone());
+        let cfg = conv(&test_cfg);
 
         assert_eq!(cfg.github_token, test_cfg.github_token);
         assert_eq!(cfg.socket_path, test_cfg.socket_path);
