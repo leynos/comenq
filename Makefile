@@ -30,7 +30,7 @@ test: ## Run tests with warnings treated as errors
 
 test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
 	$(CHECK_CARGO_LLVM_COV)
-        RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --doctests --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --doctests --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to coverage/lcov.info
 	$(CHECK_CARGO_LLVM_COV)
