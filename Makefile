@@ -10,11 +10,15 @@ COV_MIN ?= 0 # Minimum line coverage percentage for coverage targets
 
 define CHECK_CARGO_LLVM_COV
         @command -v cargo-llvm-cov >/dev/null || { \
-        echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; \
+        echo "error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov" >&2; \
         exit 127; \
         }
-        @rustup component list --installed | grep -q '^llvm-tools-preview' >/dev/null || { \
-        echo "error: rustup component llvm-tools-preview not found. Install with: rustup component add llvm-tools-preview"; \
+        @command -v rustup >/dev/null || { \
+        echo "error: rustup not found. Install from: https://rustup.rs" >&2; \
+        exit 127; \
+        }
+        @rustup component list --installed | grep -q '^llvm-tools-preview' || { \
+        echo "error: rustup component llvm-tools-preview not found. Install with: rustup component add llvm-tools-preview" >&2; \
         exit 127; \
         }
 endef
