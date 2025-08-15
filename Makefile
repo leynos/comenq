@@ -17,7 +17,7 @@ define CHECK_CARGO_LLVM_COV
         echo "error: rustup not found. Install from: https://rustup.rs" >&2; \
         exit 127; \
         }
-        @rustup component list --installed | grep -q '^llvm-tools-preview' || { \
+        @rustup component list --installed | grep -q '^llvm-tools' || { \
         echo "error: rustup component llvm-tools-preview not found. Install with: rustup component add llvm-tools-preview" >&2; \
         exit 127; \
         }
