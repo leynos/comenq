@@ -60,7 +60,7 @@
 
 ## Milestone 5: `comenqd` Daemon — Queue Worker Task
 
-- [x] Implement the `run_worker` async task.
+- [x] Implement the worker task for processing queue items.
 
 - [x] Initialize the `octocrab` client with the GitHub PAT from the
   configuration.
