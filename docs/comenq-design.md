@@ -941,11 +941,16 @@ async fn main() -> Result<()> {
     info!("Starting comenqd daemon...");
     info!("Configuration loaded. Cooldown period: {}s", config.cooldown_period_seconds);
 
-    let octocrab = Arc::new(Octocrab::builder().personal_token(config.github_token.clone()).build()?);
+    let octocrab = Arc::new(
+        Octocrab::builder()
+            .personal_token(config.github_token.clone())
+            .build()?,
+    );
     let (tx, rx) = channel(&config.queue_path)?;
     let config = Arc::new(config);
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
 
-    let listener_task = tokio::spawn(run_listener(config.clone(), tx));
+    let listener_task = tokio::spawn(run_listener(config.clone(), tx, shutdown_rx));
     let mut worker = Worker::spawn(config.clone(), rx, octocrab);
 
     tokio::select! {
@@ -954,6 +959,13 @@ async fn main() -> Result<()> {
         }
         res = worker.join_handle() => {
             error!("Worker task exited unexpectedly: {:?}", res);
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Shutdown signal received; attempting graceful shutdown...");
+            let _ = shutdown_tx.send(());
+            if let Err(e) = worker.shutdown().await {
+                error!("Worker shutdown failed: {e}");
+            }
         }
     }
 

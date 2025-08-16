@@ -129,11 +129,11 @@ pub async fn run(config: Config) -> Result<()> {
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let mut listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
+    let listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
     let mut worker = Worker::spawn(cfg.clone(), rx, octocrab);
 
     tokio::select! {
-        res = &mut listener => match res {
+        res = listener => match res {
             Ok(inner) => inner?,
             Err(e) => return Err(e.into()),
         },
@@ -143,7 +143,7 @@ pub async fn run(config: Config) -> Result<()> {
         },
     }
     let _ = shutdown_tx.send(());
-    worker.shutdown().await?;
+    tokio::time::timeout(Duration::from_secs(30), worker.shutdown()).await??;
     writer.await??;
     Ok(())
 }
@@ -223,23 +223,41 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 pub struct WorkerSignals {
     enqueued: watch::Receiver<u64>,
     drained: watch::Receiver<u64>,
+    last_enqueued: u64,
+    last_drained: u64,
 }
 
 impl WorkerSignals {
     /// Wait until the worker observes a new queue item.
     pub async fn on_enqueued(&mut self) {
-        if *self.enqueued.borrow() > 0 {
+        let mut current = *self.enqueued.borrow();
+        if current > self.last_enqueued {
+            self.last_enqueued = current;
             return;
         }
-        let _ = self.enqueued.changed().await;
+        while self.enqueued.changed().await.is_ok() {
+            current = *self.enqueued.borrow();
+            if current > self.last_enqueued {
+                self.last_enqueued = current;
+                break;
+            }
+        }
     }
 
     /// Wait until the queue is empty and the worker is idle.
     pub async fn on_drained(&mut self) {
-        if *self.drained.borrow() > 0 {
+        let mut current = *self.drained.borrow();
+        if current > self.last_drained {
+            self.last_drained = current;
             return;
         }
-        let _ = self.drained.changed().await;
+        while self.drained.changed().await.is_ok() {
+            current = *self.drained.borrow();
+            if current > self.last_drained {
+                self.last_drained = current;
+                break;
+            }
+        }
     }
 }
 
@@ -284,6 +302,8 @@ impl Worker {
             WorkerSignals {
                 enqueued: enq_rx,
                 drained: drain_rx,
+                last_enqueued: 0,
+                last_drained: 0,
             },
         )
     }
@@ -357,12 +377,13 @@ mod tests {
     use std::fs as stdfs;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::{TempDir, tempdir};
     use test_support::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{mpsc, watch};
-    use tokio::time::{Duration, sleep, timeout};
+    use tokio::time::{sleep, timeout};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
@@ -387,12 +408,12 @@ mod tests {
         _dir: TempDir,
     }
 
-    /// Fixture: 5s cooldown from `temp_config` affords time for queue updates
+    /// Fixture: 2s cooldown from `temp_config` affords time for queue updates
     /// during coverage runs.
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(5)));
+        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(2)));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
