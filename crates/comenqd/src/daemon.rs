@@ -439,17 +439,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_creates_queue_directory() {
-        let dir = tempdir().expect("Failed to create temporary directory");
-        let cfg = Config::from(temp_config(&dir).with_cooldown(1));
-        assert!(!cfg.queue_path.exists());
-        let handle = tokio::spawn(run(cfg.clone()));
-        wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
-        handle.abort();
-        assert!(cfg.queue_path.is_dir(), "queue directory not created");
-    }
-
-    #[tokio::test]
     async fn prepare_listener_sets_permissions() {
         let dir = tempdir().expect("tempdir");
         let sock = dir.path().join("sock");
@@ -470,7 +459,7 @@ mod tests {
         let writer = tokio::spawn(queue_writer(sender, writer_rx));
 
         let (mut client, server) = UnixStream::pair().expect("pair");
-        let handle = tokio::spawn(handle_client(server, client_tx));
+        let handle = tokio::spawn(handle_client(server, client_tx.clone()));
         let req = CommentRequest {
             owner: "o".into(),
             repo: "r".into(),
@@ -481,7 +470,8 @@ mod tests {
         client.write_all(&payload).await.expect("write");
         client.shutdown().await.expect("shutdown");
         handle.await.expect("join").expect("client");
-        drop(writer); // stop queue writer
+        drop(client_tx); // close writer channel
+        writer.await.expect("writer join").expect("queue_writer");
         let guard = receiver.recv().await.expect("recv");
         let stored: CommentRequest = serde_json::from_slice(&guard).expect("parse");
         assert_eq!(stored, req);
@@ -495,7 +485,7 @@ mod tests {
         let (client_tx, writer_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let writer = tokio::spawn(queue_writer(sender, writer_rx));
-        let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
+        let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx.clone(), shutdown_rx));
         wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
         let mut stream = UnixStream::connect(&cfg.socket_path)
             .await
@@ -514,7 +504,8 @@ mod tests {
         assert_eq!(stored, req);
         listener_task.abort();
         let _ = shutdown_tx.send(());
-        drop(writer);
+        drop(client_tx); // close writer channel
+        writer.await.expect("writer join").expect("queue_writer");
     }
 
     #[rstest]

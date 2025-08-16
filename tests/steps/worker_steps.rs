@@ -96,8 +96,13 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
     let (worker, mut signals) = Worker::spawn_with_signals(cfg, rx, octocrab);
-    let _ = timeout(Duration::from_secs(30), signals.on_enqueued()).await;
-    worker.shutdown().await.expect("shutdown");
+    timeout(Duration::from_secs(30), signals.on_enqueued())
+        .await
+        .expect("worker did not start processing");
+    timeout(Duration::from_secs(30), worker.shutdown())
+        .await
+        .expect("worker shutdown timed out")
+        .expect("shutdown");
 }
 
 #[then("the comment is posted")]
