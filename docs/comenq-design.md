@@ -946,13 +946,13 @@ async fn main() -> Result<()> {
     let config = Arc::new(config);
 
     let listener_task = tokio::spawn(run_listener(config.clone(), tx));
-    let worker_task = tokio::spawn(run_worker(config.clone(), rx, octocrab));
+    let mut worker = Worker::spawn(config.clone(), rx, octocrab);
 
     tokio::select! {
         res = listener_task => {
             error!("Listener task exited unexpectedly: {:?}", res);
         }
-        res = worker_task => {
+        res = worker.join_handle() => {
             error!("Worker task exited unexpectedly: {:?}", res);
         }
     }
@@ -995,30 +995,6 @@ async fn handle_client(mut stream: UnixStream, tx: Sender<CommentRequest>) -> Re
     tx.send(request).await?;
     Ok(())
 }
-
-async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octocrab: Arc<Octocrab>) -> Result<()> {
-    info!("Worker task started. Waiting for jobs...");
-    loop {
-        let guard = rx.recv().await?;
-        let request = &*guard;
-        info!("Processing comment for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
-
-        match octocrab.issues(&request.owner, &request.repo).create_comment(request.pr_number, &request.body).await {
-            Ok(comment) => {
-                info!("Successfully posted comment: {}", comment.html_url);
-                guard.commit()?;
-            }
-            Err(e) => {
-                error!("Failed to post comment for PR #{}: {}. Requeuing.", request.pr_number, e);
-                // Guard is dropped, job is automatically requeued.
-            }
-        }
-
-        info!("Entering {}s cooldown period.", config.cooldown_period_seconds);
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
-    }
-}
-```
 
 ### 5.6. Implementation Notes
 
