@@ -332,7 +332,13 @@ async fn worker_loop(
     loop {
         tokio::select! {
             res = rx.recv() => {
-                let guard = res?;
+                let guard = match res {
+                    Ok(g) => g,
+                    Err(e) => {
+                        tracing::info!(error = %e, "Worker receiver closed; exiting");
+                        return Err(e.into());
+                    }
+                };
                 if let Some((ref enq, _)) = signals {
                     let _ = enq.send(*enq.borrow() + 1);
                 }
