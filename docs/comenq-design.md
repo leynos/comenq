@@ -969,7 +969,10 @@ async fn main() -> Result<()> {
                         error!("Worker shutdown failed: {e}");
                     }
                 }
-                Err(_) => warn!("Worker shutdown timed out"),
+                Err(_) => {
+                    error!("Worker shutdown timed out");
+                    return Err(anyhow::anyhow!("Worker shutdown timed out"));
+                }
             }
             // Ensure the worker task has fully terminated.
             if let Err(e) = worker.join_handle().await {

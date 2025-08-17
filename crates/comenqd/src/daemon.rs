@@ -16,7 +16,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, channel};
 
 /// Errors returned when posting a comment to GitHub.
@@ -145,7 +145,12 @@ pub async fn run(config: Config) -> Result<()> {
     let _ = shutdown_tx.send(());
     match tokio::time::timeout(Duration::from_secs(30), worker.shutdown()).await {
         Ok(res) => res?,
-        Err(_) => tracing::warn!("worker shutdown timed out"),
+        Err(_) => {
+            tracing::error!("worker shutdown timed out after 30 seconds");
+            return Err(anyhow::anyhow!(
+                "worker shutdown timed out after 30 seconds"
+            ));
+        }
     }
     writer.await??;
     Ok(())
@@ -224,43 +229,19 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 
 /// Awaitable hooks emitted by [`Worker`].
 pub struct WorkerSignals {
-    enqueued: watch::Receiver<u64>,
-    drained: watch::Receiver<u64>,
-    last_enqueued: u64,
-    last_drained: u64,
+    enqueued: Arc<Notify>,
+    drained: Arc<Notify>,
 }
 
 impl WorkerSignals {
     /// Wait until the worker observes a new queue item.
-    pub async fn on_enqueued(&mut self) {
-        let mut current = *self.enqueued.borrow();
-        if current > self.last_enqueued {
-            self.last_enqueued = current;
-            return;
-        }
-        while self.enqueued.changed().await.is_ok() {
-            current = *self.enqueued.borrow();
-            if current > self.last_enqueued {
-                self.last_enqueued = current;
-                break;
-            }
-        }
+    pub async fn on_enqueued(&self) {
+        self.enqueued.notified().await;
     }
 
     /// Wait until the queue is empty and the worker is idle.
-    pub async fn on_drained(&mut self) {
-        let mut current = *self.drained.borrow();
-        if current > self.last_drained {
-            self.last_drained = current;
-            return;
-        }
-        while self.drained.changed().await.is_ok() {
-            current = *self.drained.borrow();
-            if current > self.last_drained {
-                self.last_drained = current;
-                break;
-            }
-        }
+    pub async fn on_drained(&self) {
+        self.drained.notified().await;
     }
 }
 
@@ -288,28 +269,21 @@ impl Worker {
         octocrab: Arc<Octocrab>,
     ) -> (Self, WorkerSignals) {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
-        let (enq_tx, enq_rx) = watch::channel(0u64);
-        let (drain_tx, drain_rx) = watch::channel(0u64);
-        let last_enqueued = *enq_rx.borrow();
-        let last_drained = *drain_rx.borrow();
+        let enqueued = Arc::new(Notify::new());
+        let drained = Arc::new(Notify::new());
         let handle = tokio::spawn(worker_loop(
             config,
             rx,
             octocrab,
             shutdown_rx,
-            Some((enq_tx, drain_tx)),
+            Some((enqueued.clone(), drained.clone())),
         ));
         (
             Self {
                 shutdown: shutdown_tx,
                 handle,
             },
-            WorkerSignals {
-                enqueued: enq_rx,
-                drained: drain_rx,
-                last_enqueued,
-                last_drained,
-            },
+            WorkerSignals { enqueued, drained },
         )
     }
 
@@ -330,10 +304,11 @@ async fn worker_loop(
     mut rx: Receiver,
     octocrab: Arc<Octocrab>,
     mut shutdown: watch::Receiver<()>,
-    signals: Option<(watch::Sender<u64>, watch::Sender<u64>)>,
+    signals: Option<(Arc<Notify>, Arc<Notify>)>,
 ) -> Result<()> {
     loop {
         tokio::select! {
+            _ = shutdown.changed() => break,
             res = rx.recv() => {
                 let guard = match res {
                     Ok(g) => g,
@@ -343,7 +318,7 @@ async fn worker_loop(
                     }
                 };
                 if let Some((ref enq, _)) = signals {
-                    let _ = enq.send(*enq.borrow() + 1);
+                    enq.notify_one();
                 }
                 let request: CommentRequest = serde_json::from_slice(&guard)?;
                 match post_comment(&octocrab, &request).await {
@@ -369,15 +344,19 @@ async fn worker_loop(
                 if let Some((_, ref drained)) = signals
                     && stdfs::read_dir(&config.queue_path)?.next().is_none()
                 {
-                    let _ = drained.send(*drained.borrow() + 1);
+                    drained.notify_one();
                 }
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
                     _ = shutdown.changed() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
                 }
             }
-            _ = shutdown.changed() => break,
         }
+    }
+    if let Some((_, ref drained)) = signals
+        && stdfs::read_dir(&config.queue_path)?.next().is_none()
+    {
+        drained.notify_one();
     }
     Ok(())
 }
@@ -389,6 +368,7 @@ mod tests {
     use octocrab::Octocrab;
     use rstest::{fixture, rstest};
     use std::fs as stdfs;
+    use std::future::Future;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
@@ -410,6 +390,15 @@ mod tests {
             sleep(delay).await;
         }
         path.exists()
+    }
+
+    async fn wait_for<F>(future: F, msg: &str)
+    where
+        F: Future<Output = ()>,
+    {
+        timeout(Duration::from_secs(120), future)
+            .await
+            .unwrap_or_else(|_| panic!("{}", msg));
     }
 
     /// Context dependencies for worker tests.
@@ -557,13 +546,9 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = ctx.server;
-        let (worker, mut signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        timeout(Duration::from_secs(30), signals.on_enqueued())
-            .await
-            .expect("worker did not start processing");
-        timeout(Duration::from_secs(30), signals.on_drained())
-            .await
-            .expect("worker did not drain");
+        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
+        wait_for(signals.on_enqueued(), "worker did not start processing").await;
+        wait_for(signals.on_drained(), "worker did not drain").await;
         worker.shutdown().await.expect("shutdown");
         assert_eq!(server.received_requests().await.expect("requests").len(), 1,);
         assert_eq!(
@@ -585,10 +570,8 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = ctx.server;
-        let (worker, mut signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        timeout(Duration::from_secs(30), signals.on_enqueued())
-            .await
-            .expect("worker did not start processing");
+        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
+        wait_for(signals.on_enqueued(), "worker did not start processing").await;
         worker.shutdown().await.expect("shutdown");
         assert!(server.received_requests().await.expect("requests").len() >= 1,);
         assert!(
@@ -610,13 +593,9 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = ctx.server;
-        let (worker, mut signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        timeout(Duration::from_secs(30), signals.on_enqueued())
-            .await
-            .expect("worker did not start processing");
-        timeout(Duration::from_secs(30), signals.on_drained())
-            .await
-            .expect("worker did not drain");
+        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
+        wait_for(signals.on_enqueued(), "worker did not start processing").await;
+        wait_for(signals.on_drained(), "worker did not drain").await;
         worker.shutdown().await.expect("shutdown");
         assert_eq!(
             server.received_requests().await.expect("requests").len(),
@@ -629,6 +608,28 @@ mod tests {
                 .count(),
             0,
             "Queue should be empty after processing multiple requests",
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn worker_signals_handle_bursty_load(
+        #[future]
+        #[with(201, 2)]
+        #[from(worker_test_context)]
+        ctx: WorkerTestContext,
+    ) {
+        let ctx = ctx.await;
+        let server = ctx.server;
+        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
+        wait_for(signals.on_enqueued(), "first request not observed").await;
+        wait_for(signals.on_enqueued(), "second request not observed").await;
+        wait_for(signals.on_drained(), "worker did not drain").await;
+        worker.shutdown().await.expect("shutdown");
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            2,
+            "Worker should process both queued requests",
         );
     }
 }

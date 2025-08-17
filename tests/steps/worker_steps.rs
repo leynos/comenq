@@ -95,7 +95,7 @@ async fn worker_runs(world: &mut WorkerWorld) {
         .expect("receiver should be initialised");
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
-    let (worker, mut signals) = Worker::spawn_with_signals(cfg, rx, octocrab);
+    let (worker, signals) = Worker::spawn_with_signals(cfg, rx, octocrab);
     timeout(Duration::from_secs(30), signals.on_enqueued())
         .await
         .expect("worker did not start processing");
