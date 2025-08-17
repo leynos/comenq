@@ -28,6 +28,15 @@ pub struct WorkerWorld {
     server: Option<MockServer>,
 }
 
+async fn wait_for<F>(future: F, msg: &str)
+where
+    F: std::future::Future<Output = ()>,
+{
+    timeout(Duration::from_secs(30), future)
+        .await
+        .unwrap_or_else(|_| panic!("{}", msg));
+}
+
 impl std::fmt::Debug for WorkerWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkerWorld").finish()
@@ -96,9 +105,7 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
     let (worker, signals) = Worker::spawn_with_signals(cfg, rx, octocrab);
-    timeout(Duration::from_secs(30), signals.on_enqueued())
-        .await
-        .expect("worker did not start processing");
+    wait_for(signals.on_enqueued(), "worker did not start processing").await;
     timeout(Duration::from_secs(30), worker.shutdown())
         .await
         .expect("worker shutdown timed out")

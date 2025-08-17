@@ -50,7 +50,6 @@ pub struct Config {
 /// assert_eq!(cfg.cooldown_period_seconds, 1);
 /// ```
 #[cfg(feature = "test-support")]
-#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<test_support::daemon::TestConfig> for Config {
     fn from(value: test_support::daemon::TestConfig) -> Self {
         Self {
@@ -85,7 +84,6 @@ impl From<test_support::daemon::TestConfig> for Config {
 /// assert_eq!(cfg.queue_path, test_cfg.queue_path);
 /// ```
 #[cfg(feature = "test-support")]
-#[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
         Self {

@@ -146,7 +146,9 @@ pub async fn run(config: Config) -> Result<()> {
     match tokio::time::timeout(Duration::from_secs(30), worker.shutdown()).await {
         Ok(res) => res?,
         Err(_) => {
-            tracing::error!("worker shutdown timed out after 30 seconds");
+            tracing::error!(
+                "worker shutdown timed out after 30 seconds; possible resource leak or deadlock"
+            );
             return Err(anyhow::anyhow!(
                 "worker shutdown timed out after 30 seconds"
             ));
@@ -346,9 +348,13 @@ async fn worker_loop(
                 {
                     drained.notify_one();
                 }
-                tokio::select! {
-                    _ = shutdown.changed() => break,
-                    _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
+                if sleep_or_shutdown(
+                    &mut shutdown,
+                    Duration::from_secs(config.cooldown_period_seconds),
+                )
+                .await
+                {
+                    break;
                 }
             }
         }
@@ -359,6 +365,16 @@ async fn worker_loop(
         drained.notify_one();
     }
     Ok(())
+}
+
+/// Sleep for `dur` unless a shutdown signal arrives.
+///
+/// Returns `true` if shutdown was triggered.
+async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, dur: Duration) -> bool {
+    tokio::select! {
+        _ = shutdown.changed() => true,
+        _ = tokio::time::sleep(dur) => false,
+    }
 }
 
 #[cfg(test)]
@@ -380,7 +396,7 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use yaque::Receiver;
+    use yaque::{Receiver, Sender};
 
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         for _ in 0..tries {
@@ -405,34 +421,28 @@ mod tests {
     struct WorkerTestContext {
         server: MockServer,
         cfg: Arc<Config>,
+        sender: Sender,
         rx: Receiver,
+        req: Vec<u8>,
         octo: Arc<Octocrab>,
         // Hold the directory to ensure temporary paths remain valid.
         _dir: TempDir,
     }
 
     /// Fixture: 2s cooldown from `temp_config` affords time for queue updates
-    /// during coverage runs. `count` controls how many requests are queued.
+    /// during coverage runs.
     #[fixture]
-    async fn worker_test_context(
-        #[default(201)] status: u16,
-        #[default(1)] count: usize,
-    ) -> WorkerTestContext {
+    async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(2)));
-        let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
+        let (sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
             repo: "r".into(),
             pr_number: 1,
             body: "b".into(),
         };
-        for _ in 0..count {
-            sender
-                .send(serde_json::to_vec(&req).expect("serialize"))
-                .await
-                .expect("send");
-        }
+        let req = serde_json::to_vec(&req).expect("serialize");
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -451,7 +461,9 @@ mod tests {
         WorkerTestContext {
             server,
             cfg,
+            sender,
             rx,
+            req,
             octo,
             _dir: dir,
         }
@@ -544,15 +556,26 @@ mod tests {
         #[from(worker_test_context)]
         ctx: WorkerTestContext,
     ) {
-        let ctx = ctx.await;
-        let server = ctx.server;
-        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        wait_for(signals.on_enqueued(), "worker did not start processing").await;
-        wait_for(signals.on_drained(), "worker did not drain").await;
+        let WorkerTestContext {
+            server,
+            cfg,
+            mut sender,
+            rx,
+            req,
+            octo,
+            ..
+        } = ctx.await;
+        let (worker, signals) = Worker::spawn_with_signals(cfg.clone(), rx, octo);
+        let enqueued = signals.on_enqueued();
+        let drained = signals.on_drained();
+        sender.send(req.clone()).await.expect("send request");
+        drop(sender);
+        wait_for(enqueued, "worker did not start processing").await;
+        wait_for(drained, "worker did not drain").await;
         worker.shutdown().await.expect("shutdown");
-        assert_eq!(server.received_requests().await.expect("requests").len(), 1,);
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert_eq!(
-            stdfs::read_dir(&ctx.cfg.queue_path)
+            stdfs::read_dir(&cfg.queue_path)
                 .expect("read queue directory")
                 .count(),
             0,
@@ -564,18 +587,28 @@ mod tests {
     #[tokio::test]
     async fn run_worker_requeues_on_error(
         #[future]
-        #[with(500, 1)]
+        #[with(500)]
         #[from(worker_test_context)]
         ctx: WorkerTestContext,
     ) {
-        let ctx = ctx.await;
-        let server = ctx.server;
-        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        wait_for(signals.on_enqueued(), "worker did not start processing").await;
+        let WorkerTestContext {
+            server,
+            cfg,
+            mut sender,
+            rx,
+            req,
+            octo,
+            ..
+        } = ctx.await;
+        let (worker, signals) = Worker::spawn_with_signals(cfg.clone(), rx, octo);
+        let enqueued = signals.on_enqueued();
+        sender.send(req.clone()).await.expect("send request");
+        drop(sender);
+        wait_for(enqueued, "worker did not start processing").await;
         worker.shutdown().await.expect("shutdown");
-        assert!(server.received_requests().await.expect("requests").len() >= 1,);
+        assert!(server.received_requests().await.expect("requests").len() >= 1);
         assert!(
-            stdfs::read_dir(&ctx.cfg.queue_path)
+            stdfs::read_dir(&cfg.queue_path)
                 .expect("read queue directory")
                 .count()
                 > 0,
@@ -587,15 +620,28 @@ mod tests {
     #[tokio::test]
     async fn run_worker_processes_multiple_requests(
         #[future]
-        #[with(201, 3)]
+        #[with(201)]
         #[from(worker_test_context)]
         ctx: WorkerTestContext,
     ) {
-        let ctx = ctx.await;
-        let server = ctx.server;
-        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        wait_for(signals.on_enqueued(), "worker did not start processing").await;
-        wait_for(signals.on_drained(), "worker did not drain").await;
+        let WorkerTestContext {
+            server,
+            cfg,
+            mut sender,
+            rx,
+            req,
+            octo,
+            ..
+        } = ctx.await;
+        let (worker, signals) = Worker::spawn_with_signals(cfg.clone(), rx, octo);
+        let enqueued = signals.on_enqueued();
+        let drained = signals.on_drained();
+        for _ in 0..3 {
+            sender.send(req.clone()).await.expect("send request");
+        }
+        drop(sender);
+        wait_for(enqueued, "worker did not start processing").await;
+        wait_for(drained, "worker did not drain").await;
         worker.shutdown().await.expect("shutdown");
         assert_eq!(
             server.received_requests().await.expect("requests").len(),
@@ -603,7 +649,7 @@ mod tests {
             "Worker should process all queued requests",
         );
         assert_eq!(
-            stdfs::read_dir(&ctx.cfg.queue_path)
+            stdfs::read_dir(&cfg.queue_path)
                 .expect("read queue directory")
                 .count(),
             0,
@@ -615,16 +661,30 @@ mod tests {
     #[tokio::test]
     async fn worker_signals_handle_bursty_load(
         #[future]
-        #[with(201, 2)]
+        #[with(201)]
         #[from(worker_test_context)]
         ctx: WorkerTestContext,
     ) {
-        let ctx = ctx.await;
-        let server = ctx.server;
-        let (worker, signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
-        wait_for(signals.on_enqueued(), "first request not observed").await;
-        wait_for(signals.on_enqueued(), "second request not observed").await;
-        wait_for(signals.on_drained(), "worker did not drain").await;
+        let WorkerTestContext {
+            server,
+            cfg,
+            mut sender,
+            rx,
+            req,
+            octo,
+            ..
+        } = ctx.await;
+        let (worker, signals) = Worker::spawn_with_signals(cfg.clone(), rx, octo);
+        let drained = signals.on_drained();
+        let enqueued: Vec<_> = (0..2).map(|_| signals.on_enqueued()).collect();
+        for _ in 0..2 {
+            sender.send(req.clone()).await.expect("send request");
+        }
+        drop(sender);
+        for (idx, fut) in enqueued.into_iter().enumerate() {
+            wait_for(fut, &format!("request {} not observed", idx + 1)).await;
+        }
+        wait_for(drained, "worker did not drain").await;
         worker.shutdown().await.expect("shutdown");
         assert_eq!(
             server.received_requests().await.expect("requests").len(),

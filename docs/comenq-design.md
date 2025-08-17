@@ -963,15 +963,15 @@ async fn main() -> Result<()> {
         _ = tokio::signal::ctrl_c() => {
             info!("Shutdown signal received; attempting graceful shutdown...");
             let _ = shutdown_tx.send(());
-            match timeout(Duration::from_secs(10), worker.shutdown()).await {
+            match timeout(Duration::from_secs(30), worker.shutdown()).await {
                 Ok(res) => {
                     if let Err(e) = res {
                         error!("Worker shutdown failed: {e}");
                     }
                 }
                 Err(_) => {
-                    error!("Worker shutdown timed out");
-                    return Err(anyhow::anyhow!("Worker shutdown timed out"));
+                    error!("Worker shutdown timed out after 30 seconds; possible resource leak or deadlock");
+                    return Err(anyhow::anyhow!("Worker shutdown timed out after 30 seconds"));
                 }
             }
             // Ensure the worker task has fully terminated.
