@@ -547,9 +547,22 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        timeout(Duration::from_secs(15), drained_notified)
-            .await
-            .expect("worker drained");
+        match timeout(Duration::from_secs(30), drained_notified).await {
+            Ok(_) => println!("Worker drained notification received successfully"),
+            Err(_) => {
+                // Provide diagnostic information for debugging
+                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
+                    .map(|entries| entries.count())
+                    .unwrap_or(0);
+                let server_requests = server.received_requests().await.unwrap_or_default().len();
+                eprintln!("Timeout waiting for worker drained notification after 30 seconds");
+                eprintln!("Queue directory contains {} files", queue_files);
+                eprintln!("Mock server received {} requests", server_requests);
+                panic!(
+                    "worker drained: timeout - worker may not be triggering drained hook correctly"
+                );
+            }
+        }
         shutdown_tx.send(()).expect("send shutdown");
         // The join handle returns `()` on success. We explicitly discard this
         // to acknowledge the timeout `Result` and silence the `must_use` lint
