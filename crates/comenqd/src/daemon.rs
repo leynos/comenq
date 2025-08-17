@@ -522,8 +522,9 @@ mod tests {
             .await
             .expect("worker drained");
         shutdown_tx.send(()).expect("send shutdown");
-        // The join handle returns `()` on success. Explicitly discard the
-        // value to satisfy the `must_use` lint under coverage instrumentation.
+        // The join handle returns `()` on success. We explicitly discard this
+        // to acknowledge the timeout `Result` and silence the `must_use` lint
+        // under coverage instrumentation.
         let _ = timeout(Duration::from_secs(5), h)
             .await
             .expect("join worker")
@@ -567,8 +568,9 @@ mod tests {
             .await
             .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        // Explicitly drop the join result to avoid a `must_use` warning when
-        // coverage instrumentation is enabled.
+        // Explicitly drop the join result to acknowledge the timeout `Result`
+        // and avoid a `must_use` warning when coverage instrumentation is
+        // enabled.
         let _ = timeout(Duration::from_secs(15), h)
             .await
             .expect("join worker")
