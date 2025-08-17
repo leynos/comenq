@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::{WorkerHooks, run_worker};
+use comenqd::daemon::{WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -97,8 +97,9 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
     let handle = tokio::spawn(async move {
-        let _ = run_worker(cfg, rx, octocrab, shutdown_rx, WorkerHooks::default()).await;
+        let _ = run_worker(cfg, rx, octocrab, control).await;
     });
     sleep(Duration::from_millis(100)).await;
     let _ = shutdown_tx.send(());

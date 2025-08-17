@@ -130,13 +130,8 @@ pub async fn run(config: Config) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
     let listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx.clone()));
-    let worker = tokio::spawn(run_worker(
-        cfg.clone(),
-        rx,
-        octocrab,
-        shutdown_rx,
-        WorkerHooks::default(),
-    ));
+    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
+    let worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab, control));
 
     tokio::select! {
         res = listener => match res {
@@ -226,16 +221,64 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 
 /// Hooks used to observe worker progress during tests.
 ///
-/// Each field is optional. When present the [`Notify`] is triggered at
-/// key points in the worker's lifecycle.
+/// Each field is optional. When present the [`Notify`] is signalled at key
+/// points in the worker's lifecycle.
 #[derive(Default)]
 pub struct WorkerHooks {
-    /// Fired when a request is retrieved from the queue.
+    /// Signalled when a request is retrieved from the queue.
     pub enqueued: Option<Arc<Notify>>,
-    /// Fired after the worker completes processing of a request.
+    /// Signalled after the worker completes processing of a request.
     pub idle: Option<Arc<Notify>>,
-    /// Fired when the queue is empty and the worker is idle.
+    /// Signalled when the queue is empty and the worker is idle.
     pub drained: Option<Arc<Notify>>,
+}
+
+impl WorkerHooks {
+    fn notify_enqueued(&self) {
+        if let Some(n) = &self.enqueued {
+            n.notify_waiters();
+        }
+    }
+
+    fn notify_idle(&self) {
+        if let Some(n) = &self.idle {
+            n.notify_waiters();
+        }
+    }
+
+    fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
+        if let Some(n) = &self.drained
+            && stdfs::read_dir(queue_path)?.next().is_none()
+        {
+            n.notify_waiters();
+        }
+        Ok(())
+    }
+}
+
+/// Controls the worker task.
+///
+/// Bundles the shutdown signal and optional test hooks to keep the worker API
+/// concise.
+pub struct WorkerControl {
+    /// Watch channel used to signal graceful shutdown.
+    pub shutdown: watch::Receiver<()>,
+    /// Hooks for observing worker progress during tests.
+    pub hooks: WorkerHooks,
+}
+
+impl WorkerControl {
+    /// Create a new [`WorkerControl`].
+    pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
+        Self { shutdown, hooks }
+    }
+
+    async fn wait_or_shutdown(&mut self, cooldown_secs: u64) {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(cooldown_secs)) => {},
+            _ = self.shutdown.changed() => {},
+        }
+    }
 }
 
 /// Processes queued comment requests and posts them to GitHub, enforcing a cooldown between attempts.
@@ -250,7 +293,8 @@ pub struct WorkerHooks {
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// # use comenqd::{Config, run_worker};
+/// # use comenqd::daemon::{run_worker, WorkerControl, WorkerHooks};
+/// # use comenqd::Config;
 /// # use yaque::Receiver;
 /// # use octocrab::Octocrab;
 /// # async fn example() -> anyhow::Result<()> {
@@ -258,7 +302,8 @@ pub struct WorkerHooks {
 /// let rx: Receiver = /* obtain from yaque */ unimplemented!();
 /// let octocrab = Arc::new(Octocrab::builder().build()?);
 /// let (_tx, shutdown) = watch::channel(());
-/// run_worker(config, rx, octocrab, shutdown, WorkerHooks::default()).await?;
+/// let control = WorkerControl::new(shutdown, WorkerHooks::default());
+/// run_worker(config, rx, octocrab, control).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -266,17 +311,14 @@ pub async fn run_worker(
     config: Arc<Config>,
     mut rx: Receiver,
     octocrab: Arc<Octocrab>,
-    mut shutdown: watch::Receiver<()>,
-    hooks: WorkerHooks,
+    mut control: WorkerControl,
 ) -> Result<()> {
     loop {
         let guard = tokio::select! {
             res = rx.recv() => res?,
-            _ = shutdown.changed() => break,
+            _ = control.shutdown.changed() => break,
         };
-        if let Some(n) = &hooks.enqueued {
-            n.notify_waiters();
-        }
+        control.hooks.notify_enqueued();
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         match post_comment(&octocrab, &request).await {
@@ -302,24 +344,13 @@ pub async fn run_worker(
             }
         }
 
-        if let Some(n) = &hooks.idle {
-            n.notify_waiters();
-        }
-        if let Some(n) = &hooks.drained
-            && stdfs::read_dir(&config.queue_path)?.next().is_none()
-        {
-            n.notify_waiters();
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
-            _ = shutdown.changed() => break,
-        }
+        control.hooks.notify_idle();
+        control.hooks.notify_drained_if_empty(&config.queue_path)?;
+        control
+            .wait_or_shutdown(config.cooldown_period_seconds)
+            .await;
     }
-    if let Some(n) = &hooks.drained
-        && stdfs::read_dir(&config.queue_path)?.next().is_none()
-    {
-        n.notify_waiters();
-    }
+    control.hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }
 
@@ -506,17 +537,15 @@ mod tests {
         let drained = Arc::new(Notify::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let drained_notified = drained.notified();
-        let h = tokio::spawn(run_worker(
-            ctx.cfg.clone(),
-            ctx.rx,
-            ctx.octo,
-            shutdown_rx,
-            WorkerHooks {
+        let control = WorkerControl {
+            shutdown: shutdown_rx,
+            hooks: WorkerHooks {
                 enqueued: None,
                 idle: None,
                 drained: Some(drained.clone()),
             },
-        ));
+        };
+        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
         timeout(Duration::from_secs(15), drained_notified)
             .await
@@ -552,17 +581,15 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
         let enqueued_notified = enqueued.notified();
-        let h = tokio::spawn(run_worker(
-            ctx.cfg.clone(),
-            ctx.rx,
-            ctx.octo,
-            shutdown_rx,
-            WorkerHooks {
+        let control = WorkerControl {
+            shutdown: shutdown_rx,
+            hooks: WorkerHooks {
                 enqueued: Some(enqueued.clone()),
                 idle: None,
                 drained: None,
             },
-        ));
+        };
+        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
         timeout(Duration::from_secs(15), enqueued_notified)
             .await

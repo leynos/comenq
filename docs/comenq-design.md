@@ -948,13 +948,9 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let listener_task =
         tokio::spawn(run_listener(config.clone(), tx, shutdown_rx.clone()));
-    let worker_task = tokio::spawn(run_worker(
-        config.clone(),
-        rx,
-        octocrab,
-        shutdown_rx,
-        WorkerHooks::default(),
-    ));
+    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
+    let worker_task =
+        tokio::spawn(run_worker(config.clone(), rx, octocrab, control));
 
     tokio::select! {
         res = listener_task => {
@@ -1006,57 +1002,9 @@ async fn handle_client(mut stream: UnixStream, tx: Sender<CommentRequest>) -> Re
     Ok(())
 }
 
-async fn run_worker(
-    config: Arc<Config>,
-    mut rx: Receiver<CommentRequest>,
-    octocrab: Arc<Octocrab>,
-    mut shutdown: watch::Receiver<()>,
-    hooks: WorkerHooks,
-) -> Result<()> {
-    info!("Worker task started. Waiting for jobs...");
-    loop {
-        let guard = tokio::select! {
-            res = rx.recv() => res?,
-            _ = shutdown.changed() => break,
-        };
-        if let Some(n) = &hooks.enqueued {
-            n.notify_waiters();
-        }
-        let request = &*guard;
-        info!("Processing comment for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
-
-        match octocrab.issues(&request.owner, &request.repo).create_comment(request.pr_number, &request.body).await {
-            Ok(comment) => {
-                info!("Successfully posted comment: {}", comment.html_url);
-                guard.commit()?;
-            }
-            Err(e) => {
-                error!("Failed to post comment for PR #{}: {}. Requeuing.", request.pr_number, e);
-                // Guard is dropped, job is automatically requeued.
-            }
-        }
-
-        if let Some(n) = &hooks.idle {
-            n.notify_waiters();
-        }
-        if let Some(n) = &hooks.drained {
-            if std::fs::read_dir(&config.queue_path)?.next().is_none() {
-                n.notify_waiters();
-            }
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
-            _ = shutdown.changed() => break,
-        }
-    }
-    if let Some(n) = &hooks.drained {
-        if std::fs::read_dir(&config.queue_path)?.next().is_none() {
-            n.notify_waiters();
-        }
-    }
-    Ok(())
-}
-```
+The worker task itself is implemented in
+[`run_worker`](../crates/comenqd/src/daemon.rs), which accepts a
+[`WorkerControl`] struct bundling shutdown and optional test hooks.
 
 ### 5.6. Implementation Notes
 
