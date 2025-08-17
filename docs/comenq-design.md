@@ -963,8 +963,13 @@ async fn main() -> Result<()> {
         _ = tokio::signal::ctrl_c() => {
             info!("Shutdown signal received; attempting graceful shutdown...");
             let _ = shutdown_tx.send(());
-            if let Err(e) = worker.shutdown().await {
-                error!("Worker shutdown failed: {e}");
+            match timeout(Duration::from_secs(10), worker.shutdown()).await {
+                Ok(res) => {
+                    if let Err(e) = res {
+                        error!("Worker shutdown failed: {e}");
+                    }
+                }
+                Err(_) => warn!("Worker shutdown timed out"),
             }
         }
     }

@@ -143,7 +143,10 @@ pub async fn run(config: Config) -> Result<()> {
         },
     }
     let _ = shutdown_tx.send(());
-    tokio::time::timeout(Duration::from_secs(30), worker.shutdown()).await??;
+    match tokio::time::timeout(Duration::from_secs(30), worker.shutdown()).await {
+        Ok(res) => res?,
+        Err(_) => tracing::warn!("worker shutdown timed out"),
+    }
     writer.await??;
     Ok(())
 }
