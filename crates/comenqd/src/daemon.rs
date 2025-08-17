@@ -254,6 +254,13 @@ impl WorkerHooks {
         }
         Ok(())
     }
+
+    async fn wait_or_shutdown(&self, secs: u64, shutdown: &mut watch::Receiver<()>) {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
+            _ = shutdown.changed() => {},
+        }
+    }
 }
 
 /// Controls the worker task.
@@ -271,13 +278,6 @@ impl WorkerControl {
     /// Create a new [`WorkerControl`].
     pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
         Self { shutdown, hooks }
-    }
-
-    async fn wait_or_shutdown(&mut self, cooldown_secs: u64) {
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(cooldown_secs)) => {},
-            _ = self.shutdown.changed() => {},
-        }
     }
 }
 
@@ -313,12 +313,13 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
+    let WorkerControl { hooks, shutdown } = &mut control;
     loop {
         let guard = tokio::select! {
             res = rx.recv() => res?,
-            _ = control.shutdown.changed() => break,
+            _ = shutdown.changed() => break,
         };
-        control.hooks.notify_enqueued();
+        hooks.notify_enqueued();
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         match post_comment(&octocrab, &request).await {
@@ -344,13 +345,13 @@ pub async fn run_worker(
             }
         }
 
-        control.hooks.notify_idle();
-        control.hooks.notify_drained_if_empty(&config.queue_path)?;
-        control
-            .wait_or_shutdown(config.cooldown_period_seconds)
+        hooks.notify_idle();
+        hooks.notify_drained_if_empty(&config.queue_path)?;
+        hooks
+            .wait_or_shutdown(config.cooldown_period_seconds, shutdown)
             .await;
     }
-    control.hooks.notify_drained_if_empty(&config.queue_path)?;
+    hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }
 
