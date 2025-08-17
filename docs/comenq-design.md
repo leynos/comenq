@@ -945,8 +945,16 @@ async fn main() -> Result<()> {
     let (tx, rx) = channel(&config.queue_path)?;
     let config = Arc::new(config);
 
-    let listener_task = tokio::spawn(run_listener(config.clone(), tx));
-    let worker_task = tokio::spawn(run_worker(config.clone(), rx, octocrab));
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let listener_task =
+        tokio::spawn(run_listener(config.clone(), tx, shutdown_rx.clone()));
+    let worker_task = tokio::spawn(run_worker(
+        config.clone(),
+        rx,
+        octocrab,
+        shutdown_rx,
+        WorkerHooks::default(),
+    ));
 
     tokio::select! {
         res = listener_task => {
@@ -956,6 +964,8 @@ async fn main() -> Result<()> {
             error!("Worker task exited unexpectedly: {:?}", res);
         }
     }
+
+    let _ = shutdown_tx.send(());
 
     Ok(())
 }
@@ -996,10 +1006,22 @@ async fn handle_client(mut stream: UnixStream, tx: Sender<CommentRequest>) -> Re
     Ok(())
 }
 
-async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octocrab: Arc<Octocrab>) -> Result<()> {
+async fn run_worker(
+    config: Arc<Config>,
+    mut rx: Receiver<CommentRequest>,
+    octocrab: Arc<Octocrab>,
+    mut shutdown: watch::Receiver<()>,
+    hooks: WorkerHooks,
+) -> Result<()> {
     info!("Worker task started. Waiting for jobs...");
     loop {
-        let guard = rx.recv().await?;
+        let guard = tokio::select! {
+            res = rx.recv() => res?,
+            _ = shutdown.changed() => break,
+        };
+        if let Some(n) = &hooks.enqueued {
+            n.notify_waiters();
+        }
         let request = &*guard;
         info!("Processing comment for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
 
@@ -1014,9 +1036,25 @@ async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octoc
             }
         }
 
-        info!("Entering {}s cooldown period.", config.cooldown_period_seconds);
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+        if let Some(n) = &hooks.idle {
+            n.notify_waiters();
+        }
+        if let Some(n) = &hooks.drained {
+            if std::fs::read_dir(&config.queue_path)?.next().is_none() {
+                n.notify_waiters();
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
+            _ = shutdown.changed() => break,
+        }
     }
+    if let Some(n) = &hooks.drained {
+        if std::fs::read_dir(&config.queue_path)?.next().is_none() {
+            n.notify_waiters();
+        }
+    }
+    Ok(())
 }
 ```
 

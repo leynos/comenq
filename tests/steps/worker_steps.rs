@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::run_worker;
+use comenqd::daemon::{WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
+use tokio::sync::watch;
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -26,7 +27,6 @@ pub struct WorkerWorld {
     cfg: Option<Arc<Config>>,
     receiver: Option<yaque::Receiver>,
     server: Option<MockServer>,
-    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for WorkerWorld {
@@ -96,12 +96,13 @@ async fn worker_runs(world: &mut WorkerWorld) {
         .expect("receiver should be initialised");
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
     let handle = tokio::spawn(async move {
-        let _ = run_worker(cfg, rx, octocrab).await;
+        let _ = run_worker(cfg, rx, octocrab, shutdown_rx, WorkerHooks::default()).await;
     });
     sleep(Duration::from_millis(100)).await;
-    handle.abort();
-    world.handle = Some(handle);
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
 }
 
 #[then("the comment is posted")]
@@ -136,12 +137,4 @@ fn queue_retains(world: &mut WorkerWorld) {
             .count()
             > 0
     );
-}
-
-impl Drop for WorkerWorld {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
-    }
 }

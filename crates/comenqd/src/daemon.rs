@@ -16,7 +16,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, channel};
 
 /// Errors returned when posting a comment to GitHub.
@@ -129,8 +129,14 @@ pub async fn run(config: Config) -> Result<()> {
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
-    let worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab));
+    let listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx.clone()));
+    let worker = tokio::spawn(run_worker(
+        cfg.clone(),
+        rx,
+        octocrab,
+        shutdown_rx,
+        WorkerHooks::default(),
+    ));
 
     tokio::select! {
         res = listener => match res {
@@ -218,6 +224,20 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
     Ok(())
 }
 
+/// Hooks used to observe worker progress during tests.
+///
+/// Each field is optional. When present the [`Notify`] is triggered at
+/// key points in the worker's lifecycle.
+#[derive(Default)]
+pub struct WorkerHooks {
+    /// Fired when a request is retrieved from the queue.
+    pub enqueued: Option<Arc<Notify>>,
+    /// Fired after the worker completes processing of a request.
+    pub idle: Option<Arc<Notify>>,
+    /// Fired when the queue is empty and the worker is idle.
+    pub drained: Option<Arc<Notify>>,
+}
+
 /// Processes queued comment requests and posts them to GitHub, enforcing a cooldown between attempts.
 ///
 /// Continuously receives comment requests from the persistent queue, attempts to post each comment to GitHub using the provided client, and commits successfully processed entries to remove them from the queue. Failed requests remain in the queue for retry. A fixed cooldown period, specified in the configuration, is applied after each attempt regardless of outcome. There is no exponential backoff; all retries use the same cooldown interval.
@@ -237,7 +257,8 @@ async fn handle_client(mut stream: UnixStream, tx: mpsc::UnboundedSender<Vec<u8>
 /// let config = Arc::new(Config::default());
 /// let rx: Receiver = /* obtain from yaque */ unimplemented!();
 /// let octocrab = Arc::new(Octocrab::builder().build()?);
-/// run_worker(config, rx, octocrab).await?;
+/// let (_tx, shutdown) = watch::channel(());
+/// run_worker(config, rx, octocrab, shutdown, WorkerHooks::default()).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -245,9 +266,17 @@ pub async fn run_worker(
     config: Arc<Config>,
     mut rx: Receiver,
     octocrab: Arc<Octocrab>,
+    mut shutdown: watch::Receiver<()>,
+    hooks: WorkerHooks,
 ) -> Result<()> {
     loop {
-        let guard = rx.recv().await?;
+        let guard = tokio::select! {
+            res = rx.recv() => res?,
+            _ = shutdown.changed() => break,
+        };
+        if let Some(n) = &hooks.enqueued {
+            n.notify_waiters();
+        }
         let request: CommentRequest = serde_json::from_slice(&guard)?;
 
         match post_comment(&octocrab, &request).await {
@@ -273,8 +302,25 @@ pub async fn run_worker(
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+        if let Some(n) = &hooks.idle {
+            n.notify_waiters();
+        }
+        if let Some(n) = &hooks.drained
+            && stdfs::read_dir(&config.queue_path)?.next().is_none()
+        {
+            n.notify_waiters();
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
+            _ = shutdown.changed() => break,
+        }
     }
+    if let Some(n) = &hooks.drained
+        && stdfs::read_dir(&config.queue_path)?.next().is_none()
+    {
+        n.notify_waiters();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -287,12 +333,11 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::{TempDir, tempdir};
-    use test_support::util::poll_until;
     use test_support::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
-    use tokio::sync::{mpsc, watch};
-    use tokio::time::{Duration, sleep};
+    use tokio::sync::{Notify, mpsc, watch};
+    use tokio::time::{Duration, sleep, timeout};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
@@ -305,28 +350,6 @@ mod tests {
             sleep(delay).await;
         }
         path.exists()
-    }
-
-    /// Wait for the mock server to receive `expected` requests.
-    async fn wait_for_requests(server: Arc<MockServer>, expected: usize) -> bool {
-        let received = poll_until(
-            Duration::from_secs(2),
-            Duration::from_millis(20),
-            || async {
-                server
-                    .received_requests()
-                    .await
-                    .map_or(false, |reqs| reqs.len() == expected)
-            },
-        )
-        .await;
-
-        if received {
-            // Give the worker time to update the queue before assertions.
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-
-        received
     }
 
     /// Context dependencies for worker tests.
@@ -477,14 +500,28 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
-        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
+        let drained = Arc::new(Notify::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let h = tokio::spawn(run_worker(
+            ctx.cfg.clone(),
+            ctx.rx,
+            ctx.octo,
+            shutdown_rx,
+            WorkerHooks {
+                enqueued: None,
+                idle: None,
+                drained: Some(drained.clone()),
+            },
+        ));
 
-        let request_received = wait_for_requests(server.clone(), 1).await;
-        h.abort();
-        assert!(
-            request_received,
-            "Worker did not post a comment within the timeout",
-        );
+        timeout(Duration::from_secs(5), drained.notified())
+            .await
+            .expect("worker drained");
+        shutdown_tx.send(()).expect("send shutdown");
+        timeout(Duration::from_secs(5), h)
+            .await
+            .expect("join worker")
+            .expect("worker result");
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert_eq!(
             stdfs::read_dir(&ctx.cfg.queue_path)
@@ -505,14 +542,28 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
-        let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo));
+        let idle = Arc::new(Notify::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let h = tokio::spawn(run_worker(
+            ctx.cfg.clone(),
+            ctx.rx,
+            ctx.octo,
+            shutdown_rx,
+            WorkerHooks {
+                enqueued: None,
+                idle: Some(idle.clone()),
+                drained: None,
+            },
+        ));
 
-        let request_attempted = wait_for_requests(server.clone(), 1).await;
-        h.abort();
-        assert!(
-            request_attempted,
-            "Worker did not attempt to post a comment within the timeout",
-        );
+        timeout(Duration::from_secs(5), idle.notified())
+            .await
+            .expect("worker processed request");
+        shutdown_tx.send(()).expect("send shutdown");
+        timeout(Duration::from_secs(5), h)
+            .await
+            .expect("join worker")
+            .expect("worker result");
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)
