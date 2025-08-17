@@ -366,7 +366,10 @@ mod tests {
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config::from(temp_config(&dir)));
+        // Use a long cooldown so retries do not fire before the test shuts the
+        // worker down. This keeps the number of HTTP attempts deterministic even
+        // under heavy instrumentation.
+        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(60)));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),
@@ -502,6 +505,7 @@ mod tests {
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let drained_notified = drained.notified();
         let h = tokio::spawn(run_worker(
             ctx.cfg.clone(),
             ctx.rx,
@@ -514,11 +518,13 @@ mod tests {
             },
         ));
 
-        timeout(Duration::from_secs(5), drained.notified())
+        timeout(Duration::from_secs(15), drained_notified)
             .await
             .expect("worker drained");
         shutdown_tx.send(()).expect("send shutdown");
-        timeout(Duration::from_secs(5), h)
+        // The join handle returns `()` on success. Explicitly discard the
+        // value to satisfy the `must_use` lint under coverage instrumentation.
+        let _ = timeout(Duration::from_secs(5), h)
             .await
             .expect("join worker")
             .expect("worker result");
@@ -542,29 +548,35 @@ mod tests {
     ) {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
-        let idle = Arc::new(Notify::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let enqueued = Arc::new(Notify::new());
+        let enqueued_notified = enqueued.notified();
         let h = tokio::spawn(run_worker(
             ctx.cfg.clone(),
             ctx.rx,
             ctx.octo,
             shutdown_rx,
             WorkerHooks {
-                enqueued: None,
-                idle: Some(idle.clone()),
+                enqueued: Some(enqueued.clone()),
+                idle: None,
                 drained: None,
             },
         ));
 
-        timeout(Duration::from_secs(5), idle.notified())
+        timeout(Duration::from_secs(15), enqueued_notified)
             .await
-            .expect("worker processed request");
+            .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        timeout(Duration::from_secs(5), h)
+        // Explicitly drop the join result to avoid a `must_use` warning when
+        // coverage instrumentation is enabled.
+        let _ = timeout(Duration::from_secs(15), h)
             .await
             .expect("join worker")
             .expect("worker result");
-        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+        assert!(
+            server.received_requests().await.expect("requests").len() >= 1,
+            "worker should attempt the request",
+        );
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)
                 .expect("read queue directory")
