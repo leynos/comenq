@@ -287,6 +287,8 @@ impl Worker {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let (enq_tx, enq_rx) = watch::channel(0u64);
         let (drain_tx, drain_rx) = watch::channel(0u64);
+        let last_enqueued = *enq_rx.borrow();
+        let last_drained = *drain_rx.borrow();
         let handle = tokio::spawn(worker_loop(
             config,
             rx,
@@ -302,8 +304,8 @@ impl Worker {
             WorkerSignals {
                 enqueued: enq_rx,
                 drained: drain_rx,
-                last_enqueued: 0,
-                last_drained: 0,
+                last_enqueued,
+                last_drained,
             },
         )
     }
@@ -360,7 +362,10 @@ async fn worker_loop(
                 {
                     let _ = drained.send(*drained.borrow() + 1);
                 }
-                tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)) => {},
+                    _ = shutdown.changed() => break,
+                }
             }
             _ = shutdown.changed() => break,
         }
@@ -409,9 +414,12 @@ mod tests {
     }
 
     /// Fixture: 2s cooldown from `temp_config` affords time for queue updates
-    /// during coverage runs.
+    /// during coverage runs. `count` controls how many requests are queued.
     #[fixture]
-    async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
+    async fn worker_test_context(
+        #[default(201)] status: u16,
+        #[default(1)] count: usize,
+    ) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
         let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(2)));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
@@ -421,10 +429,12 @@ mod tests {
             pr_number: 1,
             body: "b".into(),
         };
-        sender
-            .send(serde_json::to_vec(&req).expect("serialize"))
-            .await
-            .expect("send");
+        for _ in 0..count {
+            sender
+                .send(serde_json::to_vec(&req).expect("serialize"))
+                .await
+                .expect("send");
+        }
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -560,7 +570,7 @@ mod tests {
     #[tokio::test]
     async fn run_worker_requeues_on_error(
         #[future]
-        #[with(500)]
+        #[with(500, 1)]
         #[from(worker_test_context)]
         ctx: WorkerTestContext,
     ) {
@@ -578,6 +588,38 @@ mod tests {
                 .count()
                 > 0,
             "Queue should retain job after API failure",
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_worker_processes_multiple_requests(
+        #[future]
+        #[with(201, 3)]
+        #[from(worker_test_context)]
+        ctx: WorkerTestContext,
+    ) {
+        let ctx = ctx.await;
+        let server = ctx.server;
+        let (worker, mut signals) = Worker::spawn_with_signals(ctx.cfg.clone(), ctx.rx, ctx.octo);
+        timeout(Duration::from_secs(30), signals.on_enqueued())
+            .await
+            .expect("worker did not start processing");
+        timeout(Duration::from_secs(30), signals.on_drained())
+            .await
+            .expect("worker did not drain");
+        worker.shutdown().await.expect("shutdown");
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            3,
+            "Worker should process all queued requests",
+        );
+        assert_eq!(
+            stdfs::read_dir(&ctx.cfg.queue_path)
+                .expect("read queue directory")
+                .count(),
+            0,
+            "Queue should be empty after processing multiple requests",
         );
     }
 }
