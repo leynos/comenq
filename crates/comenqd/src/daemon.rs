@@ -248,14 +248,15 @@ impl WorkerHooks {
 
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
         if let Some(n) = &self.drained {
-            let empty = stdfs::read_dir(queue_path)?
+            // Ignore sentinel files left by the queue implementation and
+            // consider the directory empty when no other files remain.
+            let empty = !stdfs::read_dir(queue_path)?
                 .filter_map(|e| e.ok())
-                .find(|e| {
+                .any(|e| {
                     let name = e.file_name();
                     let name = name.to_string_lossy();
                     name != "version" && name != "recv.lock"
-                })
-                .is_none();
+                });
             if empty {
                 n.notify_waiters();
             }
