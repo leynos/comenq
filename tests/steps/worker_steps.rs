@@ -15,8 +15,8 @@ use comenqd::daemon::{WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
-use tokio::sync::watch;
-use tokio::time::sleep;
+use tokio::sync::{Notify, watch};
+use tokio::time::timeout;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use yaque::{self, channel};
@@ -110,11 +110,23 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
+    let idle = Arc::new(Notify::new());
+    let idle_hook = idle.clone();
+    let idle_notified = idle_hook.notified();
+    let control = WorkerControl::new(
+        shutdown_rx,
+        WorkerHooks {
+            enqueued: None,
+            idle: Some(idle),
+            drained: None,
+        },
+    );
     let handle = tokio::spawn(async move {
         let _ = run_worker(cfg, rx, octocrab, control).await;
     });
-    sleep(Duration::from_millis(100)).await;
+    timeout(Duration::from_secs(5), idle_notified)
+        .await
+        .expect("worker reached idle state within timeout");
 
     // Store handles in world for proper cleanup
     world.shutdown = Some(shutdown_tx);
