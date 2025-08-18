@@ -247,10 +247,18 @@ impl WorkerHooks {
     }
 
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
-        if let Some(n) = &self.drained
-            && stdfs::read_dir(queue_path)?.next().is_none()
-        {
-            n.notify_waiters();
+        if let Some(n) = &self.drained {
+            let empty = stdfs::read_dir(queue_path)?
+                .filter_map(|e| e.ok())
+                .find(|e| {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    name != "version" && name != "recv.lock"
+                })
+                .is_none();
+            if empty {
+                n.notify_waiters();
+            }
         }
         Ok(())
     }
@@ -437,6 +445,51 @@ mod tests {
         }
     }
 
+    /// Collect diagnostics about the queue state and server requests.
+    async fn diagnose_queue_state(
+        cfg: &Config,
+        server: &MockServer,
+        expected_files: usize,
+    ) -> String {
+        let queue_files = stdfs::read_dir(&cfg.queue_path)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        let server_requests = server.received_requests().await.unwrap_or_default().len();
+
+        let mut output = format!(
+            "Queue directory contains {} files (expected {})\n",
+            queue_files, expected_files
+        );
+        output.push_str(&format!(
+            "Mock server received {} requests\n",
+            server_requests
+        ));
+
+        if let Ok(entries) = stdfs::read_dir(&cfg.queue_path) {
+            output.push_str("Remaining queue files:\n");
+            for (i, entry) in entries.enumerate() {
+                if let Ok(entry) = entry {
+                    let name = entry.file_name();
+                    output.push_str(&format!("  {}. {}\n", i + 1, name.to_string_lossy()));
+
+                    if let Ok(metadata) = entry.metadata() {
+                        output.push_str(&format!("     Size: {} bytes\n", metadata.len()));
+                        if let Ok(modified) = metadata.modified() {
+                            if let Ok(elapsed) = modified.elapsed() {
+                                output.push_str(&format!(
+                                    "     Age: {:.1}s ago\n",
+                                    elapsed.as_secs_f32()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        output
+    }
+
     #[tokio::test]
     async fn ensure_queue_dir_creates_directory() {
         let dir = tempdir().expect("Failed to create temporary directory");
@@ -521,9 +574,12 @@ mod tests {
         let guard = receiver.recv().await.expect("recv");
         let stored: CommentRequest = serde_json::from_slice(&guard).expect("parse");
         assert_eq!(stored, req);
-        listener_task.abort();
         let _ = shutdown_tx.send(());
-        drop(writer);
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            let _ = listener_task.await;
+            let _ = writer.await;
+        })
+        .await;
     }
 
     #[rstest]
@@ -551,44 +607,10 @@ mod tests {
         match timeout(Duration::from_secs(30), drained_notified).await {
             Ok(_) => println!("Worker drained notification received successfully"),
             Err(_) => {
-                // Provide diagnostic information for debugging
-                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
-                    .map(|entries| entries.count())
-                    .unwrap_or(0);
-                let server_requests = server.received_requests().await.unwrap_or_default().len();
-                eprintln!("Timeout waiting for worker drained notification after 30 seconds");
-                eprintln!("Queue directory contains {} files", queue_files);
-                eprintln!("Mock server received {} requests", server_requests);
-                // CRITICAL: Investigation of queue cleanup failure
-                eprintln!("\u{1F50D} QUEUE CLEANUP INVESTIGATION:");
-                eprintln!("   Expected: 0 files (1 request sent, 1 processed successfully)");
-                eprintln!("   Actual: {} files remain", queue_files);
-                eprintln!("   Server requests: {}", server_requests);
-
-                if let Ok(entries) = stdfs::read_dir(&ctx.cfg.queue_path) {
-                    eprintln!("\u{1F4C1} Remaining queue files:");
-                    for (i, entry) in entries.enumerate() {
-                        if let Ok(entry) = entry {
-                            let name = entry.file_name();
-                            eprintln!("   {}. {}", i + 1, name.to_string_lossy());
-
-                            // Check file size and modification time
-                            if let Ok(metadata) = entry.metadata() {
-                                eprintln!("      Size: {} bytes", metadata.len());
-                                if let Ok(modified) = metadata.modified() {
-                                    if let Ok(elapsed) = modified.elapsed() {
-                                        eprintln!("      Age: {:.1}s ago", elapsed.as_secs_f32());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                panic!(
-                    "worker drained: QUEUE CLEANUP FAILURE - {} files remain after successful processing (expected 0)",
-                    queue_files
-                );
+                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
+                eprintln!("Timeout waiting for worker drained notification after 30 seconds",);
+                eprintln!("{}", diagnostics);
+                panic!("worker drained: QUEUE CLEANUP FAILURE");
             }
         }
         shutdown_tx.send(()).expect("send shutdown");
@@ -598,13 +620,9 @@ mod tests {
                 println!("\u{2713} Worker task completed successfully");
             }
             Err(_) => {
-                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
-                    .map(|entries| entries.count())
-                    .unwrap_or(0);
-                eprintln!(
-                    "\u{274C} Worker join timeout after 30s - {} queue files remain",
-                    queue_files
-                );
+                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
+                eprintln!("\u{274C} Worker join timeout after 30s");
+                eprintln!("{}", diagnostics);
                 panic!("join worker: timeout in success test after 30s");
             }
         }
@@ -641,7 +659,7 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        timeout(Duration::from_secs(15), enqueued_notified)
+        let _ = timeout(Duration::from_secs(15), enqueued_notified)
             .await
             .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
@@ -651,19 +669,16 @@ mod tests {
                 println!("\u{2713} Worker task completed with error handling");
             }
             Err(_) => {
-                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
-                    .map(|entries| entries.count())
-                    .unwrap_or(0);
-                eprintln!(
-                    "\u{274C} Worker join timeout after 45s - {} queue files remain",
-                    queue_files
-                );
+                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 1).await;
+                eprintln!("\u{274C} Worker join timeout after 45s");
+                eprintln!("{}", diagnostics);
                 panic!("join worker: timeout in error test after 45s");
             }
         }
-        assert!(
-            server.received_requests().await.expect("requests").len() >= 1,
-            "worker should attempt the request",
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            1,
+            "worker should attempt the request exactly once before shutdown",
         );
         assert!(
             stdfs::read_dir(&ctx.cfg.queue_path)

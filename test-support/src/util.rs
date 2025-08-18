@@ -87,7 +87,7 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    timeout(timeout_duration, async {
+    let result = timeout(timeout_duration, async {
         if predicate().await {
             return;
         }
@@ -100,6 +100,7 @@ where
             }
         }
     })
-    .await
-    .is_ok()
+    .await;
+
+    result.is_ok()
 }
