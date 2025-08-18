@@ -894,6 +894,19 @@ At a high level, the daemon:
 - starts the worker with [`run_worker`]
 - awaits either task and then signals shutdown
 
+The following snippet illustrates the shutdown sequence:
+
+```rust
+let _ = shutdown_tx.send(());
+
+// Gracefully await both tasks with a timeout
+let _ = tokio::time::timeout(Duration::from_secs(10), async {
+    let _ = listener_task.await;
+    let _ = worker_task.await;
+})
+.await;
+```
+
 Refer to [`main`](../crates/comenqd/src/daemon.rs) for the canonical
 implementation.
 
