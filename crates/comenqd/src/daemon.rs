@@ -559,19 +559,55 @@ mod tests {
                 eprintln!("Timeout waiting for worker drained notification after 30 seconds");
                 eprintln!("Queue directory contains {} files", queue_files);
                 eprintln!("Mock server received {} requests", server_requests);
+                // CRITICAL: Investigation of queue cleanup failure
+                eprintln!("\u{1F50D} QUEUE CLEANUP INVESTIGATION:");
+                eprintln!("   Expected: 0 files (1 request sent, 1 processed successfully)");
+                eprintln!("   Actual: {} files remain", queue_files);
+                eprintln!("   Server requests: {}", server_requests);
+
+                if let Ok(entries) = stdfs::read_dir(&ctx.cfg.queue_path) {
+                    eprintln!("\u{1F4C1} Remaining queue files:");
+                    for (i, entry) in entries.enumerate() {
+                        if let Ok(entry) = entry {
+                            let name = entry.file_name();
+                            eprintln!("   {}. {}", i + 1, name.to_string_lossy());
+
+                            // Check file size and modification time
+                            if let Ok(metadata) = entry.metadata() {
+                                eprintln!("      Size: {} bytes", metadata.len());
+                                if let Ok(modified) = metadata.modified() {
+                                    if let Ok(elapsed) = modified.elapsed() {
+                                        eprintln!("      Age: {:.1}s ago", elapsed.as_secs_f32());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 panic!(
-                    "worker drained: timeout - worker may not be triggering drained hook correctly"
+                    "worker drained: QUEUE CLEANUP FAILURE - {} files remain after successful processing (expected 0)",
+                    queue_files
                 );
             }
         }
         shutdown_tx.send(()).expect("send shutdown");
-        // The join handle returns `()` on success. We explicitly discard this
-        // to acknowledge the timeout `Result` and silence the `must_use` lint
-        // under coverage instrumentation.
-        let _ = timeout(Duration::from_secs(5), h)
-            .await
-            .expect("join worker")
-            .expect("worker result");
+        match timeout(Duration::from_secs(30), h).await {
+            Ok(join_result) => {
+                join_result.expect("join worker").expect("worker result");
+                println!("\u{2713} Worker task completed successfully");
+            }
+            Err(_) => {
+                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
+                    .map(|entries| entries.count())
+                    .unwrap_or(0);
+                eprintln!(
+                    "\u{274C} Worker join timeout after 30s - {} queue files remain",
+                    queue_files
+                );
+                panic!("join worker: timeout in success test after 30s");
+            }
+        }
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         assert_eq!(
             stdfs::read_dir(&ctx.cfg.queue_path)
@@ -609,13 +645,22 @@ mod tests {
             .await
             .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        // Explicitly drop the join result to acknowledge the timeout `Result`
-        // and avoid a `must_use` warning when coverage instrumentation is
-        // enabled.
-        let _ = timeout(Duration::from_secs(15), h)
-            .await
-            .expect("join worker")
-            .expect("worker result");
+        match timeout(Duration::from_secs(45), h).await {
+            Ok(join_result) => {
+                join_result.expect("join worker").expect("worker result");
+                println!("\u{2713} Worker task completed with error handling");
+            }
+            Err(_) => {
+                let queue_files = stdfs::read_dir(&ctx.cfg.queue_path)
+                    .map(|entries| entries.count())
+                    .unwrap_or(0);
+                eprintln!(
+                    "\u{274C} Worker join timeout after 45s - {} queue files remain",
+                    queue_files
+                );
+                panic!("join worker: timeout in error test after 45s");
+            }
+        }
         assert!(
             server.received_requests().await.expect("requests").len() >= 1,
             "worker should attempt the request",
