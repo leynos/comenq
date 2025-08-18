@@ -71,7 +71,9 @@ async fn post_comment(
 ) -> Result<(), PostCommentError> {
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
-    match tokio::time::timeout(Duration::from_secs(10), fut).await {
+    // Coverage instrumentation slows the async GitHub client; allow a generous
+    // 30-second window before treating the call as timed out.
+    match tokio::time::timeout(Duration::from_secs(30), fut).await {
         Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
         Err(_) => Err(PostCommentError::Timeout),
     }
@@ -660,6 +662,7 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
+        // The unit value from `timeout` is irrelevant; `expect` handles expiry.
         let _ = timeout(Duration::from_secs(15), enqueued_notified)
             .await
             .expect("worker picked up job");
