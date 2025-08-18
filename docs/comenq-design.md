@@ -885,122 +885,17 @@ async fn main() {
 The `crates/comenqd/Cargo.toml` would list the workspace dependencies. The
 daemon source is more complex, integrating all components.
 
-```rust
-// crates/comenqd/src/main.rs
-use anyhow::Result;
-use clap::Parser;
-use octocrab::Octocrab;
-use serde::Deserialize;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
-use yaque::{channel, Receiver, Sender};
-use comenq_lib::CommentRequest;
+At a high level, the daemon:
 
-#
-#
-struct Args {
-    #[arg(short, long, value_name = "FILE", default_value = "/etc/comenqd/config.toml")]
-    config: PathBuf,
-}
+- loads configuration and initialises logging
+- spawns a Unix-socket listener for incoming requests
+- constructs a [`WorkerControl`] with a shutdown channel and optional test
+  hooks
+- starts the worker with [`run_worker`]
+- awaits either task and then signals shutdown
 
-#
-struct Config {
-    github_token: String,
-    #[serde(default = "default_socket_path")]
-    socket_path: PathBuf,
-    #[serde(default = "default_queue_path")]
-    queue_path: PathBuf,
-    #[serde(default = "default_log_level")]
-    log_level: String,
-    #[serde(default = "default_cooldown")]
-    cooldown_period_seconds: u64,
-}
-
-fn default_socket_path() -> PathBuf { PathBuf::from("/run/comenq/comenq.sock") }
-fn default_queue_path() -> PathBuf { PathBuf::from("/var/lib/comenq/queue") }
-fn default_log_level() -> String { "info".to_string() }
-fn default_cooldown() -> u64 { 960 }
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-    let config_str = fs::read_to_string(args.config)?;
-    let config: Config = toml::from_str(&config_str)?;
-
-    tracing_subscriber::fmt()
-       .with_env_filter(&config.log_level)
-       .init();
-
-    info!("Starting comenqd daemon...");
-    info!("Configuration loaded. Cooldown period: {}s", config.cooldown_period_seconds);
-
-    let octocrab = Arc::new(Octocrab::builder().personal_token(config.github_token.clone()).build()?);
-    let (tx, rx) = channel(&config.queue_path)?;
-    let config = Arc::new(config);
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let listener_task =
-        tokio::spawn(run_listener(config.clone(), tx, shutdown_rx.clone()));
-    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
-    let worker_task =
-        tokio::spawn(run_worker(config.clone(), rx, octocrab, control));
-
-    tokio::select! {
-        res = listener_task => {
-            error!("Listener task exited unexpectedly: {:?}", res);
-        }
-        res = worker_task => {
-            error!("Worker task exited unexpectedly: {:?}", res);
-        }
-    }
-
-    let _ = shutdown_tx.send(());
-
-    Ok(())
-}
-
-async fn run_listener(config: Arc<Config>, tx: Sender<CommentRequest>) -> Result<()> {
-    if fs::metadata(&config.socket_path).is_ok() {
-        info!("Removing stale socket file at {:?}", &config.socket_path);
-        fs::remove_file(&config.socket_path)?;
-    }
-
-    let listener = UnixListener::bind(&config.socket_path)?;
-    fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o660))?;
-    info!("Listening for clients on {:?}", &config.socket_path);
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, tx_clone).await {
-                        warn!("Error handling client: {}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                error!("Failed to accept client connection: {}", e);
-            }
-        }
-    }
-}
-
-async fn handle_client(mut stream: UnixStream, tx: Sender<CommentRequest>) -> Result<()> {
-    let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer).await?;
-    let request: CommentRequest = serde_json::from_slice(&buffer)?;
-    info!("Received request for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
-    tx.send(request).await?;
-    Ok(())
-}
+Refer to [`main`](../crates/comenqd/src/daemon.rs) for the canonical
+implementation.
 
 The worker task itself is implemented in
 [`run_worker`](../crates/comenqd/src/daemon.rs), which accepts a
