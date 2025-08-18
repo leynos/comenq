@@ -27,11 +27,24 @@ pub struct WorkerWorld {
     cfg: Option<Arc<Config>>,
     receiver: Option<yaque::Receiver>,
     server: Option<MockServer>,
+    shutdown: Option<watch::Sender<()>>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for WorkerWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkerWorld").finish()
+    }
+}
+
+impl Drop for WorkerWorld {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -102,8 +115,10 @@ async fn worker_runs(world: &mut WorkerWorld) {
         let _ = run_worker(cfg, rx, octocrab, control).await;
     });
     sleep(Duration::from_millis(100)).await;
-    let _ = shutdown_tx.send(());
-    let _ = handle.await;
+
+    // Store handles in world for proper cleanup
+    world.shutdown = Some(shutdown_tx);
+    world.handle = Some(handle);
 }
 
 #[then("the comment is posted")]
