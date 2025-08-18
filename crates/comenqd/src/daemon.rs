@@ -385,6 +385,21 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
 
+    #[cfg(test)]
+    #[allow(unexpected_cfgs)]
+    fn is_coverage_run() -> bool {
+        // Detect if running under coverage instrumentation
+        std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
+            || std::env::var("RUSTFLAGS").map_or(false, |flags| flags.contains("coverage"))
+            || cfg!(coverage_nightly)
+            || cfg!(coverage)
+    }
+
+    #[cfg(test)]
+    fn coverage_timeout_multiplier() -> u32 {
+        if is_coverage_run() { 10 } else { 1 }
+    }
+
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         for _ in 0..tries {
             if path.exists() {
@@ -607,26 +622,42 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        match timeout(Duration::from_secs(30), drained_notified).await {
+        let drain_timeout = Duration::from_secs(30 * coverage_timeout_multiplier() as u64);
+        match timeout(drain_timeout, drained_notified).await {
             Ok(_) => println!("Worker drained notification received successfully"),
             Err(_) => {
                 let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-                eprintln!("Timeout waiting for worker drained notification after 30 seconds",);
+                eprintln!(
+                    "Timeout waiting for worker drained notification after {} seconds",
+                    drain_timeout.as_secs()
+                );
+                eprintln!(
+                    "Coverage mode: {}, Timeout used: {}s",
+                    is_coverage_run(),
+                    30 * coverage_timeout_multiplier()
+                );
                 eprintln!("{}", diagnostics);
                 panic!("worker drained: QUEUE CLEANUP FAILURE");
             }
         }
         shutdown_tx.send(()).expect("send shutdown");
-        match timeout(Duration::from_secs(30), h).await {
+        let join_timeout = Duration::from_secs(30 * coverage_timeout_multiplier() as u64);
+        match timeout(join_timeout, h).await {
             Ok(join_result) => {
                 join_result.expect("join worker").expect("worker result");
                 println!("\u{2713} Worker task completed successfully");
             }
             Err(_) => {
                 let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-                eprintln!("\u{274C} Worker join timeout after 30s");
+                eprintln!(
+                    "\u{274C} Worker join timeout after {}s",
+                    join_timeout.as_secs()
+                );
                 eprintln!("{}", diagnostics);
-                panic!("join worker: timeout in success test after 30s");
+                panic!(
+                    "join worker: timeout in success test after {}s",
+                    join_timeout.as_secs()
+                );
             }
         }
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
@@ -667,16 +698,23 @@ mod tests {
             .await
             .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        match timeout(Duration::from_secs(45), h).await {
+        let join_timeout = Duration::from_secs(45 * coverage_timeout_multiplier() as u64);
+        match timeout(join_timeout, h).await {
             Ok(join_result) => {
                 join_result.expect("join worker").expect("worker result");
                 println!("\u{2713} Worker task completed with error handling");
             }
             Err(_) => {
                 let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 1).await;
-                eprintln!("\u{274C} Worker join timeout after 45s");
+                eprintln!(
+                    "\u{274C} Worker join timeout after {}s",
+                    join_timeout.as_secs()
+                );
                 eprintln!("{}", diagnostics);
-                panic!("join worker: timeout in error test after 45s");
+                panic!(
+                    "join worker: timeout in error test after {}s",
+                    join_timeout.as_secs()
+                );
             }
         }
         assert_eq!(
