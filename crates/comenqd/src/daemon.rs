@@ -60,10 +60,10 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Attempts to post a comment to a GitHub pull request, enforcing a 10-second timeout.
+/// Attempts to post a comment to a GitHub pull request, enforcing a 30-second timeout.
 ///
 /// Returns `Ok(())` if the comment is successfully posted. If the GitHub API returns an error,
-/// returns `PostCommentError::Api`. If the operation does not complete within 10 seconds,
+/// returns `PostCommentError::Api`. If the operation does not complete within 30 seconds,
 /// returns `PostCommentError::Timeout`.
 async fn post_comment(
     octocrab: &Octocrab,
@@ -131,21 +131,29 @@ pub async fn run(config: Config) -> Result<()> {
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx.clone()));
+    let mut listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx.clone()));
     let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
-    let worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab, control));
+    let mut worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab, control));
 
+    // Await either task; on completion, trigger a coordinated shutdown.
     tokio::select! {
-        res = listener => match res {
+        res = &mut listener => match res {
             Ok(inner) => inner?,
             Err(e) => return Err(e.into()),
         },
-        res = worker => match res {
+        res = &mut worker => match res {
             Ok(inner) => inner?,
             Err(e) => return Err(e.into()),
         },
     }
     let _ = shutdown_tx.send(());
+    // Gracefully await both tasks with a timeout; ignore outcomes here since shutdown is in progress.
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        let _ = listener.await;
+        let _ = worker.await;
+    })
+    .await;
+    // Ensure the queue writer also terminates.
     writer.await??;
     Ok(())
 }
@@ -298,7 +306,7 @@ impl WorkerControl {
 ///
 /// # Errors
 ///
-/// Returns errors from queue operations, deserialisation, or GitHub client failures.
+/// Returns errors from queue operations, deserialization, or GitHub client failures.
 ///
 /// # Examples
 ///
@@ -387,7 +395,10 @@ mod tests {
     const TEST_COOLDOWN_SECONDS: u64 = 60;
 
     #[cfg(test)]
-    #[allow(unexpected_cfgs)]
+    #[expect(
+        unexpected_cfgs,
+        reason = "unit tests: detect non-standard coverage cfg flags across environments"
+    )]
     fn is_coverage_run() -> bool {
         // Detect if running under coverage instrumentation
         std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
