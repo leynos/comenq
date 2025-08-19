@@ -133,7 +133,11 @@ pub async fn run(config: Config) -> Result<()> {
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let mut listener = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx.clone()));
+    let mut listener = tokio::spawn(run_listener(
+        cfg.clone(),
+        client_tx.clone(),
+        shutdown_rx.clone(),
+    ));
     let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
     let mut worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab, control));
 
@@ -149,14 +153,15 @@ pub async fn run(config: Config) -> Result<()> {
         },
     }
     let _ = shutdown_tx.send(());
-    // Gracefully await both tasks with a timeout; ignore outcomes here since shutdown is in progress.
+    // Close the client sender so the queue writer can exit cleanly.
+    drop(client_tx);
+    // Gracefully await all tasks with a timeout; ignore outcomes here since shutdown is in progress.
     let _ = tokio::time::timeout(Duration::from_secs(10), async {
         let _ = listener.await;
         let _ = worker.await;
+        let _ = writer.await;
     })
     .await;
-    // Ensure the queue writer also terminates.
-    writer.await??;
     Ok(())
 }
 
