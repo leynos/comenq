@@ -403,18 +403,47 @@ pub async fn run_worker(
 
 #[cfg(test)]
 mod smart_timeouts {
+    //! Adaptive timeout utilities for test execution.
+    //!
+    //! Provides configurable timeout calculation that scales based on test
+    //! complexity, build configuration (debug/release), coverage
+    //! instrumentation, and CI environment. Enforces minimum and maximum
+    //! bounds to ensure reasonable timeout values across different execution
+    //! contexts.
+
     use std::time::Duration;
 
+    /// Lower bound applied to calculated timeouts to avoid flakiness from tiny values.
+    pub const MIN_TIMEOUT_SECS: u64 = 10;
+    /// Upper bound to prevent tests from hanging indefinitely.
+    pub const MAX_TIMEOUT_SECS: u64 = 600;
+    /// Multiplier applied when running in debug mode where builds are slower.
+    pub const DEBUG_MULTIPLIER: u64 = 2;
+    /// Multiplier applied under coverage instrumentation.
+    pub const COVERAGE_MULTIPLIER: u64 = 5;
+    /// Multiplier when executing in CI environments which may be resource constrained.
+    pub const CI_MULTIPLIER: u64 = 2;
+    /// Percentage multipliers applied to the calculated timeout for successive
+    /// retry attempts. Adjust to tune the backoff strategy.
+    pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
+
+    /// Test complexity levels used to scale timeout durations.
     #[derive(Debug, Clone, Copy)]
     pub enum TestComplexity {
+        /// Basic operations with minimal computational overhead.
         Simple,
+        /// Standard operations with moderate processing requirements.
         Moderate,
+        /// Complex operations involving multiple steps or heavy computation.
         Complex,
     }
 
+    /// Configuration for calculating adaptive test timeouts.
     #[derive(Debug, Clone, Copy)]
     pub struct TimeoutConfig {
+        /// Base timeout in seconds before scaling.
         base_seconds: u64,
+        /// Complexity of the operation being timed.
         complexity: TestComplexity,
     }
 
@@ -437,27 +466,30 @@ mod smart_timeouts {
 
             #[cfg(debug_assertions)]
             {
-                timeout *= 2;
+                timeout *= DEBUG_MULTIPLIER;
             }
 
             #[cfg(any(coverage, coverage_nightly))]
             {
-                timeout *= 5;
+                timeout *= COVERAGE_MULTIPLIER;
             }
 
             if std::env::var("CI").is_ok() {
-                timeout *= 2;
+                timeout *= CI_MULTIPLIER;
             }
 
-            timeout = timeout.max(10);
-            timeout = timeout.min(600);
+            timeout = timeout.max(MIN_TIMEOUT_SECS);
+            timeout = timeout.min(MAX_TIMEOUT_SECS);
 
             Duration::from_secs(timeout)
         }
 
         pub fn with_progressive_retry(&self) -> Vec<Duration> {
-            let base = self.calculate_timeout();
-            vec![base / 2, base, base + base / 2]
+            let base = self.calculate_timeout().as_secs();
+            PROGRESSIVE_RETRY_PERCENTS
+                .iter()
+                .map(|p| Duration::from_secs(base * p / 100))
+                .collect()
         }
     }
 
@@ -465,16 +497,53 @@ mod smart_timeouts {
         TimeoutConfig::new(15, TestComplexity::Moderate);
     pub const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
     pub const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::env;
+
+        #[test]
+        fn calculate_timeout_caps_bounds() {
+            env::remove_var("CI");
+            let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
+            assert_eq!(
+                cfg.calculate_timeout(),
+                Duration::from_secs(MIN_TIMEOUT_SECS)
+            );
+
+            env::set_var("CI", "1");
+            let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
+            assert_eq!(
+                cfg.calculate_timeout(),
+                Duration::from_secs(MAX_TIMEOUT_SECS)
+            );
+            env::remove_var("CI");
+        }
+
+        #[test]
+        fn with_progressive_retry_scales_base() {
+            let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+            let expected = vec![
+                Duration::from_secs(5),
+                Duration::from_secs(10),
+                Duration::from_secs(15),
+            ];
+            assert_eq!(cfg.with_progressive_retry(), expected);
+        }
+    }
 }
 
 #[cfg(test)]
-async fn timeout_with_retries<F, T>(
+async fn timeout_with_retries<F, Fut, T>(
     config: smart_timeouts::TimeoutConfig,
     operation_name: &str,
     mut operation: F,
 ) -> Result<T, String>
 where
-    F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send>>,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>> + Send,
+    T: Send,
 {
     let timeouts = config.with_progressive_retry();
 
@@ -497,21 +566,23 @@ where
                 return Ok(result);
             }
             Ok(Err(e)) => {
-                eprintln!(
+                tracing::error!(
                     "❌ {} failed on attempt {}: {}",
-                    operation_name, attempt_num, e
+                    operation_name,
+                    attempt_num,
+                    e
                 );
                 return Err(e);
             }
             Err(_) => {
                 if attempt_num < timeouts.len() {
-                    eprintln!(
+                    tracing::warn!(
                         "⏳ {} timed out after {}s, retrying...",
                         operation_name,
                         timeout_duration.as_secs()
                     );
                 } else {
-                    eprintln!(
+                    tracing::error!(
                         "💥 {} failed after {} attempts, final timeout: {}s",
                         operation_name,
                         timeouts.len(),
@@ -527,6 +598,36 @@ where
     }
 
     Err(format!("{} exhausted all retry attempts", operation_name))
+}
+
+#[cfg(test)]
+mod retry_helper_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_after_timeout_then_succeeds() {
+        let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
+        let mut attempts = 0;
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", || {
+            attempts += 1;
+            async move {
+                if attempts == 1 {
+                    sleep(Duration::from_secs(6)).await;
+                }
+                Ok(attempts)
+            }
+        }));
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        let result = handle.await.expect("join").expect("timeout_with_retries");
+        assert_eq!(result, 2);
+        assert_eq!(attempts, 2);
+    }
 }
 
 #[cfg(test)]
@@ -751,13 +852,27 @@ mod tests {
             "listener and writer join",
             || {
                 if let Some((listener_task, writer)) = join_handles.take() {
-                    Box::pin(async move {
-                        let _ = listener_task.await;
-                        let _ = writer.await;
+                    async move {
+                        let listener_res = listener_task.await;
+                        let writer_res = writer.await;
+                        if let Err(e) = &listener_res {
+                            return Err(if e.is_panic() {
+                                "listener task panicked".to_string()
+                            } else {
+                                format!("listener task failed: {e}")
+                            });
+                        }
+                        if let Err(e) = &writer_res {
+                            return Err(if e.is_panic() {
+                                "writer task panicked".to_string()
+                            } else {
+                                format!("writer task failed: {e}")
+                            });
+                        }
                         Ok(())
-                    })
+                    }
                 } else {
-                    Box::pin(async { Err("join handles consumed".to_string()) })
+                    async { Err("join handles consumed".to_string()) }
                 }
             },
         )
@@ -793,10 +908,10 @@ mod tests {
             "worker drained notification",
             || {
                 let drained = Arc::clone(&drained_for_wait);
-                Box::pin(async move {
+                async move {
                     drained.notified().await;
                     Ok(())
-                })
+                }
             },
         )
         .await
@@ -810,14 +925,21 @@ mod tests {
         let mut join_handle = Some(h);
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker join", || {
             if let Some(h) = join_handle.take() {
-                Box::pin(async move {
-                    h.await
-                        .map_err(|e| e.to_string())?
-                        .map_err(|e| e.to_string())?;
-                    Ok(())
-                })
+                async move {
+                    match h.await {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(e) => {
+                            if e.is_panic() {
+                                Err("worker task panicked".to_string())
+                            } else {
+                                Err(format!("worker task failed: {e}"))
+                            }
+                        }
+                    }
+                }
             } else {
-                Box::pin(async { Err("join handle consumed".to_string()) })
+                async { Err("join handle consumed".to_string()) }
             }
         })
         .await
@@ -871,10 +993,10 @@ mod tests {
 
         timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker enqueued", || {
             let enqueued = Arc::clone(&enqueued_for_wait);
-            Box::pin(async move {
+            async move {
                 enqueued.notified().await;
                 Ok(())
-            })
+            }
         })
         .await
         .expect("worker picked up job");
@@ -882,14 +1004,21 @@ mod tests {
         let mut join_handle = Some(h);
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_ERROR, "worker join", || {
             if let Some(h) = join_handle.take() {
-                Box::pin(async move {
-                    h.await
-                        .map_err(|e| e.to_string())?
-                        .map_err(|e| e.to_string())?;
-                    Ok(())
-                })
+                async move {
+                    match h.await {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(e) => {
+                            if e.is_panic() {
+                                Err("worker task panicked".to_string())
+                            } else {
+                                Err(format!("worker task failed: {e}"))
+                            }
+                        }
+                    }
+                }
             } else {
-                Box::pin(async { Err("join handle consumed".to_string()) })
+                async { Err("join handle consumed".to_string()) }
             }
         })
         .await
