@@ -648,14 +648,15 @@ mod tests {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
+        let drained_for_wait = Arc::clone(&drained);
+        let drained_notified = drained_for_wait.notified();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
-        let drained_notified = drained.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
                 enqueued: None,
                 idle: None,
-                drained: Some(drained.clone()),
+                drained: Some(drained),
             },
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));

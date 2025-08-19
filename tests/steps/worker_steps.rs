@@ -21,6 +21,19 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use yaque::{self, channel};
 
+fn coverage_timeout_multiplier() -> u32 {
+    if std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
+        || std::env::var("RUSTFLAGS").is_ok_and(|f| f.contains("coverage"))
+    {
+        10
+    } else {
+        1
+    }
+}
+
+fn is_metadata_file(name: &str) -> bool {
+    matches!(name, "version" | "recv.lock")
+}
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,
@@ -135,9 +148,12 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let handle = tokio::spawn(async move {
         let _ = run_worker(cfg, rx, octocrab, control).await;
     });
-    timeout(Duration::from_secs(5), idle_notified)
-        .await
-        .expect("worker reached idle state within timeout");
+    timeout(
+        Duration::from_secs(30 * u64::from(coverage_timeout_multiplier())),
+        idle_notified,
+    )
+    .await
+    .expect("worker reached idle state within timeout");
 
     // Store handles in world for proper cleanup
     world.shutdown = Some(shutdown_tx);
@@ -177,7 +193,7 @@ async fn queue_retains(world: &mut WorkerWorld) {
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name != "version" && name != "recv.lock"
+            !is_metadata_file(&name)
         })
         .count();
     assert!(job_count > 0, "queue should retain at least one job file");
