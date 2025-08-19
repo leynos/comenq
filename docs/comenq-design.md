@@ -375,6 +375,10 @@ requests even while the worker task is in its long sleep phase. A request can
 be accepted and enqueued in milliseconds, while the worker task independently
 processes the queue at its own deliberate pace.
 
+Both tasks are supervised. If either exits unexpectedly the daemon logs the
+failure and restarts the task, preserving service availability without relying
+on an external process supervisor.
+
 ### 3.2. The Persistent Job Queue with `yaque`
 
 A core requirement for the daemon is fault tolerance. If the daemon or the
