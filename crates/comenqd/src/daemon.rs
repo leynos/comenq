@@ -332,7 +332,8 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
-    let WorkerControl { hooks, shutdown } = &mut control;
+    let hooks = &mut control.hooks;
+    let shutdown = &mut control.shutdown;
     loop {
         let guard = tokio::select! {
             res = rx.recv() => res?,
@@ -696,11 +697,12 @@ mod tests {
         let server = Arc::new(ctx.server);
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
-        let enqueued_notified = enqueued.notified();
+        let enqueued_for_wait = Arc::clone(&enqueued);
+        let enqueued_notified = enqueued_for_wait.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
-                enqueued: Some(enqueued.clone()),
+                enqueued: Some(enqueued),
                 idle: None,
                 drained: None,
             },
@@ -708,9 +710,12 @@ mod tests {
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
         // The unit value from `timeout` is irrelevant; `expect` handles expiry.
-        let _ = timeout(Duration::from_secs(15), enqueued_notified)
-            .await
-            .expect("worker picked up job");
+        let _ = timeout(
+            Duration::from_secs(30 * coverage_timeout_multiplier() as u64),
+            enqueued_notified,
+        )
+        .await
+        .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
         let join_timeout = Duration::from_secs(45 * coverage_timeout_multiplier() as u64);
         match timeout(join_timeout, h).await {

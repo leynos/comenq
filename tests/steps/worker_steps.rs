@@ -48,6 +48,17 @@ impl Drop for WorkerWorld {
     }
 }
 
+impl WorkerWorld {
+    async fn shutdown_and_join(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = timeout(Duration::from_secs(5), handle).await;
+        }
+    }
+}
+
 #[given("a queued comment request")]
 #[expect(
     clippy::expect_used,
@@ -111,12 +122,13 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let octocrab = octocrab_for(server);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let idle = Arc::new(Notify::new());
-    let idle_notified = idle.notified();
+    let idle_for_wait = Arc::clone(&idle);
+    let idle_notified = idle_for_wait.notified();
     let control = WorkerControl::new(
         shutdown_rx,
         WorkerHooks {
             enqueued: None,
-            idle: Some(idle.clone()),
+            idle: Some(idle),
             drained: None,
         },
     );
@@ -144,8 +156,9 @@ async fn comment_posted(world: &mut WorkerWorld) {
             .received_requests()
             .await
             .expect("inbound requests should be recorded")
-            .is_empty()
+            .is_empty(),
     );
+    world.shutdown_and_join().await;
 }
 
 #[then("the queue retains the job")]
@@ -153,7 +166,7 @@ async fn comment_posted(world: &mut WorkerWorld) {
     clippy::expect_used,
     reason = "test harness: expect fs state in assertion"
 )]
-fn queue_retains(world: &mut WorkerWorld) {
+async fn queue_retains(world: &mut WorkerWorld) {
     let cfg = world
         .cfg
         .as_ref()
@@ -162,6 +175,7 @@ fn queue_retains(world: &mut WorkerWorld) {
         std::fs::read_dir(&cfg.queue_path)
             .expect("queue directory should be readable")
             .count()
-            > 0
+            > 0,
     );
+    world.shutdown_and_join().await;
 }

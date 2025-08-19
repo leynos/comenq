@@ -887,28 +887,16 @@ daemon source is more complex, integrating all components.
 
 At a high level, the daemon:
 
-- loads configuration and initialises logging
+- loads configuration and initializes logging
 - spawns a Unix-socket listener for incoming requests
 - constructs a [`WorkerControl`] with a shutdown channel and optional test
   hooks
 - starts the worker with [`run_worker`]
-- awaits either task and then signals shutdown
-
-The following snippet illustrates the shutdown sequence:
-
-```rust
-let _ = shutdown_tx.send(());
-
-// Gracefully await both tasks with a timeout
-let _ = tokio::time::timeout(Duration::from_secs(10), async {
-    let _ = listener_task.await;
-    let _ = worker_task.await;
-})
-.await;
-```
+- awaits one task, signals shutdown, and then awaits both tasks to terminate
+   within a bounded timeout for a clean, deterministic shutdown
 
 Refer to [`daemon::run`](../crates/comenqd/src/daemon.rs) for the canonical
-implementation.
+shutdown sequence, which signals both tasks and awaits them with a timeout.
 
 The worker task itself is implemented in
 [`run_worker`](../crates/comenqd/src/daemon.rs), which accepts a
