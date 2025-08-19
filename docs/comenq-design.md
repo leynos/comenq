@@ -888,19 +888,20 @@ daemon source is more complex, integrating all components.
 At a high level, the daemon:
 
 - loads configuration and initializes logging
-- spawns a Unix-socket listener for incoming requests
-- constructs a [`WorkerControl`] with a shutdown channel and optional test
-  hooks
-- starts the worker with [`run_worker`]
+- spawns a Unix socket listener for incoming requests
+- constructs a [WorkerControl](../crates/comenqd/src/daemon.rs#L296) with a
+  shutdown channel and optional test hooks
+- starts the worker with [run_worker](../crates/comenqd/src/daemon.rs#L336)
 - awaits one task, signals shutdown, and then awaits both tasks to terminate
    within a bounded timeout for a clean, deterministic shutdown
 
-Refer to [`daemon::run`](../crates/comenqd/src/daemon.rs) for the canonical
+Refer to [daemon::run](../crates/comenqd/src/daemon.rs#L127) for the canonical
 shutdown sequence, which signals both tasks and awaits them with a timeout.
 
 The worker task itself is implemented in
-[`run_worker`](../crates/comenqd/src/daemon.rs), which accepts a
-[`WorkerControl`] struct bundling shutdown and optional test hooks.
+[run_worker](../crates/comenqd/src/daemon.rs#L336), which accepts a
+[WorkerControl](../crates/comenqd/src/daemon.rs#L296) struct bundling shutdown
+and optional test hooks.
 
 The sequence diagram in Figure&nbsp;1 illustrates how the worker interacts with
 the queue, shutdown channel, and optional hooks.
@@ -919,20 +920,28 @@ sequenceDiagram
             Worker-->>Worker: break
         else Got request
             Worker->>WorkerHooks: (optional) enqueued.notify_waiters()
-            Worker->>WorkerHooks: (optional) idle.notify_waiters()
-            Worker->>WorkerHooks: (optional) drained.notify_waiters() if queue empty
-            Worker->>Worker: sleep or shutdown
+            Worker->>Worker: process and commit
+            alt Queue empty
+                Worker->>WorkerHooks: (optional) drained.notify_waiters()
+                Worker->>WorkerHooks: (optional) idle.notify_waiters()
+            else Queue not empty
+                Worker->>Worker: sleep or shutdown
+            end
         end
     end
 ```
 
-Figure&nbsp;1: Worker lifecycle interactions.
+Figure&nbsp;1: Worker lifecycle interactions. `WorkerHooks` rely on
+[`Notify`](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) with
+edge semantics, so tests must await notifications with explicit timeouts to
+avoid missed wakes. Always wait for notifications using a timeout pattern
+because the notifier may fire before the waiter starts listening.
 
 ### 5.6. Implementation Notes
 
 The repository initializes the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
+derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix socket
 listener and queue worker as described above. Structured logging is initialized
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
 environment variable. The queue directory is created asynchronously on start if
@@ -945,7 +954,7 @@ The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
 secondary rate limits.
 
-GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
+GitHub API calls are wrapped in `tokio::time::timeout` with a 30-second limit
 to ensure the worker does not block indefinitely if the network stalls.
 
 ## Works cited
