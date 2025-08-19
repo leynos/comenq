@@ -356,7 +356,7 @@ runtime to handle concurrent operations efficiently.
 ### 3.1. The Asynchronous Core and Task Structure
 
 The daemon's architecture is built on `tokio`'s cooperative multitasking model.
-Upon startup, the `main` function will initialise necessary resources
+Upon startup, the `main` function will initialize necessary resources
 (configuration, logger, queue) and then spawn two primary, independent
 asynchronous tasks that run concurrently for the lifetime of the daemon:
 
@@ -403,7 +403,7 @@ daemon's needs:
   queue. This "dead man's switch" mechanism provides a powerful "at-least-once"
   delivery guarantee, which is the cornerstone of the daemon's reliability.[^7]
 
-The queue will be initialised at a configurable path (e.g.,
+The queue will be initialized at a configurable path (e.g.,
 `/var/lib/comenq/queue`) and will store the `CommentRequest` struct defined in
 the shared library.
 
@@ -446,7 +446,7 @@ required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
-The `octocrab` client will be initialised once at daemon startup, using a
+The `octocrab` client will be initialized once at daemon startup, using a
 Personal Access Token (PAT) securely loaded from the configuration file.
 
 A critical detail for a successful implementation is using the correct GitHub
@@ -885,147 +885,64 @@ async fn main() {
 The `crates/comenqd/Cargo.toml` would list the workspace dependencies. The
 daemon source is more complex, integrating all components.
 
-```rust
-// crates/comenqd/src/main.rs
-use anyhow::Result;
-use clap::Parser;
-use octocrab::Octocrab;
-use serde::Deserialize;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
-use yaque::{channel, Receiver, Sender};
-use comenq_lib::CommentRequest;
+At a high level, the daemon:
 
-#
-#
-struct Args {
-    #[arg(short, long, value_name = "FILE", default_value = "/etc/comenqd/config.toml")]
-    config: PathBuf,
-}
+- loads configuration and initializes logging
+- spawns a Unix socket listener for incoming requests
+- constructs a [WorkerControl](../crates/comenqd/src/daemon.rs#L296) with a
+  shutdown channel and optional test hooks
+- starts the worker with [run_worker](../crates/comenqd/src/daemon.rs#L336)
+- awaits one task, signals shutdown, and then awaits both tasks to terminate
+   within a bounded timeout for a clean, deterministic shutdown
 
-#
-struct Config {
-    github_token: String,
-    #[serde(default = "default_socket_path")]
-    socket_path: PathBuf,
-    #[serde(default = "default_queue_path")]
-    queue_path: PathBuf,
-    #[serde(default = "default_log_level")]
-    log_level: String,
-    #[serde(default = "default_cooldown")]
-    cooldown_period_seconds: u64,
-}
+Refer to [daemon::run](../crates/comenqd/src/daemon.rs#L127) for the canonical
+shutdown sequence, which signals both tasks and awaits them with a timeout.
 
-fn default_socket_path() -> PathBuf { PathBuf::from("/run/comenq/comenq.sock") }
-fn default_queue_path() -> PathBuf { PathBuf::from("/var/lib/comenq/queue") }
-fn default_log_level() -> String { "info".to_string() }
-fn default_cooldown() -> u64 { 960 }
+The worker task itself is implemented in
+[run_worker](../crates/comenqd/src/daemon.rs#L336), which accepts a
+[WorkerControl](../crates/comenqd/src/daemon.rs#L296) struct bundling shutdown
+and optional test hooks.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-    let config_str = fs::read_to_string(args.config)?;
-    let config: Config = toml::from_str(&config_str)?;
+The sequence diagram in Figure&nbsp;1 illustrates how the worker interacts with
+the queue, shutdown channel, and optional hooks.
 
-    tracing_subscriber::fmt()
-       .with_env_filter(&config.log_level)
-       .init();
-
-    info!("Starting comenqd daemon...");
-    info!("Configuration loaded. Cooldown period: {}s", config.cooldown_period_seconds);
-
-    let octocrab = Arc::new(Octocrab::builder().personal_token(config.github_token.clone()).build()?);
-    let (tx, rx) = channel(&config.queue_path)?;
-    let config = Arc::new(config);
-
-    let listener_task = tokio::spawn(run_listener(config.clone(), tx));
-    let worker_task = tokio::spawn(run_worker(config.clone(), rx, octocrab));
-
-    tokio::select! {
-        res = listener_task => {
-            error!("Listener task exited unexpectedly: {:?}", res);
-        }
-        res = worker_task => {
-            error!("Worker task exited unexpectedly: {:?}", res);
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_listener(config: Arc<Config>, tx: Sender<CommentRequest>) -> Result<()> {
-    if fs::metadata(&config.socket_path).is_ok() {
-        info!("Removing stale socket file at {:?}", &config.socket_path);
-        fs::remove_file(&config.socket_path)?;
-    }
-
-    let listener = UnixListener::bind(&config.socket_path)?;
-    fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o660))?;
-    info!("Listening for clients on {:?}", &config.socket_path);
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, tx_clone).await {
-                        warn!("Error handling client: {}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                error!("Failed to accept client connection: {}", e);
-            }
-        }
-    }
-}
-
-async fn handle_client(mut stream: UnixStream, tx: Sender<CommentRequest>) -> Result<()> {
-    let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer).await?;
-    let request: CommentRequest = serde_json::from_slice(&buffer)?;
-    info!("Received request for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
-    tx.send(request).await?;
-    Ok(())
-}
-
-async fn run_worker(config: Arc<Config>, mut rx: Receiver<CommentRequest>, octocrab: Arc<Octocrab>) -> Result<()> {
-    info!("Worker task started. Waiting for jobs...");
-    loop {
-        let guard = rx.recv().await?;
-        let request = &*guard;
-        info!("Processing comment for PR #{}: {}/{}", request.pr_number, request.owner, request.repo);
-
-        match octocrab.issues(&request.owner, &request.repo).create_comment(request.pr_number, &request.body).await {
-            Ok(comment) => {
-                info!("Successfully posted comment: {}", comment.html_url);
-                guard.commit()?;
-            }
-            Err(e) => {
-                error!("Failed to post comment for PR #{}: {}. Requeuing.", request.pr_number, e);
-                // Guard is dropped, job is automatically requeued.
-            }
-        }
-
-        info!("Entering {}s cooldown period.", config.cooldown_period_seconds);
-        tokio::time::sleep(Duration::from_secs(config.cooldown_period_seconds)).await;
-    }
-}
+```mermaid
+sequenceDiagram
+    participant Worker
+    participant Queue
+    participant WatchChannel
+    participant WorkerHooks
+    loop Process queue
+        Worker->>Queue: rx.recv()
+        alt Shutdown signal
+            WatchChannel-->>Worker: shutdown.changed()
+            Worker->>WorkerHooks: (optional) drained.notify_waiters()
+            Worker-->>Worker: break
+        else Got request
+            Worker->>WorkerHooks: (optional) enqueued.notify_waiters()
+            Worker->>Worker: process and commit
+            alt Queue empty
+                Worker->>WorkerHooks: (optional) drained.notify_waiters()
+                Worker->>WorkerHooks: (optional) idle.notify_waiters()
+            else Queue not empty
+                Worker->>Worker: sleep or shutdown
+            end
+        end
+    end
 ```
+
+Figure&nbsp;1: Worker lifecycle interactions. `WorkerHooks` rely on
+[`Notify`](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) with
+edge semantics, so tests must await notifications with explicit timeouts to
+avoid missed wakes. Always wait for notifications using a timeout pattern
+because the notifier may fire before the waiter starts listening.
 
 ### 5.6. Implementation Notes
 
-The repository initialises the workspace with `comenq-lib` at the root and two
+The repository initializes the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
-listener and queue worker as described above. Structured logging is initialised
+derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix socket
+listener and queue worker as described above. Structured logging is initialized
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
 environment variable. The queue directory is created asynchronously on start if
 it does not already exist before `yaque` opens it. Incoming requests are
@@ -1037,7 +954,7 @@ The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
 secondary rate limits.
 
-GitHub API calls are wrapped in `tokio::time::timeout` with a 10-second limit
+GitHub API calls are wrapped in `tokio::time::timeout` with a 30-second limit
 to ensure the worker does not block indefinitely if the network stalls.
 
 ## Works cited

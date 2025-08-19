@@ -11,27 +11,64 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::run_worker;
+use comenqd::daemon::{WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
-use tokio::time::sleep;
+use tokio::sync::{Notify, watch};
+use tokio::time::timeout;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use yaque::{self, channel};
 
+fn coverage_timeout_multiplier() -> u32 {
+    if std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
+        || std::env::var("RUSTFLAGS").is_ok_and(|f| f.contains("coverage"))
+    {
+        10
+    } else {
+        1
+    }
+}
+
+fn is_metadata_file(name: &str) -> bool {
+    matches!(name, "version" | "recv.lock")
+}
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,
     cfg: Option<Arc<Config>>,
     receiver: Option<yaque::Receiver>,
     server: Option<MockServer>,
+    shutdown: Option<watch::Sender<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for WorkerWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkerWorld").finish()
+    }
+}
+
+impl Drop for WorkerWorld {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl WorkerWorld {
+    async fn shutdown_and_join(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = timeout(Duration::from_secs(5), handle).await;
+        }
     }
 }
 
@@ -96,11 +133,30 @@ async fn worker_runs(world: &mut WorkerWorld) {
         .expect("receiver should be initialised");
     let server = world.server.as_ref().expect("server should be initialised");
     let octocrab = octocrab_for(server);
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let idle = Arc::new(Notify::new());
+    let idle_for_wait = Arc::clone(&idle);
+    let idle_notified = idle_for_wait.notified();
+    let control = WorkerControl::new(
+        shutdown_rx,
+        WorkerHooks {
+            enqueued: None,
+            idle: Some(idle),
+            drained: None,
+        },
+    );
     let handle = tokio::spawn(async move {
-        let _ = run_worker(cfg, rx, octocrab).await;
+        let _ = run_worker(cfg, rx, octocrab, control).await;
     });
-    sleep(Duration::from_millis(100)).await;
-    handle.abort();
+    timeout(
+        Duration::from_secs(30 * u64::from(coverage_timeout_multiplier())),
+        idle_notified,
+    )
+    .await
+    .expect("worker reached idle state within timeout");
+
+    // Store handles in world for proper cleanup
+    world.shutdown = Some(shutdown_tx);
     world.handle = Some(handle);
 }
 
@@ -116,8 +172,9 @@ async fn comment_posted(world: &mut WorkerWorld) {
             .received_requests()
             .await
             .expect("inbound requests should be recorded")
-            .is_empty()
+            .is_empty(),
     );
+    world.shutdown_and_join().await;
 }
 
 #[then("the queue retains the job")]
@@ -125,23 +182,20 @@ async fn comment_posted(world: &mut WorkerWorld) {
     clippy::expect_used,
     reason = "test harness: expect fs state in assertion"
 )]
-fn queue_retains(world: &mut WorkerWorld) {
+async fn queue_retains(world: &mut WorkerWorld) {
     let cfg = world
         .cfg
         .as_ref()
         .expect("configuration should be initialised");
-    assert!(
-        std::fs::read_dir(&cfg.queue_path)
-            .expect("queue directory should be readable")
-            .count()
-            > 0
-    );
-}
-
-impl Drop for WorkerWorld {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
-    }
+    let job_count = std::fs::read_dir(&cfg.queue_path)
+        .expect("queue directory should be readable")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            !is_metadata_file(&name)
+        })
+        .count();
+    assert!(job_count > 0, "queue should retain at least one job file");
+    world.shutdown_and_join().await;
 }
