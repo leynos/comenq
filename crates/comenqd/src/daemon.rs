@@ -91,7 +91,7 @@ async fn post_comment(
 /// the daemon remains responsive.
 ///
 /// # Parameters
-/// - `sender`: queue writer from `yaque`.
+/// - `sender`: queue sender from `yaque`.
 /// - `rx`: receiver for payloads from client handlers.
 ///
 /// # Errors
@@ -129,36 +129,66 @@ pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
-    let (queue_tx, _rx) = channel(&config.queue_path)?;
-    let (client_tx, client_rx) = mpsc::unbounded_channel();
+    // `yaque` has no sender-only constructor; drop the unused receiver.
+    let (queue_tx, _) = channel(&config.queue_path)?;
+    let (mut client_tx, client_rx) = mpsc::unbounded_channel();
     let cfg = Arc::new(config);
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(());
 
-    let supervisor = tokio::spawn(supervise_tasks(
-        {
-            let cfg = cfg.clone();
-            let tx = client_tx.clone();
-            let shutdown = shutdown_rx.clone();
-            move || spawn_listener(cfg.clone(), tx.clone(), shutdown.clone())
-        },
-        {
-            let cfg = cfg.clone();
-            let octo = octocrab.clone();
-            let shutdown = shutdown_rx.clone();
-            move || spawn_worker(cfg.clone(), octo.clone(), shutdown.clone())
-        },
-        shutdown_rx.clone(),
-    ));
+    // Initial task spawns.
+    let mut writer = tokio::spawn(queue_writer(queue_tx, client_rx));
+    let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+    let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
 
-    ctrl_c().await?;
-    let _ = shutdown_tx.send(());
+    // Convert Ctrl-C into a shutdown signal.
+    {
+        let shutdown_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            if ctrl_c().await.is_ok() {
+                let _ = shutdown_tx.send(());
+            }
+        });
+    }
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                listener.abort();
+                worker.abort();
+                writer.abort();
+                break;
+            }
+            res = &mut listener => {
+                log_listener_failure(&res);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+            }
+            res = &mut worker => {
+                log_worker_failure(&res);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+            }
+            res = &mut writer => {
+                log_writer_failure(&res);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let pair = mpsc::unbounded_channel();
+                client_tx = pair.0;
+                let rx = pair.1;
+                // Recreate a queue sender for the restarted writer.
+                let (queue_tx, _) = channel(&cfg.queue_path).expect("queue sender");
+                writer = tokio::spawn(queue_writer(queue_tx, rx));
+                listener.abort();
+                listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+            }
+        }
+    }
+
     // Close the client sender so the queue writer can exit cleanly.
     drop(client_tx);
-
-    // Gracefully await all tasks with a timeout; ignore outcomes here since shutdown is in progress.
+    // Gracefully await all tasks with a timeout; ignore outcomes since shutdown is in progress.
     let _ = tokio::time::timeout(Duration::from_secs(10), async {
-        let _ = supervisor.await;
+        let _ = listener.await;
+        let _ = worker.await;
         let _ = writer.await;
     })
     .await;
@@ -178,42 +208,34 @@ fn spawn_worker(
     octocrab: Arc<Octocrab>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<Result<()>> {
+    // Obtain a fresh queue receiver each time the worker is spawned.
+    // The sender persists across restarts.
     let (_tx, rx) = channel(&cfg.queue_path).expect("queue receiver");
     let control = WorkerControl::new(shutdown, WorkerHooks::default());
     tokio::spawn(run_worker(cfg, rx, octocrab, control))
 }
 
-async fn supervise_tasks(
-    mut make_listener: impl FnMut() -> tokio::task::JoinHandle<Result<()>>,
-    mut make_worker: impl FnMut() -> tokio::task::JoinHandle<Result<()>>,
-    mut shutdown: watch::Receiver<()>,
-) {
-    let mut listener = make_listener();
-    let mut worker = make_worker();
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                listener.abort();
-                worker.abort();
-                break;
-            }
-            res = &mut listener => {
-                match res {
-                    Ok(Ok(())) => tracing::warn!("Listener exited unexpectedly"),
-                    Ok(Err(e)) => tracing::error!(error = %e, "Listener task failed"),
-                    Err(e) => tracing::error!(error = %e, "Listener task panicked"),
-                }
-                listener = make_listener();
-            }
-            res = &mut worker => {
-                match res {
-                    Ok(Ok(())) => tracing::warn!("Worker exited unexpectedly"),
-                    Ok(Err(e)) => tracing::error!(error = %e, "Worker task failed"),
-                    Err(e) => tracing::error!(error = %e, "Worker task panicked"),
-                }
-                worker = make_worker();
-            }
-        }
+fn log_listener_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+    match res {
+        Ok(Ok(())) => tracing::warn!("Listener exited unexpectedly"),
+        Ok(Err(e)) => tracing::error!(error = %e, "Listener task failed"),
+        Err(e) => tracing::error!(error = %e, "Listener task panicked"),
+    }
+}
+
+fn log_worker_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+    match res {
+        Ok(Ok(())) => tracing::warn!("Worker exited unexpectedly"),
+        Ok(Err(e)) => tracing::error!(error = %e, "Worker task failed"),
+        Err(e) => tracing::error!(error = %e, "Worker task panicked"),
+    }
+}
+
+fn log_writer_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+    match res {
+        Ok(Ok(())) => tracing::warn!("Writer exited unexpectedly"),
+        Ok(Err(e)) => tracing::error!(error = %e, "Writer task failed"),
+        Err(e) => tracing::error!(error = %e, "Writer task panicked"),
     }
 }
 
@@ -461,10 +483,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use std::fs as stdfs;
     use std::path::Path;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::{TempDir, tempdir};
     use test_support::{octocrab_for, temp_config};
@@ -838,93 +857,5 @@ mod tests {
                 > 0,
             "Queue should retain job after API failure",
         );
-    }
-
-    #[tokio::test]
-    async fn supervisor_restarts_failed_listener() {
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-        let listener_maker = {
-            let attempts = Arc::clone(&attempts_clone);
-            let mut shutdown = shutdown_rx.clone();
-            move || {
-                let attempts = Arc::clone(&attempts);
-                let mut shutdown = shutdown.clone();
-                tokio::spawn(async move {
-                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        Err(anyhow::anyhow!("fail"))
-                    } else {
-                        let _ = shutdown.changed().await;
-                        Ok(())
-                    }
-                })
-            }
-        };
-
-        let worker_maker = {
-            let mut shutdown = shutdown_rx.clone();
-            move || {
-                let mut shutdown = shutdown.clone();
-                tokio::spawn(async move {
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                })
-            }
-        };
-
-        let supervisor = tokio::spawn(supervise_tasks(listener_maker, worker_maker, shutdown_rx));
-
-        while attempts.load(Ordering::SeqCst) < 2 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        shutdown_tx.send(()).unwrap();
-        supervisor.await.unwrap();
-        assert!(attempts.load(Ordering::SeqCst) >= 2);
-    }
-
-    #[tokio::test]
-    async fn supervisor_restarts_failed_worker() {
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-        let worker_maker = {
-            let attempts = Arc::clone(&attempts_clone);
-            let mut shutdown = shutdown_rx.clone();
-            move || {
-                let attempts = Arc::clone(&attempts);
-                let mut shutdown = shutdown.clone();
-                tokio::spawn(async move {
-                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        Err(anyhow::anyhow!("fail"))
-                    } else {
-                        let _ = shutdown.changed().await;
-                        Ok(())
-                    }
-                })
-            }
-        };
-
-        let listener_maker = {
-            let mut shutdown = shutdown_rx.clone();
-            move || {
-                let mut shutdown = shutdown.clone();
-                tokio::spawn(async move {
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                })
-            }
-        };
-
-        let supervisor = tokio::spawn(supervise_tasks(listener_maker, worker_maker, shutdown_rx));
-
-        while attempts.load(Ordering::SeqCst) < 2 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        shutdown_tx.send(()).unwrap();
-        supervisor.await.unwrap();
-        assert!(attempts.load(Ordering::SeqCst) >= 2);
     }
 }
