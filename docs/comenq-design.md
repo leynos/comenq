@@ -902,6 +902,32 @@ The worker task itself is implemented in
 [`run_worker`](../crates/comenqd/src/daemon.rs), which accepts a
 [`WorkerControl`] struct bundling shutdown and optional test hooks.
 
+The sequence diagram in Figure&nbsp;1 illustrates how the worker interacts with
+the queue, shutdown channel, and optional hooks.
+
+```mermaid
+sequenceDiagram
+    participant Worker
+    participant Queue
+    participant WatchChannel
+    participant WorkerHooks
+    loop Process queue
+        Worker->>Queue: rx.recv()
+        alt Shutdown signal
+            WatchChannel-->>Worker: shutdown.changed()
+            Worker->>WorkerHooks: (optional) drained.notify_waiters()
+            Worker-->>Worker: break
+        else Got request
+            Worker->>WorkerHooks: (optional) enqueued.notify_waiters()
+            Worker->>WorkerHooks: (optional) idle.notify_waiters()
+            Worker->>WorkerHooks: (optional) drained.notify_waiters() if queue empty
+            Worker->>Worker: sleep or shutdown
+        end
+    end
+```
+
+Figure&nbsp;1: Worker lifecycle interactions.
+
 ### 5.6. Implementation Notes
 
 The repository initialises the workspace with `comenq-lib` at the root and two
