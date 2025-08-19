@@ -907,7 +907,7 @@ let _ = tokio::time::timeout(Duration::from_secs(10), async {
 .await;
 ```
 
-Refer to [`main`](../crates/comenqd/src/daemon.rs) for the canonical
+Refer to [`daemon::run`](../crates/comenqd/src/daemon.rs) for the canonical
 implementation.
 
 The worker task itself is implemented in

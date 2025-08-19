@@ -266,7 +266,7 @@ impl WorkerHooks {
         Ok(())
     }
 
-    async fn wait_or_shutdown(&self, secs: u64, shutdown: &mut watch::Receiver<()>) {
+    async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
             _ = shutdown.changed() => {},
@@ -358,9 +358,7 @@ pub async fn run_worker(
 
         hooks.notify_idle();
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        hooks
-            .wait_or_shutdown(config.cooldown_period_seconds, shutdown)
-            .await;
+        WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
     }
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
@@ -375,15 +373,18 @@ mod tests {
     use std::fs as stdfs;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::{TempDir, tempdir};
     use test_support::{octocrab_for, temp_config};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{Notify, mpsc, watch};
-    use tokio::time::{Duration, sleep, timeout};
+    use tokio::time::{sleep, timeout};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
+
+    const TEST_COOLDOWN_SECONDS: u64 = 60;
 
     #[cfg(test)]
     #[allow(unexpected_cfgs)]
@@ -427,7 +428,9 @@ mod tests {
         // Use a long cooldown so retries do not fire before the test shuts the
         // worker down. This keeps the number of HTTP attempts deterministic even
         // under heavy instrumentation.
-        let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(60)));
+        let cfg = Arc::new(Config::from(
+            temp_config(&dir).with_cooldown(TEST_COOLDOWN_SECONDS),
+        ));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
         let req = CommentRequest {
             owner: "o".into(),

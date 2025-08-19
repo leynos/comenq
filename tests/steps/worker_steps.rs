@@ -111,13 +111,12 @@ async fn worker_runs(world: &mut WorkerWorld) {
     let octocrab = octocrab_for(server);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let idle = Arc::new(Notify::new());
-    let idle_hook = idle.clone();
-    let idle_notified = idle_hook.notified();
+    let idle_notified = idle.notified();
     let control = WorkerControl::new(
         shutdown_rx,
         WorkerHooks {
             enqueued: None,
-            idle: Some(idle),
+            idle: Some(idle.clone()),
             drained: None,
         },
     );
