@@ -356,7 +356,7 @@ runtime to handle concurrent operations efficiently.
 ### 3.1. The Asynchronous Core and Task Structure
 
 The daemon's architecture is built on `tokio`'s cooperative multitasking model.
-Upon startup, the `main` function will initialise necessary resources
+Upon startup, the `main` function will initialize necessary resources
 (configuration, logger, queue) and then spawn two primary, independent
 asynchronous tasks that run concurrently for the lifetime of the daemon:
 
@@ -403,7 +403,7 @@ daemon's needs:
   queue. This "dead man's switch" mechanism provides a powerful "at-least-once"
   delivery guarantee, which is the cornerstone of the daemon's reliability.[^7]
 
-The queue will be initialised at a configurable path (e.g.,
+The queue will be initialized at a configurable path (e.g.,
 `/var/lib/comenq/queue`) and will store the `CommentRequest` struct defined in
 the shared library.
 
@@ -446,7 +446,7 @@ required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
-The `octocrab` client will be initialised once at daemon startup, using a
+The `octocrab` client will be initialized once at daemon startup, using a
 Personal Access Token (PAT) securely loaded from the configuration file.
 
 A critical detail for a successful implementation is using the correct GitHub
@@ -930,10 +930,10 @@ Figure&nbsp;1: Worker lifecycle interactions.
 
 ### 5.6. Implementation Notes
 
-The repository initialises the workspace with `comenq-lib` at the root and two
+The repository initializes the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
 derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix
-listener and queue worker as described above. Structured logging is initialised
+listener and queue worker as described above. Structured logging is initialized
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
 environment variable. The queue directory is created asynchronously on start if
 it does not already exist before `yaque` opens it. Incoming requests are
