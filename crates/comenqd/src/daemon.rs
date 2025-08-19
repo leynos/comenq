@@ -19,6 +19,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, channel};
 
+const GITHUB_API_TIMEOUT_SECS: u64 = 30;
+
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
 enum PostCommentError {
@@ -72,8 +74,8 @@ async fn post_comment(
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
     // Coverage instrumentation slows the async GitHub client; allow a generous
-    // 30-second window before treating the call as timed out.
-    match tokio::time::timeout(Duration::from_secs(30), fut).await {
+    // window before treating the call as timed out.
+    match tokio::time::timeout(Duration::from_secs(GITHUB_API_TIMEOUT_SECS), fut).await {
         Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
         Err(_) => Err(PostCommentError::Timeout),
     }
@@ -261,7 +263,7 @@ impl WorkerHooks {
             // Ignore sentinel files left by the queue implementation and
             // consider the directory empty when no other files remain.
             let empty = !stdfs::read_dir(queue_path)?
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
                 .any(|e| {
                     let name = e.file_name();
                     let name = name.to_string_lossy();
@@ -340,7 +342,28 @@ pub async fn run_worker(
             _ = shutdown.changed() => break,
         };
         hooks.notify_enqueued();
-        let request: CommentRequest = serde_json::from_slice(&guard)?;
+        let request: CommentRequest = match serde_json::from_slice(&guard) {
+            Ok(req) => req,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to deserialise queued request; dropping");
+                if let Err(commit_err) = guard.commit() {
+                    tracing::error!(
+                        error = %commit_err,
+                        "Failed to commit malformed queue entry",
+                    );
+                }
+                // Maintain hook semantics for tests even on malformed input.
+                hooks.notify_idle();
+                if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
+                    tracing::warn!(
+                        error = %check_err,
+                        "Queue emptiness check failed after drop",
+                    );
+                }
+                WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
+                continue;
+            }
+        };
 
         match post_comment(&octocrab, &request).await {
             Ok(_) => {
@@ -676,12 +699,18 @@ mod tests {
             }
         }
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+        let data_files = stdfs::read_dir(&ctx.cfg.queue_path)
+            .expect("read queue directory")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name != "version" && name != "recv.lock"
+            })
+            .count();
         assert_eq!(
-            stdfs::read_dir(&ctx.cfg.queue_path)
-                .expect("read queue directory")
-                .count(),
-            0,
-            "Queue should be empty after successful processing",
+            data_files, 0,
+            "Queue data files should be empty after successful processing",
         );
     }
 
