@@ -1,3 +1,12 @@
+//! Android backend for timestamp setters.
+//!
+//! On NDK versions prior to r19 `futimens` is missing. This module emulates it
+//! by invoking `utimensat` with a file descriptor and a null pathname, matching
+//! bionic's behaviour.
+//!
+//! SAFETY: All `unsafe` blocks ensure raw file descriptors, C strings and
+//! pointer arguments are valid for the duration of the calls.
+
 use crate::FileTime;
 use std::ffi::CString;
 use std::fs::File;
@@ -5,18 +14,22 @@ use std::io;
 use std::os::unix::prelude::*;
 use std::path::Path;
 
+/// Set both access and modification times for a file at `p`.
 pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), false)
 }
 
+/// Set only the modification time for a file at `p`.
 pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     set_times(p, None, Some(mtime), false)
 }
 
+/// Set only the access time for a file at `p`.
 pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), None, false)
 }
 
+/// Set times for an open file handle.
 pub fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
@@ -36,6 +49,7 @@ pub fn set_file_handle_times(
     }
 }
 
+/// Set times for a symlink at `p` without following it.
 pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), true)
 }

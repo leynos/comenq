@@ -1,3 +1,8 @@
+//! Redox backend for file timestamp manipulation.
+//!
+//! Provides helpers to update access and modification times. When only one
+//! time is supplied, the other is derived from the file's existing metadata.
+
 use crate::FileTime;
 use std::fs::{self, File};
 use std::io;
@@ -10,12 +15,14 @@ use libredox::{
     flag, Fd,
 };
 
-pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set both access and modification times for a file at `p`.
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     set_file_times_redox(fd.raw(), atime, mtime)
 }
 
-pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+/// Set only the modification time for a file at `p`.
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     let st = fd.stat()?;
 
@@ -30,7 +37,8 @@ pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     Ok(())
 }
 
-pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+/// Set only the access time for a file at `p`.
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     let st = fd.stat()?;
 
@@ -45,13 +53,18 @@ pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     Ok(())
 }
 
-pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set access and modification times for a symlink at `p` (no-follow).
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, flag::O_NOFOLLOW)?;
     set_file_times_redox(fd.raw(), atime, mtime)?;
     Ok(())
 }
 
-pub fn set_file_handle_times(
+/// Set times for an open file handle.
+///
+/// If only one of `atime` or `mtime` is provided, the missing value is read
+/// from the handle's current metadata.
+pub(crate) fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -71,6 +84,7 @@ pub fn set_file_handle_times(
     set_file_times_redox(f.as_raw_fd() as usize, atime1, mtime1)
 }
 
+/// Open `path` with the provided Redox-specific `flags`.
 fn open_redox(path: &Path, flags: i32) -> Result<Fd> {
     match path.to_str() {
         Some(string) => Fd::open(string, flags, 0),
@@ -78,6 +92,7 @@ fn open_redox(path: &Path, flags: i32) -> Result<Fd> {
     }
 }
 
+/// Low-level helper using `futimens` on Redox.
 fn set_file_times_redox(fd: usize, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     use libredox::data::TimeSpec;
 
@@ -94,20 +109,23 @@ fn set_file_times_redox(fd: usize, atime: FileTime, mtime: FileTime) -> io::Resu
     Ok(())
 }
 
-pub fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
+/// Return the last modification time from `meta`.
+pub(crate) fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
     FileTime {
         seconds: meta.mtime(),
         nanos: meta.mtime_nsec() as u32,
     }
 }
 
-pub fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
+/// Return the last access time from `meta`.
+pub(crate) fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
     FileTime {
         seconds: meta.atime(),
         nanos: meta.atime_nsec() as u32,
     }
 }
 
-pub fn from_creation_time(_meta: &fs::Metadata) -> Option<FileTime> {
+/// Redox does not expose creation time. Always returns `None`.
+pub(crate) fn from_creation_time(_meta: &fs::Metadata) -> Option<FileTime> {
     None
 }
