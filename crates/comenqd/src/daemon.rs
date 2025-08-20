@@ -522,6 +522,15 @@ mod smart_timeouts {
         }
 
         #[test]
+        fn calculate_timeout_scales_with_ci_env() {
+            env::set_var("CI", "1");
+            let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+            // base 10 * complexity 1 * debug 2 * CI 2 = 40
+            assert_eq!(cfg.calculate_timeout(), Duration::from_secs(40));
+            env::remove_var("CI");
+        }
+
+        #[test]
         fn with_progressive_retry_scales_base() {
             let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
             let expected = vec![
@@ -535,6 +544,11 @@ mod smart_timeouts {
 }
 
 #[cfg(test)]
+/// Execute `operation` under progressively increasing timeouts.
+///
+/// Retries the operation using the multipliers defined in
+/// `PROGRESSIVE_RETRY_PERCENTS`. Returns the first successful result or an
+/// error message after all attempts time out or return an error.
 async fn timeout_with_retries<F, Fut, T>(
     config: smart_timeouts::TimeoutConfig,
     operation_name: &str,
@@ -627,6 +641,25 @@ mod retry_helper_tests {
         let result = handle.await.expect("join").expect("timeout_with_retries");
         assert_eq!(result, 2);
         assert_eq!(attempts, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fails_after_all_retries() {
+        let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", || async {
+            sleep(Duration::from_secs(20)).await;
+            Ok(())
+        }));
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(15)).await;
+        tokio::task::yield_now().await;
+
+        let err = handle.await.expect("join").expect_err("should time out");
+        assert!(err.contains("timed out"));
     }
 }
 
@@ -846,33 +879,34 @@ mod tests {
         let stored: CommentRequest = serde_json::from_slice(&guard).expect("parse");
         assert_eq!(stored, req);
         let _ = shutdown_tx.send(());
-        let mut join_handles = Some((listener_task, writer));
+        let mut listener_task = listener_task;
+        let mut writer = writer;
         timeout_with_retries(
             smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Moderate),
             "listener and writer join",
             || {
-                if let Some((listener_task, writer)) = join_handles.take() {
-                    async move {
-                        let listener_res = listener_task.await;
-                        let writer_res = writer.await;
-                        if let Err(e) = &listener_res {
-                            return Err(if e.is_panic() {
-                                "listener task panicked".to_string()
-                            } else {
-                                format!("listener task failed: {e}")
-                            });
-                        }
-                        if let Err(e) = &writer_res {
-                            return Err(if e.is_panic() {
-                                "writer task panicked".to_string()
-                            } else {
-                                format!("writer task failed: {e}")
-                            });
-                        }
-                        Ok(())
+                let listener_handle = &mut listener_task;
+                let writer_handle = &mut writer;
+                async move {
+                    let listener_res = listener_handle.await;
+                    let writer_res = writer_handle.await;
+
+                    if let Err(e) = &listener_res {
+                        return Err(if e.is_panic() {
+                            "listener task panicked".to_string()
+                        } else {
+                            format!("listener task failed: {e}")
+                        });
                     }
-                } else {
-                    async { Err("join handles consumed".to_string()) }
+                    if let Err(e) = &writer_res {
+                        return Err(if e.is_panic() {
+                            "writer task panicked".to_string()
+                        } else {
+                            format!("writer task failed: {e}")
+                        });
+                    }
+
+                    Ok(())
                 }
             },
         )
@@ -891,7 +925,6 @@ mod tests {
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
         let drained_for_wait = Arc::clone(&drained);
-        let drained_notified = drained_for_wait.notified();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let control = WorkerControl {
             shutdown: shutdown_rx,
@@ -922,24 +955,21 @@ mod tests {
             panic!("worker drained: QUEUE CLEANUP FAILURE");
         }
         shutdown_tx.send(()).expect("send shutdown");
-        let mut join_handle = Some(h);
+        let mut join_handle = h;
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker join", || {
-            if let Some(h) = join_handle.take() {
-                async move {
-                    match h.await {
-                        Ok(Ok(())) => Ok(()),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(e) => {
-                            if e.is_panic() {
-                                Err("worker task panicked".to_string())
-                            } else {
-                                Err(format!("worker task failed: {e}"))
-                            }
+            let handle = &mut join_handle;
+            async move {
+                match handle.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => {
+                        if e.is_panic() {
+                            Err("worker task panicked".to_string())
+                        } else {
+                            Err(format!("worker task failed: {e}"))
                         }
                     }
                 }
-            } else {
-                async { Err("join handle consumed".to_string()) }
             }
         })
         .await
@@ -1001,24 +1031,21 @@ mod tests {
         .await
         .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        let mut join_handle = Some(h);
+        let mut join_handle = h;
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_ERROR, "worker join", || {
-            if let Some(h) = join_handle.take() {
-                async move {
-                    match h.await {
-                        Ok(Ok(())) => Ok(()),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(e) => {
-                            if e.is_panic() {
-                                Err("worker task panicked".to_string())
-                            } else {
-                                Err(format!("worker task failed: {e}"))
-                            }
+            let handle = &mut join_handle;
+            async move {
+                match handle.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => {
+                        if e.is_panic() {
+                            Err("worker task panicked".to_string())
+                        } else {
+                            Err(format!("worker task failed: {e}"))
                         }
                     }
                 }
-            } else {
-                async { Err("join handle consumed".to_string()) }
             }
         })
         .await

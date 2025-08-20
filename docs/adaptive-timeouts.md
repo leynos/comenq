@@ -3,10 +3,13 @@
 Fixed timeouts often cause flaky tests, particularly on slower machines, under
 coverage instrumentation, or in continuous integration environments. To address
 this, the daemon tests use a small `smart_timeouts` module that scales and caps
-timeouts based on build configuration and the detected environment.
+timeouts based on build configuration and the detected environment. Tunable
+constants expose the multipliers and bounds, allowing projects to tweak
+behaviour without touching call sites.
 
 The `timeout_with_retries` helper executes an operation with a progressively
-increasing timeout. This offers clearer diagnostics while avoiding spurious
+increasing timeout. By default it retries with 50%, 100%, and 150% of the
+calculated timeout, offering clearer diagnostics while avoiding spurious
 failures from transient delays.
 
 ```rust
