@@ -17,8 +17,15 @@ async fn supervise_until_restarts<F1, F2>(
 {
     let mut t1 = make1();
     let mut t2 = make2();
+    let timeout_duration = Duration::from_secs(30);
+    let timeout_instant = tokio::time::Instant::now() + timeout_duration;
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(timeout_instant) => {
+                t1.abort();
+                t2.abort();
+                panic!("Supervisor timeout after {:?}", timeout_duration);
+            }
             _ = shutdown.changed() => {
                 t1.abort();
                 t2.abort();

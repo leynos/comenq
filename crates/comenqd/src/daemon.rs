@@ -208,11 +208,14 @@ fn spawn_worker(
     octocrab: Arc<Octocrab>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<Result<()>> {
-    // Obtain a fresh queue receiver each time the worker is spawned.
-    // The sender persists across restarts.
-    let (_tx, rx) = channel(&cfg.queue_path).expect("queue receiver");
-    let control = WorkerControl::new(shutdown, WorkerHooks::default());
-    tokio::spawn(run_worker(cfg, rx, octocrab, control))
+    let cfg_clone = cfg.clone();
+    tokio::spawn(async move {
+        // Obtain a fresh queue receiver each time the worker is spawned.
+        // The sender persists across restarts.
+        let (_tx, rx) = channel(&cfg_clone.queue_path)?;
+        let control = WorkerControl::new(shutdown, WorkerHooks::default());
+        run_worker(cfg_clone, rx, octocrab, control).await
+    })
 }
 
 fn log_listener_failure(res: &Result<Result<()>, tokio::task::JoinError>) {

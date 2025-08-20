@@ -380,6 +380,37 @@ exits unexpectedly the daemon logs the failure, waits briefly to avoid a tight
 restart loop, and respawns the task. This keeps the service available without
 relying on an external process supervisor.
 
+The supervision and restart behaviour is illustrated in the sequence diagram
+below.
+
+```mermaid
+sequenceDiagram
+    participant D as Daemon
+    participant L as Listener
+    participant W as Worker
+    participant Q as Queue Writer
+    participant S as Shutdown Signal
+
+    D->>L: Spawn Listener
+    D->>W: Spawn Worker
+    D->>Q: Spawn Queue Writer
+    
+    alt Task Failure
+        L--xD: Failure Detected
+        D->>D: Log Failure
+        D->>L: Restart Listener
+        
+        W--xD: Failure Detected
+        D->>D: Log Failure
+        D->>W: Restart Worker
+    end
+
+    S->>D: Trigger Graceful Shutdown
+    D->>L: Stop Listener
+    D->>W: Stop Worker
+    D->>Q: Stop Queue Writer
+```
+
 ### 3.2. The Persistent Job Queue with `yaque`
 
 A core requirement for the daemon is fault tolerance. If the daemon or the
