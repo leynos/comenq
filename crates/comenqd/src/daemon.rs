@@ -5,6 +5,7 @@
 //! applies the configured cooldown period between requests.
 use crate::config::Config;
 use anyhow::Result;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -140,6 +141,22 @@ pub async fn run(config: Config) -> Result<()> {
     let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
 
+    let mut listener_backoff = ExponentialBuilder::default()
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(100))
+        .without_max_times()
+        .build();
+    let mut worker_backoff = ExponentialBuilder::default()
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(100))
+        .without_max_times()
+        .build();
+    let mut writer_backoff = ExponentialBuilder::default()
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(100))
+        .without_max_times()
+        .build();
+
     // Convert Ctrl-C into a shutdown signal.
     {
         let shutdown_tx = shutdown_tx.clone();
@@ -160,17 +177,26 @@ pub async fn run(config: Config) -> Result<()> {
             }
             res = &mut listener => {
                 log_listener_failure(&res);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let delay = listener_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::time::sleep(delay).await;
                 listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
             }
             res = &mut worker => {
                 log_worker_failure(&res);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let delay = worker_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::time::sleep(delay).await;
                 worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
             }
             res = &mut writer => {
                 log_writer_failure(&res);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let delay = writer_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::time::sleep(delay).await;
                 let pair = mpsc::unbounded_channel();
                 client_tx = pair.0;
                 let rx = pair.1;
@@ -264,11 +290,21 @@ pub async fn run_listener(
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let listener = prepare_listener(&config.socket_path)?;
+    let mut accept_backoff = ExponentialBuilder::default()
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(100))
+        .without_max_times()
+        .build();
 
     loop {
         tokio::select! {
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
+                    accept_backoff = ExponentialBuilder::default()
+                        .with_jitter()
+                        .with_min_delay(Duration::from_millis(100))
+                        .without_max_times()
+                        .build();
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, tx_clone).await {
@@ -278,7 +314,10 @@ pub async fn run_listener(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to accept client connection");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let delay = accept_backoff
+                        .next()
+                        .expect("backoff should yield a duration");
+                    tokio::time::sleep(delay).await;
                 }
             },
             _ = shutdown.changed() => {

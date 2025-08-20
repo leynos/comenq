@@ -376,9 +376,10 @@ be accepted and enqueued in milliseconds, while the worker task independently
 processes the queue at its own deliberate pace.
 
 All daemon tasks—the listener, worker, and queue writer—are supervised. If any
-exits unexpectedly the daemon logs the failure, waits briefly to avoid a tight
-restart loop, and respawns the task. This keeps the service available without
-relying on an external process supervisor.
+exits unexpectedly the daemon logs the failure, waits using an exponential
+backoff with jitter (via the `backon` crate) to avoid a tight restart loop, and
+respawns the task. This keeps the service available without relying on an
+external process supervisor.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.

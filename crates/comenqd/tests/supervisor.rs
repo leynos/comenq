@@ -1,4 +1,5 @@
 //! Tests for the task supervision logic.
+use backon::{BackoffBuilder, ExponentialBuilder};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -19,6 +20,14 @@ async fn supervise_until_restarts<F1, F2>(
     let mut t2 = make2();
     let timeout_duration = Duration::from_secs(30);
     let timeout_instant = tokio::time::Instant::now() + timeout_duration;
+    let mut backoff1 = ExponentialBuilder::default()
+        .with_min_delay(Duration::from_millis(1))
+        .without_max_times()
+        .build();
+    let mut backoff2 = ExponentialBuilder::default()
+        .with_min_delay(Duration::from_millis(1))
+        .without_max_times()
+        .build();
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(timeout_instant) => {
@@ -33,12 +42,18 @@ async fn supervise_until_restarts<F1, F2>(
             }
             res = &mut t1 => {
                 let _ = res;
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                let delay = backoff1
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::time::sleep(delay).await;
                 t1 = make1();
             }
             res = &mut t2 => {
                 let _ = res;
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                let delay = backoff2
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::time::sleep(delay).await;
                 t2 = make2();
             }
         }
