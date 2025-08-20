@@ -469,8 +469,7 @@ mod smart_timeouts {
                 timeout *= DEBUG_MULTIPLIER;
             }
 
-            #[cfg(any(coverage, coverage_nightly))]
-            {
+            if cfg!(any(coverage, coverage_nightly)) {
                 timeout *= COVERAGE_MULTIPLIER;
             }
 
@@ -500,34 +499,48 @@ mod smart_timeouts {
 
     #[cfg(test)]
     mod tests {
+        //! Tests for the `smart_timeouts` helpers.
+
         use super::*;
         use std::env;
 
         #[test]
         fn calculate_timeout_caps_bounds() {
-            env::remove_var("CI");
+            // Safety: these tests run single-threaded and modifications to the
+            // process environment cannot race with other threads.
+            unsafe {
+                env::remove_var("CI");
+            }
             let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
             assert_eq!(
                 cfg.calculate_timeout(),
                 Duration::from_secs(MIN_TIMEOUT_SECS)
             );
 
-            env::set_var("CI", "1");
+            unsafe {
+                env::set_var("CI", "1");
+            }
             let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
             assert_eq!(
                 cfg.calculate_timeout(),
                 Duration::from_secs(MAX_TIMEOUT_SECS)
             );
-            env::remove_var("CI");
+            unsafe {
+                env::remove_var("CI");
+            }
         }
 
         #[test]
         fn calculate_timeout_scales_with_ci_env() {
-            env::set_var("CI", "1");
+            unsafe {
+                env::set_var("CI", "1");
+            }
             let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
             // base 10 * complexity 1 * debug 2 * CI 2 = 40
             assert_eq!(cfg.calculate_timeout(), Duration::from_secs(40));
-            env::remove_var("CI");
+            unsafe {
+                env::remove_var("CI");
+            }
         }
 
         #[test]
@@ -616,6 +629,8 @@ where
 
 #[cfg(test)]
 mod retry_helper_tests {
+    //! Tests for the `timeout_with_retries` helper.
+
     use super::*;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -879,17 +894,23 @@ mod tests {
         let stored: CommentRequest = serde_json::from_slice(&guard).expect("parse");
         assert_eq!(stored, req);
         let _ = shutdown_tx.send(());
-        let mut listener_task = listener_task;
-        let mut writer = writer;
+        let mut listener_task = Some(listener_task);
+        let mut writer = Some(writer);
         timeout_with_retries(
             smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Moderate),
             "listener and writer join",
             || {
-                let listener_handle = &mut listener_task;
-                let writer_handle = &mut writer;
+                let listener_handle = listener_task.take();
+                let writer_handle = writer.take();
                 async move {
-                    let listener_res = listener_handle.await;
-                    let writer_res = writer_handle.await;
+                    let listener_res = match listener_handle {
+                        Some(h) => h.await,
+                        None => return Err("listener handle consumed".to_string()),
+                    };
+                    let writer_res = match writer_handle {
+                        Some(h) => h.await,
+                        None => return Err("writer handle consumed".to_string()),
+                    };
 
                     if let Err(e) = &listener_res {
                         return Err(if e.is_panic() {
@@ -955,10 +976,11 @@ mod tests {
             panic!("worker drained: QUEUE CLEANUP FAILURE");
         }
         shutdown_tx.send(()).expect("send shutdown");
-        let mut join_handle = h;
+        let mut join_handle = Some(h);
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker join", || {
-            let handle = &mut join_handle;
+            let handle = join_handle.take();
             async move {
+                let handle = handle.ok_or_else(|| "join handle consumed".to_string())?;
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),
@@ -1010,7 +1032,6 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
         let enqueued_for_wait = Arc::clone(&enqueued);
-        let enqueued_notified = enqueued_for_wait.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
@@ -1031,10 +1052,11 @@ mod tests {
         .await
         .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        let mut join_handle = h;
+        let mut join_handle = Some(h);
         if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_ERROR, "worker join", || {
-            let handle = &mut join_handle;
+            let handle = join_handle.take();
             async move {
+                let handle = handle.ok_or_else(|| "join handle consumed".to_string())?;
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),

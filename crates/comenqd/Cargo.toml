@@ -25,6 +25,7 @@ rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 serial_test = "2"
 wiremock = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = []
