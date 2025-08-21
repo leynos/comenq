@@ -17,7 +17,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::ctrl_c;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, channel};
 
@@ -156,12 +156,20 @@ pub async fn run(config: Config) -> Result<()> {
     let mut worker_backoff = backoff();
     let mut writer_backoff = backoff();
 
-    // Convert Ctrl-C into a shutdown signal.
+    // Convert SIGINT and SIGTERM into a shutdown signal.
     {
         let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
-            if ctrl_c().await.is_ok() {
-                let _ = shutdown_tx.send(());
+            let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+            let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+
+            tokio::select! {
+                _ = sigint.recv() => {
+                    let _ = shutdown_tx.send(());
+                }
+                _ = sigterm.recv() => {
+                    let _ = shutdown_tx.send(());
+                }
             }
         });
     }
@@ -200,10 +208,19 @@ pub async fn run(config: Config) -> Result<()> {
                 client_tx = pair.0;
                 let rx = pair.1;
                 // Recreate a queue sender for the restarted writer.
-                let (queue_tx, _) = channel(&cfg.queue_path).expect("queue sender");
-                writer = tokio::spawn(queue_writer(queue_tx, rx));
-                listener.abort();
-                listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                match channel(&cfg.queue_path) {
+                    Ok((queue_tx, _)) => {
+                        writer = tokio::spawn(queue_writer(queue_tx, rx));
+                        listener.abort();
+                        listener =
+                            spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Queue sender creation failed");
+                        let _ = shutdown_tx.send(());
+                        break;
+                    }
+                }
             }
         }
     }
