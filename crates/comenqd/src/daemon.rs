@@ -102,15 +102,12 @@ async fn post_comment(
 /// using the [`yaque::Sender`]. Errors are logged and the loop continues so
 /// the daemon remains responsive.
 ///
+/// When the loop terminates the receiver is returned so a supervising task can
+/// resume consumption without losing any buffered requests.
+///
 /// # Parameters
 /// - `sender`: queue sender from `yaque`.
 /// - `rx`: receiver for payloads from client handlers.
-///
-/// # Errors
-/// Returns an [`anyhow::Error`] if:
-/// - the receiver channel (`rx`) is closed unexpectedly,
-/// - the queue sender encounters an I/O error while enqueuing,
-/// - or if the sender fails while awaiting shutdown.
 ///
 /// # Examples
 /// ```rust,no_run
@@ -119,7 +116,7 @@ async fn post_comment(
 /// # async fn docs() -> anyhow::Result<()> {
 /// let (queue_tx, _rx) = channel("/tmp/q")?;
 /// let (tx, rx) = mpsc::unbounded_channel();
-/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await? });
+/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
 /// tx.send(Vec::new()).unwrap();
 /// # Ok(())
 /// # }
@@ -127,13 +124,13 @@ async fn post_comment(
 pub async fn queue_writer(
     mut sender: Sender,
     mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-) -> Result<()> {
+) -> mpsc::UnboundedReceiver<Vec<u8>> {
     while let Some(bytes) = rx.recv().await {
         if let Err(e) = sender.send(bytes).await {
             tracing::error!(error = %e, "Queue enqueue failed");
         }
     }
-    Ok(())
+    rx
 }
 
 /// Start the daemon with the provided configuration.
@@ -204,14 +201,23 @@ pub async fn run(config: Config) -> Result<()> {
                     .next()
                     .expect("backoff should yield a duration");
                 tokio::time::sleep(delay).await;
-                let pair = mpsc::unbounded_channel();
-                client_tx = pair.0;
-                let rx = pair.1;
-                // Recreate a queue sender for the restarted writer.
+                listener.abort();
+                // Recreate a queue sender for the restarted writer, reusing the
+                // existing receiver where possible to avoid dropping buffered
+                // requests. If the writer panicked the receiver is lost and a
+                // new channel is created, potentially dropping pending items.
+                let rx = match res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Writer task panicked");
+                        let pair = mpsc::unbounded_channel();
+                        client_tx = pair.0;
+                        pair.1
+                    }
+                };
                 match channel(&cfg.queue_path) {
                     Ok((queue_tx, _)) => {
                         writer = tokio::spawn(queue_writer(queue_tx, rx));
-                        listener.abort();
                         listener =
                             spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
                     }
@@ -276,10 +282,9 @@ fn log_worker_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
     }
 }
 
-fn log_writer_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+fn log_writer_failure(res: &Result<mpsc::UnboundedReceiver<Vec<u8>>, tokio::task::JoinError>) {
     match res {
-        Ok(Ok(())) => tracing::warn!("Writer exited unexpectedly"),
-        Ok(Err(e)) => tracing::error!(error = %e, "Writer task failed"),
+        Ok(_) => tracing::warn!("Writer exited unexpectedly"),
         Err(e) => tracing::error!(error = %e, "Writer task panicked"),
     }
 }

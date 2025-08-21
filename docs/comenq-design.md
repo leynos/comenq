@@ -379,7 +379,10 @@ All daemon tasks—the listener, worker, and queue writer—are supervised. If a
 task exits unexpectedly, the daemon logs the failure, waits using an
 exponential backoff with jitter (via the `backon` crate) to avoid a tight
 restart loop, and then respawns the task. This keeps the service available
-without relying on an external process supervisor.
+without relying on an external process supervisor. Restarting the writer
+recreates the in-memory channel and restarts the listener to attach a fresh
+sender. Any bytes buffered in the discarded channel that were not persisted to
+the queue are lost.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -400,10 +403,15 @@ sequenceDiagram
         L--xD: Failure Detected
         D->>D: Log Failure
         D->>L: Restart Listener
-        
+
         W--xD: Failure Detected
         D->>D: Log Failure
         D->>W: Restart Worker
+        Q--xD: Failure Detected
+        D->>D: Log Failure
+        D->>D: Recreate in-memory channel
+        D->>Q: Restart Queue Writer with new Sender
+        D->>L: Restart Listener to re-bind Sender clone(s)
     end
 
     S->>D: Trigger Graceful Shutdown

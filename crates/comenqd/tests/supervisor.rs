@@ -19,10 +19,12 @@ async fn supervise_until_restarts<F1, F2>(
     let mut t1 = make1();
     let mut t2 = make2();
     let mut backoff1 = ExponentialBuilder::default()
+        .with_jitter()
         .with_min_delay(Duration::from_millis(1))
         .without_max_times()
         .build();
     let mut backoff2 = ExponentialBuilder::default()
+        .with_jitter()
         .with_min_delay(Duration::from_millis(1))
         .without_max_times()
         .build();
