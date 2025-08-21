@@ -5,7 +5,7 @@
 //! applies the configured cooldown period between requests.
 use crate::config::Config;
 use anyhow::Result;
-use backon::{BackoffBuilder, ExponentialBuilder};
+use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -62,6 +62,17 @@ fn prepare_listener(path: &Path) -> Result<UnixListener> {
 async fn ensure_queue_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).await?;
     Ok(())
+}
+
+/// Builds a jittered exponential backoff with a 100 ms minimum delay and no
+/// maximum attempt count. Used to space out task restarts and avoid tight
+/// respawn loops.
+fn backoff() -> ExponentialBackoff {
+    ExponentialBuilder::default()
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(100))
+        .without_max_times()
+        .build()
 }
 
 /// Attempts to post a comment to a GitHub pull request, enforcing a 30-second timeout.
@@ -141,21 +152,9 @@ pub async fn run(config: Config) -> Result<()> {
     let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
 
-    let mut listener_backoff = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(100))
-        .without_max_times()
-        .build();
-    let mut worker_backoff = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(100))
-        .without_max_times()
-        .build();
-    let mut writer_backoff = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(100))
-        .without_max_times()
-        .build();
+    let mut listener_backoff = backoff();
+    let mut worker_backoff = backoff();
+    let mut writer_backoff = backoff();
 
     // Convert Ctrl-C into a shutdown signal.
     {
@@ -290,21 +289,13 @@ pub async fn run_listener(
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let listener = prepare_listener(&config.socket_path)?;
-    let mut accept_backoff = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(100))
-        .without_max_times()
-        .build();
+    let mut accept_backoff = backoff();
 
     loop {
         tokio::select! {
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
-                    accept_backoff = ExponentialBuilder::default()
-                        .with_jitter()
-                        .with_min_delay(Duration::from_millis(100))
-                        .without_max_times()
-                        .build();
+                    accept_backoff = backoff();
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, tx_clone).await {
