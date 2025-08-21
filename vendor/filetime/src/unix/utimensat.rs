@@ -1,7 +1,9 @@
-//! Unix implementation using `utimensat` to update file timestamps.
+//! Unix `utimensat` backend for setting timestamps on paths, handles, and
+//! symlinks.
 //!
 //! Functions here are crate-internal helpers invoked by the public API in
-//! `lib.rs`. Paths must not contain interior NUL bytes.
+//! `lib.rs`. Paths must not contain interior NUL bytes. On emscripten, symlink
+//! updates are not supported and return an error.
 
 use crate::FileTime;
 use std::ffi::CString;
@@ -87,9 +89,13 @@ fn set_times(
         0
     };
 
-    let p = CString::new(p.as_os_str().as_bytes())?;
+    let p_cstr = CString::new(p.as_os_str().as_bytes())?;
     let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
-    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
+    // SAFETY:
+    // - `p_cstr` is a valid NUL-terminated C string.
+    // - `times` points to two initialised `timespec` values.
+    // - `flags` is 0 or `AT_SYMLINK_NOFOLLOW` as determined by `symlink`.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p_cstr.as_ptr(), times.as_ptr(), flags) };
     if rc == 0 {
         Ok(())
     } else {

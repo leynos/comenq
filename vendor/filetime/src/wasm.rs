@@ -11,7 +11,7 @@ use std::path::Path;
 #[inline]
 fn wasm_not_implemented() -> io::Result<()> {
     Err(io::Error::new(
-        io::ErrorKind::Other,
+        io::ErrorKind::Unsupported,
         "Wasm backend not implemented",
     ))
 }

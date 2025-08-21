@@ -9,7 +9,7 @@ use std::io;
 use std::os::unix::prelude::*;
 use std::path::Path;
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
 /// Set both access and modification times for a file at `p`.
 ///
 /// # Errors
@@ -19,7 +19,7 @@ pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::
     set_times(p, Some(atime), Some(mtime), false)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
 /// Set only the modification time for a file at `p`.
 ///
 /// # Errors
@@ -29,7 +29,7 @@ pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     set_times(p, None, Some(mtime), false)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
 /// Set only the access time for a file at `p`.
 ///
 /// # Errors
@@ -40,7 +40,6 @@ pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
 }
 
 #[cfg(not(target_env = "uclibc"))]
-#[allow(dead_code)]
 /// Set times for an open file handle.
 ///
 /// # Errors
@@ -55,6 +54,10 @@ pub(crate) fn set_file_handle_times(
         None => return Ok(()),
     };
     let times = [to_timeval(&atime), to_timeval(&mtime)];
+    // SAFETY:
+    // - `f.as_raw_fd()` is valid for the duration of the call.
+    // - `times` points to two initialised `timeval` structures.
+    // - `futimes` has the correct ABI for the current platform.
     let rc = unsafe { libc::futimes(f.as_raw_fd(), times.as_ptr()) };
     return if rc == 0 {
         Ok(())
@@ -64,7 +67,7 @@ pub(crate) fn set_file_handle_times(
 }
 
 #[cfg(target_env = "uclibc")]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Build-specific selection; compiled only on uclibc")]
 /// Set times for an open file handle on uClibc systems.
 ///
 /// # Errors
@@ -79,6 +82,10 @@ pub(crate) fn set_file_handle_times(
         None => return Ok(()),
     };
     let times = [to_timespec(&atime), to_timespec(&mtime)];
+    // SAFETY:
+    // - `f.as_raw_fd()` is valid for the duration of the call.
+    // - `times` points to two initialised `timespec` structures.
+    // - `futimens` has the correct ABI for the current platform.
     let rc = unsafe { libc::futimens(f.as_raw_fd(), times.as_ptr()) };
     return if rc == 0 {
         Ok(())
@@ -107,7 +114,7 @@ fn get_times(
     Ok(Some(pair))
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
 /// Set access and modification times for a symlink at `p` (no-follow).
 ///
 /// # Errors
@@ -128,13 +135,21 @@ pub(crate) fn set_times(
     mtime: Option<FileTime>,
     symlink: bool,
 ) -> io::Result<()> {
-    let (atime, mtime) = match get_times(atime, mtime, || p.metadata())? {
+    let (atime, mtime) = match get_times(
+        atime,
+        mtime,
+        || if symlink { fs::symlink_metadata(p) } else { fs::metadata(p) },
+    )? {
         Some(pair) => pair,
         None => return Ok(()),
     };
     let p = CString::new(p.as_os_str().as_bytes())?;
     let times = [to_timeval(&atime), to_timeval(&mtime)];
     let rc = unsafe {
+        // SAFETY:
+        // - `p` is a valid NUL-terminated C string derived from `Path` bytes.
+        // - `times` points to two initialised `timeval` values.
+        // - `lutimes` does not follow the link when `symlink` is true.
         if symlink {
             libc::lutimes(p.as_ptr(), times.as_ptr())
         } else {

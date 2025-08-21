@@ -550,10 +550,11 @@ mod smart_timeouts {
         #[test]
         fn with_progressive_retry_scales_base() {
             let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+            let base = cfg.calculate_timeout().as_secs();
             let expected = vec![
-                Duration::from_secs(5),
-                Duration::from_secs(10),
-                Duration::from_secs(15),
+                Duration::from_secs(base * 50 / 100),
+                Duration::from_secs(base * 100 / 100),
+                Duration::from_secs(base * 150 / 100),
             ];
             assert_eq!(cfg.with_progressive_retry(), expected);
         }

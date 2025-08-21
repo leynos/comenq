@@ -300,6 +300,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    //! Tests covering conversions and setting times for files, directories, and
+    //! symlinks across platforms, including pre-epoch behaviour.
+
     use super::{
         set_file_atime, set_file_handle_times, set_file_mtime, set_file_times,
         set_symlink_file_times, FileTime,

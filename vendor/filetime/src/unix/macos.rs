@@ -31,6 +31,10 @@ pub(crate) fn set_file_handle_times(
     // current kernel then fall back to an older syscall.
     if let Some(func) = futimens() {
         let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
+        // SAFETY:
+        // - `f.as_raw_fd()` is valid for the duration of the call.
+        // - `times` points to two initialised `timespec` values.
+        // - `func` was resolved from the current process and has the correct ABI.
         let rc = unsafe { func(f.as_raw_fd(), times.as_ptr()) };
         if rc == 0 {
             return Ok(());
@@ -61,9 +65,13 @@ fn set_times(
             0
         };
 
-        let p = CString::new(p.as_os_str().as_bytes())?;
+        let p_cstr = CString::new(p.as_os_str().as_bytes())?;
         let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
-        let rc = unsafe { func(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
+        // SAFETY:
+        // - `p_cstr` is a valid, NUL-terminated C string.
+        // - `times` points to two initialised `timespec` values that live across the call.
+        // - `flags` is 0 or `AT_SYMLINK_NOFOLLOW` depending on `symlink`.
+        let rc = unsafe { func(libc::AT_FDCWD, p_cstr.as_ptr(), times.as_ptr(), flags) };
         if rc == 0 {
             return Ok(());
         } else {
