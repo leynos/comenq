@@ -130,7 +130,7 @@ pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
-    // `yaque` has no sender-only constructor; drop the unused receiver.
+    // Drop the unused receiver since yaque lacks a sender-only constructor.
     let (queue_tx, _) = channel(&config.queue_path)?;
     let (mut client_tx, client_rx) = mpsc::unbounded_channel();
     let cfg = Arc::new(config);

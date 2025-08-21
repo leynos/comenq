@@ -18,8 +18,6 @@ async fn supervise_until_restarts<F1, F2>(
 {
     let mut t1 = make1();
     let mut t2 = make2();
-    let timeout_duration = Duration::from_secs(30);
-    let timeout_instant = tokio::time::Instant::now() + timeout_duration;
     let mut backoff1 = ExponentialBuilder::default()
         .with_min_delay(Duration::from_millis(1))
         .without_max_times()
@@ -28,35 +26,41 @@ async fn supervise_until_restarts<F1, F2>(
         .with_min_delay(Duration::from_millis(1))
         .without_max_times()
         .build();
-    loop {
-        tokio::select! {
-            _ = tokio::time::sleep_until(timeout_instant) => {
-                t1.abort();
-                t2.abort();
-                panic!("Supervisor timeout after {:?}", timeout_duration);
-            }
-            _ = shutdown.changed() => {
-                t1.abort();
-                t2.abort();
-                break;
-            }
-            res = &mut t1 => {
-                let _ = res;
-                let delay = backoff1
-                    .next()
-                    .expect("backoff should yield a duration");
-                tokio::time::sleep(delay).await;
-                t1 = make1();
-            }
-            res = &mut t2 => {
-                let _ = res;
-                let delay = backoff2
-                    .next()
-                    .expect("backoff should yield a duration");
-                tokio::time::sleep(delay).await;
-                t2 = make2();
+    let timeout_duration = Duration::from_secs(30);
+    let supervise = async {
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    t1.abort();
+                    t2.abort();
+                    break;
+                }
+                res = &mut t1 => {
+                    let _ = res;
+                    let delay = backoff1
+                        .next()
+                        .expect("backoff should yield a duration");
+                    tokio::time::sleep(delay).await;
+                    t1 = make1();
+                }
+                res = &mut t2 => {
+                    let _ = res;
+                    let delay = backoff2
+                        .next()
+                        .expect("backoff should yield a duration");
+                    tokio::time::sleep(delay).await;
+                    t2 = make2();
+                }
             }
         }
+    };
+    if tokio::time::timeout(timeout_duration, supervise)
+        .await
+        .is_err()
+    {
+        t1.abort();
+        t2.abort();
+        panic!("Supervisor timeout after {:?}", timeout_duration);
     }
 }
 
