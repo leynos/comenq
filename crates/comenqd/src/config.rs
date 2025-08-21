@@ -141,7 +141,7 @@ impl Config {
     /// Test-only helper that loads the configuration from the specified path,
     /// merging `COMENQD_*` environment variables and CLI arguments over file
     /// values.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(feature = "test-support")]
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn from_file(path: &Path) -> Result<Self, ortho_config::OrthoError> {
         Self::from_file_with_cli(path, &CliArgs::default())
