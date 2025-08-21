@@ -13,7 +13,7 @@ const HUNDRED_NS_PER_SEC_I64: i64 = 10_000_000;
 const HUNDRED_NS_PER_SEC_U64: u64 = 10_000_000;
 
 /// Set both access and modification times for a file at `p`.
-pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     let f = OpenOptions::new()
         .write(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
@@ -22,7 +22,7 @@ pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<
 }
 
 /// Set only the modification time for a file at `p`.
-pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     let f = OpenOptions::new()
         .write(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
@@ -31,7 +31,7 @@ pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
 }
 
 /// Set only the access time for a file at `p`.
-pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     let f = OpenOptions::new()
         .write(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
@@ -40,7 +40,7 @@ pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
 }
 
 /// Set times for an open file handle.
-pub fn set_file_handle_times(
+pub(crate) fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -80,7 +80,7 @@ pub fn set_file_handle_times(
 }
 
 /// Set times for a symlink at `p` without following it.
-pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
 
     let f = OpenOptions::new()
@@ -91,17 +91,17 @@ pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io:
 }
 
 /// Return the last modification time from `meta`.
-pub fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
+pub(crate) fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
     from_intervals(meta.last_write_time())
 }
 
 /// Return the last access time from `meta`.
-pub fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
+pub(crate) fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
     from_intervals(meta.last_access_time())
 }
 
 /// Return the creation time from `meta`.
-pub fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
+pub(crate) fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
     Some(from_intervals(meta.creation_time()))
 }
 

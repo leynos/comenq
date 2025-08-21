@@ -10,19 +10,19 @@ mod utimes;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use self::linux::*;
+pub(crate) use self::linux::*;
 
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-pub use self::android::*;
+pub(crate) use self::android::*;
 
 #[cfg(target_os = "macos")]
 mod utimes;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use self::macos::*;
+pub(crate) use self::macos::*;
 
 #[cfg(any(
     target_os = "aix",
@@ -45,7 +45,7 @@ mod utimensat;
     target_os = "openbsd",
     target_os = "haiku",
 ))]
-pub use self::utimensat::*;
+pub(crate) use self::utimensat::*;
 
 #[cfg(not(any(
     target_os = "linux",
@@ -74,7 +74,7 @@ mod utimes;
     target_os = "openbsd",
     target_os = "haiku",
 )))]
-pub use self::utimes::*;
+pub(crate) use self::utimes::*;
 
 #[allow(dead_code)]
 fn to_timespec(ft: &Option<FileTime>) -> timespec {
@@ -115,20 +115,20 @@ fn to_timespec(ft: &Option<FileTime>) -> timespec {
     ts
 }
 
-pub fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
+pub(crate) fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
     FileTime {
         seconds: meta.mtime(),
         nanos: meta.mtime_nsec() as u32,
     }
 }
 
-pub fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
+pub(crate) fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
     FileTime {
         seconds: meta.atime(),
         nanos: meta.atime_nsec() as u32,
     }
 }
 
-pub fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
+pub(crate) fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
     meta.created().map(|i| i.into()).ok()
 }

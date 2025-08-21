@@ -1,3 +1,8 @@
+//! Unix implementation using `utimensat` to update file timestamps.
+//!
+//! Functions here are crate-internal helpers invoked by the public API in
+//! `lib.rs`. Paths must not contain interior NUL bytes.
+
 use crate::FileTime;
 use std::ffi::CString;
 use std::fs::File;
@@ -5,19 +10,38 @@ use std::io;
 use std::os::unix::prelude::*;
 use std::path::Path;
 
-pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set both access and modification times for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimensat` call fails.
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), false)
 }
 
-pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+/// Set only the modification time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimensat` call fails.
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     set_times(p, None, Some(mtime), false)
 }
 
-pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+/// Set only the access time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimensat` call fails.
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), None, false)
 }
 
-pub fn set_file_handle_times(
+/// Set times for an open file handle.
+///
+/// # Errors
+/// Propagates errors from the underlying `futimens` call.
+pub(crate) fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -31,10 +55,20 @@ pub fn set_file_handle_times(
     }
 }
 
-pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set access and modification times for a symlink at `p` (no-follow).
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimensat` call fails.
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), true)
 }
 
+/// Low-level helper around `utimensat`/`lutimens`.
+///
+/// # Safety
+/// The path is converted to a `CString`, guaranteeing a terminating NUL and no
+/// interior NUL bytes before calling the FFI.
 fn set_times(
     p: &Path,
     atime: Option<FileTime>,

@@ -11,17 +11,25 @@ use std::path::Path;
 
 use libredox::{
     call, errno,
-    error::{Error, Result},
+    error::{Error, Result as RedoxResult},
     flag, Fd,
 };
 
 /// Set both access and modification times for a file at `p`.
+///
+/// # Errors
+/// Returns `EINVAL` if `p` is not UTF-8. Propagates OS errors from
+/// libredox when the underlying syscall fails.
 pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     set_file_times_redox(fd.raw(), atime, mtime)
 }
 
 /// Set only the modification time for a file at `p`.
+///
+/// # Errors
+/// Returns `EINVAL` if `p` is not UTF-8. Propagates OS errors from
+/// libredox when the underlying syscall fails.
 pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     let st = fd.stat()?;
@@ -38,6 +46,10 @@ pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
 }
 
 /// Set only the access time for a file at `p`.
+///
+/// # Errors
+/// Returns `EINVAL` if `p` is not UTF-8. Propagates OS errors from
+/// libredox when the underlying syscall fails.
 pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     let fd = open_redox(p, 0)?;
     let st = fd.stat()?;
@@ -54,7 +66,15 @@ pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
 }
 
 /// Set access and modification times for a symlink at `p` (no-follow).
-pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+///
+/// # Errors
+/// Returns `EINVAL` if `p` is not UTF-8. Propagates OS errors from
+/// libredox when the underlying syscall fails.
+pub(crate) fn set_symlink_file_times(
+    p: &Path,
+    atime: FileTime,
+    mtime: FileTime,
+) -> io::Result<()> {
     let fd = open_redox(p, flag::O_NOFOLLOW)?;
     set_file_times_redox(fd.raw(), atime, mtime)?;
     Ok(())
@@ -64,6 +84,9 @@ pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime)
 ///
 /// If only one of `atime` or `mtime` is provided, the missing value is read
 /// from the handle's current metadata.
+///
+/// # Errors
+/// Propagates OS errors from metadata queries or the underlying syscall.
 pub(crate) fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
@@ -85,9 +108,15 @@ pub(crate) fn set_file_handle_times(
 }
 
 /// Open `path` with the provided Redox-specific `flags`.
-fn open_redox(path: &Path, flags: i32) -> Result<Fd> {
+///
+/// # Errors
+/// Returns `EINVAL` if `path` is not UTF-8. Propagates OS errors from
+/// `Fd::open` when the underlying syscall fails.
+fn open_redox(path: &Path, flags: i32) -> RedoxResult<Fd> {
     match path.to_str() {
         Some(string) => Fd::open(string, flags, 0),
+        // Redox requires UTF-8 paths; non-UTF-8 paths cannot be represented and
+        // yield `EINVAL`.
         None => Err(Error::new(errno::EINVAL)),
     }
 }

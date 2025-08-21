@@ -580,7 +580,7 @@ where
 
     for (attempt, timeout_duration) in timeouts.iter().enumerate() {
         let attempt_num = attempt + 1;
-        println!(
+        tracing::info!(
             "⏱️  Attempt {}/{} with {}s timeout for {}",
             attempt_num,
             timeouts.len(),
@@ -590,9 +590,10 @@ where
 
         match tokio::time::timeout(*timeout_duration, operation()).await {
             Ok(Ok(result)) => {
-                println!(
+                tracing::info!(
                     "✅ {} completed successfully on attempt {}",
-                    operation_name, attempt_num
+                    operation_name,
+                    attempt_num
                 );
                 return Ok(result);
             }
@@ -1011,7 +1012,7 @@ mod tests {
             eprintln!("{}", diagnostics);
             panic!("join worker: timeout in success test");
         } else {
-            println!("\u{2713} Worker task completed successfully");
+            tracing::info!("\u{2713} Worker task completed successfully");
         }
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         let data_files = stdfs::read_dir(&ctx.cfg.queue_path)
@@ -1087,7 +1088,7 @@ mod tests {
             eprintln!("{}", diagnostics);
             panic!("join worker: timeout in error test");
         } else {
-            println!("\u{2713} Worker task completed with error handling");
+            tracing::info!("\u{2713} Worker task completed with error handling");
         }
         assert_eq!(
             server.received_requests().await.expect("requests").len(),

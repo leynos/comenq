@@ -10,19 +10,19 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::SeqCst;
 use std::{io, mem};
 
-pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), false)
 }
 
-pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     set_times(p, None, Some(mtime), false)
 }
 
-pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), None, false)
 }
 
-pub fn set_file_handle_times(
+pub(crate) fn set_file_handle_times(
     f: &File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -42,7 +42,7 @@ pub fn set_file_handle_times(
     super::utimes::set_file_handle_times(f, atime, mtime)
 }
 
-pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), true)
 }
 

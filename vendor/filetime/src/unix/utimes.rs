@@ -1,3 +1,7 @@
+//! Fallback implementation using `utimes`/`lutimes` to update timestamps.
+//!
+//! These helpers are crate-internal and wrap older POSIX APIs.
+
 use crate::FileTime;
 use std::ffi::CString;
 use std::fs;
@@ -6,23 +10,42 @@ use std::os::unix::prelude::*;
 use std::path::Path;
 
 #[allow(dead_code)]
-pub fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set both access and modification times for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), false)
 }
 
 #[allow(dead_code)]
-pub fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+/// Set only the modification time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
     set_times(p, None, Some(mtime), false)
 }
 
 #[allow(dead_code)]
-pub fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+/// Set only the access time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), None, false)
 }
 
 #[cfg(not(target_env = "uclibc"))]
 #[allow(dead_code)]
-pub fn set_file_handle_times(
+/// Set times for an open file handle.
+///
+/// # Errors
+/// Propagates errors from the underlying `futimes` call.
+pub(crate) fn set_file_handle_times(
     f: &fs::File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -42,7 +65,11 @@ pub fn set_file_handle_times(
 
 #[cfg(target_env = "uclibc")]
 #[allow(dead_code)]
-pub fn set_file_handle_times(
+/// Set times for an open file handle on uClibc systems.
+///
+/// # Errors
+/// Propagates errors from the underlying `futimens` call.
+pub(crate) fn set_file_handle_times(
     f: &fs::File,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,
@@ -81,11 +108,21 @@ fn get_times(
 }
 
 #[allow(dead_code)]
-pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+/// Set access and modification times for a symlink at `p` (no-follow).
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `lutimes` call fails.
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
     set_times(p, Some(atime), Some(mtime), true)
 }
 
-pub fn set_times(
+/// Low-level helper around `utimes`/`lutimes`.
+///
+/// # Safety
+/// The path is converted to a `CString`, ensuring a terminating NUL and no
+/// interior NUL bytes before calling the FFI.
+pub(crate) fn set_times(
     p: &Path,
     atime: Option<FileTime>,
     mtime: Option<FileTime>,

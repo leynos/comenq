@@ -82,7 +82,9 @@ impl FileTime {
     }
 
     const fn emulate_second_only_system(self) -> FileTime {
-        // Emulation is disabled in this patched build.
+        // Emulation is disabled in this patched build to preserve nanosecond
+        // precision across all platforms. The upstream behaviour truncates to
+        // seconds on some systems.
         self
     }
 
