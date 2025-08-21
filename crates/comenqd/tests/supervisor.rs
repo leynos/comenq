@@ -71,7 +71,7 @@ async fn restarts_failed_listener() {
     let attempts_clone = Arc::clone(&attempts);
     let listener_maker = {
         let attempts = Arc::clone(&attempts_clone);
-        let mut shutdown = shutdown_rx.clone();
+        let shutdown = shutdown_rx.clone();
         move || {
             let attempts = Arc::clone(&attempts);
             let mut shutdown = shutdown.clone();
@@ -87,7 +87,7 @@ async fn restarts_failed_listener() {
     };
 
     let worker_maker = {
-        let mut shutdown = shutdown_rx.clone();
+        let shutdown = shutdown_rx.clone();
         move || {
             let mut shutdown = shutdown.clone();
             tokio::spawn(async move {
