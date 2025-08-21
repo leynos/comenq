@@ -40,6 +40,9 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Number of whole seconds between 1601-01-01 and 1970-01-01.
+const WINDOWS_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
+
 cfg_if::cfg_if! {
     if #[cfg(target_os = "redox")] {
         #[path = "redox.rs"]
@@ -58,9 +61,9 @@ cfg_if::cfg_if! {
 
 /// A helper structure to represent a timestamp for a file.
 ///
-/// The actual value contined within is platform-specific and does not have the
-/// same meaning across platforms, but comparisons and stringification can be
-/// significant among the same platform.
+/// The actual value contained within is platform-specific and does not have the
+/// same meaning across platforms, but values are comparable and printable within
+/// the same platform.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone, Hash)]
 pub struct FileTime {
     seconds: i64,
@@ -114,7 +117,7 @@ impl FileTime {
     /// instance may not be the same as that passed in.
     pub const fn from_unix_time(seconds: i64, nanos: u32) -> FileTime {
         FileTime {
-            seconds: seconds + if cfg!(windows) { 11644473600 } else { 0 },
+            seconds: seconds + if cfg!(windows) { WINDOWS_EPOCH_OFFSET_SECS } else { 0 },
             nanos,
         }
         .emulate_second_only_system()
@@ -156,7 +159,7 @@ impl FileTime {
     /// that does. This function will error if passed such a SystemTime.
     pub fn from_system_time(time: SystemTime) -> FileTime {
         let epoch = if cfg!(windows) {
-            UNIX_EPOCH - Duration::from_secs(11644473600)
+            UNIX_EPOCH - Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECS as u64)
         } else {
             UNIX_EPOCH
         };
@@ -197,7 +200,7 @@ impl FileTime {
     /// Note that this does not return the same value as `seconds` for Windows
     /// platforms as seconds are relative to a different date there.
     pub const fn unix_seconds(&self) -> i64 {
-        self.seconds - if cfg!(windows) { 11644473600 } else { 0 }
+        self.seconds - if cfg!(windows) { WINDOWS_EPOCH_OFFSET_SECS } else { 0 }
     }
 
     /// Returns the nanosecond precision of this timestamp.
@@ -235,8 +238,8 @@ where
 
 /// Set the last access and modification times for a file handle.
 ///
-/// This function will either or both of  the `atime` and `mtime` metadata
-/// fields for a file handle , returning any error encountered. If `None` is
+/// This function will update either or both of the `atime` and `mtime` metadata
+/// fields for a file handle, returning any error encountered. If `None` is
 /// specified then the time won't be updated. If `None` is specified for both
 /// options then no action is taken.
 pub fn set_file_handle_times(
@@ -248,7 +251,7 @@ pub fn set_file_handle_times(
 }
 
 /// Set the last access and modification times for a file on the filesystem.
-/// This function does not follow symlink.
+/// This function does not follow symlinks.
 ///
 /// This function will set the `atime` and `mtime` metadata fields for a file
 /// on the local filesystem, returning any error encountered.
@@ -349,11 +352,11 @@ mod tests {
     #[cfg(windows)]
     fn from_unix_time_test() {
         let time = FileTime::from_unix_time(10, 100_000_000);
-        assert_eq!(11644473610, time.seconds);
+        assert_eq!(WINDOWS_EPOCH_OFFSET_SECS + 10, time.seconds);
         assert_eq!(100_000_000, time.nanos);
 
         let time = FileTime::from_unix_time(-10, 100_000_000);
-        assert_eq!(11644473590, time.seconds);
+        assert_eq!(WINDOWS_EPOCH_OFFSET_SECS - 10, time.seconds);
         assert_eq!(100_000_000, time.nanos);
 
         let time = FileTime::from_unix_time(-12_000_000_000, 0);
@@ -381,15 +384,15 @@ mod tests {
     #[cfg(windows)]
     fn from_system_time_test() {
         let time = FileTime::from_system_time(UNIX_EPOCH + Duration::from_secs(10));
-        assert_eq!(11644473610, time.seconds);
+        assert_eq!(WINDOWS_EPOCH_OFFSET_SECS + 10, time.seconds);
         assert_eq!(0, time.nanos);
 
         let time = FileTime::from_system_time(UNIX_EPOCH - Duration::from_secs(10));
-        assert_eq!(11644473590, time.seconds);
+        assert_eq!(WINDOWS_EPOCH_OFFSET_SECS - 10, time.seconds);
         assert_eq!(0, time.nanos);
 
         let time = FileTime::from_system_time(UNIX_EPOCH - Duration::from_millis(1100));
-        assert_eq!(11644473598, time.seconds);
+        assert_eq!(WINDOWS_EPOCH_OFFSET_SECS - 2, time.seconds);
         assert_eq!(900_000_000, time.nanos);
 
         let time = FileTime::from_system_time(UNIX_EPOCH - Duration::from_secs(12_000_000_000));

@@ -469,7 +469,7 @@ mod smart_timeouts {
                 timeout *= DEBUG_MULTIPLIER;
             }
 
-            if cfg!(any(coverage, coverage_nightly)) {
+            if std::env::var("LLVM_PROFILE_FILE").is_ok() {
                 timeout *= COVERAGE_MULTIPLIER;
             }
 
@@ -536,8 +536,12 @@ mod smart_timeouts {
                 env::set_var("CI", "1");
             }
             let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
-            // base 10 * complexity 1 * debug 2 * CI 2 = 40
-            assert_eq!(cfg.calculate_timeout(), Duration::from_secs(40));
+            // base 10 * debug 2 * CI 2 * optional coverage multiplier
+            let mut expected = 10 * DEBUG_MULTIPLIER * CI_MULTIPLIER;
+            if std::env::var("LLVM_PROFILE_FILE").is_ok() {
+                expected *= COVERAGE_MULTIPLIER;
+            }
+            assert_eq!(cfg.calculate_timeout(), Duration::from_secs(expected));
             unsafe {
                 env::remove_var("CI");
             }
@@ -638,14 +642,20 @@ mod retry_helper_tests {
     #[tokio::test(start_paused = true)]
     async fn retries_after_timeout_then_succeeds() {
         let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
-        let mut attempts = 0;
-        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", || {
-            attempts += 1;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+        let attempts = Arc::new(AtomicU32::new(0));
+        let handle_attempts = attempts.clone();
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || {
+            let attempts = handle_attempts.clone();
             async move {
-                if attempts == 1 {
+                let current = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                if current == 1 {
                     sleep(Duration::from_secs(6)).await;
                 }
-                Ok(attempts)
+                Ok(current)
             }
         }));
 
@@ -655,7 +665,7 @@ mod retry_helper_tests {
 
         let result = handle.await.expect("join").expect("timeout_with_retries");
         assert_eq!(result, 2);
-        assert_eq!(attempts, 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test(start_paused = true)]
