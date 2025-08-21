@@ -982,8 +982,8 @@ mod tests {
         .await
         {
             let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-            eprintln!("Timeout waiting for worker drained notification: {}", e);
-            eprintln!("{}", diagnostics);
+            tracing::error!("Timeout waiting for worker drained notification: {e}");
+            tracing::error!("{diagnostics}");
             panic!("worker drained: QUEUE CLEANUP FAILURE");
         }
         shutdown_tx.send(()).expect("send shutdown");
@@ -1008,8 +1008,8 @@ mod tests {
         .await
         {
             let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-            eprintln!("\u{274C} Worker join timeout: {}", e);
-            eprintln!("{}", diagnostics);
+            tracing::error!("\u{274C} Worker join timeout: {e}");
+            tracing::error!("{diagnostics}");
             panic!("join worker: timeout in success test");
         } else {
             tracing::info!("\u{2713} Worker task completed successfully");
@@ -1084,8 +1084,8 @@ mod tests {
         .await
         {
             let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 1).await;
-            eprintln!("\u{274C} Worker join timeout: {}", e);
-            eprintln!("{}", diagnostics);
+            tracing::error!("\u{274C} Worker join timeout: {e}");
+            tracing::error!("{diagnostics}");
             panic!("join worker: timeout in error test");
         } else {
             tracing::info!("\u{2713} Worker task completed with error handling");

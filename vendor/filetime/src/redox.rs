@@ -1,7 +1,8 @@
-//! Redox backend for file timestamp manipulation.
+//! Redox-specific backend for setting file and symlink timestamps via
+//! `libredox`.
 //!
-//! Provides helpers to update access and modification times. When only one
-//! time is supplied, the other is derived from the file's existing metadata.
+//! Paths must be valid UTF-8; invalid paths yield `EINVAL`. When only one time
+//! is supplied, the other is derived from the file's existing metadata.
 
 use crate::FileTime;
 use std::fs::{self, File};

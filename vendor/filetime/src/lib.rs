@@ -550,25 +550,31 @@ mod tests {
 
     #[test]
     fn set_file_times_pre_unix_epoch_test() {
-        let td = Builder::new().prefix("filetime").tempdir().unwrap();
+        let td = Builder::new()
+            .prefix("filetime")
+            .tempdir()
+            .expect("create tempdir");
         let path = td.path().join("foo.txt");
-        File::create(&path).unwrap();
+        File::create(&path).expect("create file");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         let atime = FileTime::from_last_access_time(&metadata);
-        set_file_times(&path, atime, mtime).unwrap();
+        set_file_times(&path, atime, mtime).expect("set file times");
 
         let new_mtime = FileTime::from_unix_time(-10_000, 0);
         if cfg!(target_os = "aix") {
             // On AIX, os checks if the unix timestamp is valid.
             let result = set_file_times(&path, atime, new_mtime);
             assert!(result.is_err());
-            assert!(result.err().unwrap().kind() == std::io::ErrorKind::InvalidInput);
+            assert_eq!(
+                result.err().expect("expected invalid input").kind(),
+                std::io::ErrorKind::InvalidInput
+            );
         } else {
-            set_file_times(&path, atime, new_mtime).unwrap();
+            set_file_times(&path, atime, new_mtime).expect("set file times");
 
-            let metadata = fs::metadata(&path).unwrap();
+            let metadata = fs::metadata(&path).expect("stat file");
             let mtime = FileTime::from_last_modification_time(&metadata);
             assert_eq!(mtime, new_mtime);
         }
@@ -577,14 +583,17 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn set_file_times_pre_windows_epoch_test() {
-        let td = Builder::new().prefix("filetime").tempdir().unwrap();
+        let td = Builder::new()
+            .prefix("filetime")
+            .tempdir()
+            .expect("create tempdir");
         let path = td.path().join("foo.txt");
-        File::create(&path).unwrap();
+        File::create(&path).expect("create file");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         let atime = FileTime::from_last_access_time(&metadata);
-        set_file_times(&path, atime, mtime).unwrap();
+        set_file_times(&path, atime, mtime).expect("set file times");
 
         let new_mtime = FileTime::from_unix_time(-12_000_000_000, 0);
         assert!(set_file_times(&path, atime, new_mtime).is_err());
@@ -592,84 +601,90 @@ mod tests {
 
     #[test]
     fn set_symlink_file_times_test() {
-        let td = Builder::new().prefix("filetime").tempdir().unwrap();
+        let td = Builder::new()
+            .prefix("filetime")
+            .tempdir()
+            .expect("create tempdir");
         let path = td.path().join("foo.txt");
-        File::create(&path).unwrap();
+        File::create(&path).expect("create file");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         let atime = FileTime::from_last_access_time(&metadata);
-        set_symlink_file_times(&path, atime, mtime).unwrap();
+        set_symlink_file_times(&path, atime, mtime).expect("set symlink times");
 
         let new_mtime = FileTime::from_unix_time(10_000, 0);
-        set_symlink_file_times(&path, atime, new_mtime).unwrap();
+        set_symlink_file_times(&path, atime, new_mtime).expect("set symlink times");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
         let spath = td.path().join("bar.txt");
-        make_symlink_file(&path, &spath).unwrap();
+        make_symlink_file(&path, &spath).expect("make symlink file");
 
-        let metadata = fs::symlink_metadata(&spath).unwrap();
+        let metadata = fs::symlink_metadata(&spath).expect("stat symlink");
         let smtime = FileTime::from_last_modification_time(&metadata);
         let satime = FileTime::from_last_access_time(&metadata);
-        set_symlink_file_times(&spath, smtime, satime).unwrap();
+        set_symlink_file_times(&spath, smtime, satime).expect("set symlink times");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
         let new_smtime = FileTime::from_unix_time(20_000, 0);
-        set_symlink_file_times(&spath, atime, new_smtime).unwrap();
+        set_symlink_file_times(&spath, atime, new_smtime).expect("set symlink times");
 
-        let metadata = fs::metadata(&spath).unwrap();
+        let metadata = fs::metadata(&spath).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
-        let metadata = fs::symlink_metadata(&spath).unwrap();
+        let metadata = fs::symlink_metadata(&spath).expect("stat symlink");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_smtime);
     }
 
     #[test]
     fn set_symlink_dir_times_test() {
-        let td = Builder::new().prefix("filetime").tempdir().unwrap();
+        let td = Builder::new()
+            .prefix("filetime")
+            .tempdir()
+            .expect("create tempdir");
         let path = td.path().join("foo");
-        fs::create_dir(&path).unwrap();
+        fs::create_dir(&path).expect("create dir");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         let atime = FileTime::from_last_access_time(&metadata);
-        set_symlink_file_times(&path, atime, mtime).unwrap();
+        set_symlink_file_times(&path, atime, mtime).expect("set symlink times");
 
         let new_mtime = FileTime::from_unix_time(10_000, 0);
-        set_symlink_file_times(&path, atime, new_mtime).unwrap();
+        set_symlink_file_times(&path, atime, new_mtime).expect("set symlink times");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
         let spath = td.path().join("bar");
-        make_symlink_dir(&path, &spath).unwrap();
+        make_symlink_dir(&path, &spath).expect("make symlink dir");
 
-        let metadata = fs::symlink_metadata(&spath).unwrap();
+        let metadata = fs::symlink_metadata(&spath).expect("stat symlink");
         let smtime = FileTime::from_last_modification_time(&metadata);
         let satime = FileTime::from_last_access_time(&metadata);
-        set_symlink_file_times(&spath, smtime, satime).unwrap();
+        set_symlink_file_times(&spath, smtime, satime).expect("set symlink times");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
         let new_smtime = FileTime::from_unix_time(20_000, 0);
-        set_symlink_file_times(&spath, atime, new_smtime).unwrap();
+        set_symlink_file_times(&spath, atime, new_smtime).expect("set symlink times");
 
-        let metadata = fs::metadata(&spath).unwrap();
+        let metadata = fs::metadata(&spath).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime);
 
-        let metadata = fs::symlink_metadata(&spath).unwrap();
+        let metadata = fs::symlink_metadata(&spath).expect("stat symlink");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_smtime);
     }
@@ -678,19 +693,22 @@ mod tests {
     fn set_single_time_test() {
         use super::{set_file_atime, set_file_mtime};
 
-        let td = Builder::new().prefix("filetime").tempdir().unwrap();
+        let td = Builder::new()
+            .prefix("filetime")
+            .tempdir()
+            .expect("create tempdir");
         let path = td.path().join("foo.txt");
-        File::create(&path).unwrap();
+        File::create(&path).expect("create file");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         let atime = FileTime::from_last_access_time(&metadata);
-        set_file_times(&path, atime, mtime).unwrap();
+        set_file_times(&path, atime, mtime).expect("set file times");
 
         let new_mtime = FileTime::from_unix_time(10_000, 0);
-        set_file_mtime(&path, new_mtime).unwrap();
+        set_file_mtime(&path, new_mtime).expect("set file mtime");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let mtime = FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime, new_mtime, "modification time should be updated");
         assert_eq!(
@@ -700,9 +718,9 @@ mod tests {
         );
 
         let new_atime = FileTime::from_unix_time(20_000, 0);
-        set_file_atime(&path, new_atime).unwrap();
+        set_file_atime(&path, new_atime).expect("set file atime");
 
-        let metadata = fs::metadata(&path).unwrap();
+        let metadata = fs::metadata(&path).expect("stat file");
         let atime = FileTime::from_last_access_time(&metadata);
         assert_eq!(atime, new_atime, "access time should be updated");
         assert_eq!(

@@ -8,11 +8,12 @@ constants expose the multipliers and bounds, allowing projects to tweak
 behaviour without touching call sites.
 
 The `timeout_with_retries` helper executes an operation with a progressively
-increasing timeout. By default it retries with 50%, 100%, and 150% of the
+increasing timeout. By default, it retries with 50%, 100%, and 150% of the
 calculated timeout, offering clearer diagnostics while avoiding spurious
 failures from transient delays.
 
 ```rust
+// Note: These utilities are only available in test builds (#[cfg(test)])
 # use crate::daemon::{smart_timeouts, timeout_with_retries};
 # async fn example() {
 let result = timeout_with_retries(
