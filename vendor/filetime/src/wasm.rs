@@ -9,10 +9,10 @@ use std::io;
 use std::path::Path;
 
 #[inline]
-fn wasm_not_implemented() -> io::Result<()> {
+fn wasm_unsupported() -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "Wasm backend not implemented",
+        "Wasm backend not supported",
     ))
 }
 
@@ -21,7 +21,7 @@ pub(crate) fn set_file_times(
     _atime: FileTime,
     _mtime: FileTime,
 ) -> io::Result<()> {
-    wasm_not_implemented()
+    wasm_unsupported()
 }
 
 pub(crate) fn set_symlink_file_times(
@@ -29,21 +29,22 @@ pub(crate) fn set_symlink_file_times(
     _atime: FileTime,
     _mtime: FileTime,
 ) -> io::Result<()> {
-    wasm_not_implemented()
+    wasm_unsupported()
 }
 
 pub(crate) fn set_file_mtime(_p: &Path, _mtime: FileTime) -> io::Result<()> {
-    wasm_not_implemented()
+    wasm_unsupported()
 }
 
 pub(crate) fn set_file_atime(_p: &Path, _atime: FileTime) -> io::Result<()> {
-    wasm_not_implemented()
+    wasm_unsupported()
 }
 
 /// Not supported on the wasm backend.
 ///
 /// # Panics
 /// Always panics; this target has no filesystem metadata.
+#[track_caller]
 pub(crate) fn from_last_modification_time(_meta: &fs::Metadata) -> FileTime {
     panic!("filetime: from_last_modification_time is unsupported on wasm target")
 }
@@ -52,6 +53,7 @@ pub(crate) fn from_last_modification_time(_meta: &fs::Metadata) -> FileTime {
 ///
 /// # Panics
 /// Always panics; this target has no filesystem metadata.
+#[track_caller]
 pub(crate) fn from_last_access_time(_meta: &fs::Metadata) -> FileTime {
     panic!("filetime: from_last_access_time is unsupported on wasm target")
 }
@@ -66,5 +68,5 @@ pub(crate) fn set_file_handle_times(
     _atime: Option<FileTime>,
     _mtime: Option<FileTime>,
 ) -> io::Result<()> {
-    wasm_not_implemented()
+    wasm_unsupported()
 }

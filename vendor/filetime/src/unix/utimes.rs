@@ -143,17 +143,17 @@ pub(crate) fn set_times(
         Some(pair) => pair,
         None => return Ok(()),
     };
-    let p = CString::new(p.as_os_str().as_bytes())?;
+    let p_cstr = CString::new(p.as_os_str().as_bytes())?;
     let times = [to_timeval(&atime), to_timeval(&mtime)];
     let rc = unsafe {
         // SAFETY:
-        // - `p` is a valid NUL-terminated C string derived from `Path` bytes.
+        // - `p_cstr` is a valid NUL-terminated C string derived from `Path` bytes.
         // - `times` points to two initialised `timeval` values.
         // - `lutimes` does not follow the link when `symlink` is true.
         if symlink {
-            libc::lutimes(p.as_ptr(), times.as_ptr())
+            libc::lutimes(p_cstr.as_ptr(), times.as_ptr())
         } else {
-            libc::utimes(p.as_ptr(), times.as_ptr())
+            libc::utimes(p_cstr.as_ptr(), times.as_ptr())
         }
     };
     return if rc == 0 {

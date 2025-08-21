@@ -41,6 +41,10 @@ pub(crate) fn set_file_handle_times(
     //
     // For better compatibility, we reimplement `futimens` using `utimensat`,
     // the same way as bionic libc uses it to implement `futimens`.
+    // SAFETY:
+    // - `f.as_raw_fd()` is a valid descriptor and `NULL` path targets it directly.
+    // - `times` points to two initialised `timespec` values that outlive the call.
+    // - Flags are zero, matching `futimens` semantics.
     let rc = unsafe { libc::utimensat(f.as_raw_fd(), core::ptr::null(), times.as_ptr(), 0) };
     if rc == 0 {
         Ok(())
@@ -66,9 +70,13 @@ fn set_times(
         0
     };
 
-    let p = CString::new(p.as_os_str().as_bytes())?;
+    let p_cstr = CString::new(p.as_os_str().as_bytes())?;
     let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
-    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
+    // SAFETY:
+    // - `p_cstr` is a valid NUL-terminated C string.
+    // - `times` points to two initialised `timespec` values that outlive the call.
+    // - `flags` is 0 or `AT_SYMLINK_NOFOLLOW` according to `symlink`.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p_cstr.as_ptr(), times.as_ptr(), flags) };
     if rc == 0 {
         Ok(())
     } else {

@@ -49,6 +49,10 @@ pub(crate) fn set_file_handle_times(
     mtime: Option<FileTime>,
 ) -> io::Result<()> {
     let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
+    // SAFETY:
+    // - `f.as_raw_fd()` is valid for the duration of the call.
+    // - `times` points to two initialised `timespec` values that outlive the call.
+    // - `futimens` has the expected ABI for the target platform.
     let rc = unsafe { libc::futimens(f.as_raw_fd(), times.as_ptr()) };
     if rc == 0 {
         Ok(())
