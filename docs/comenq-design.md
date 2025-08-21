@@ -381,8 +381,8 @@ exponential backoff with jitter (via the `backon` crate) to avoid a tight
 restart loop, and then respawns the task. This keeps the service available
 without relying on an external process supervisor. Restarting the writer
 recreates the in-memory channel and restarts the listener to attach a fresh
-sender. Any bytes buffered in the discarded channel that were not persisted to
-the queue are lost.
+sender, preserving single-writer semantics. Any bytes buffered in the discarded
+channel that were not persisted to the queue are lost.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.

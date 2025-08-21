@@ -1,5 +1,5 @@
 //! Tests for the task supervision logic.
-use backon::{BackoffBuilder, ExponentialBuilder};
+use backon::ExponentialBuilder;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -18,16 +18,18 @@ async fn supervise_until_restarts<F1, F2>(
 {
     let mut t1 = make1();
     let mut t2 = make2();
-    let mut backoff1 = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(1))
-        .without_max_times()
-        .build();
-    let mut backoff2 = ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(1))
-        .without_max_times()
-        .build();
+    let mut backoff1 = backon::BackoffBuilder::build(
+        ExponentialBuilder::default()
+            .with_jitter()
+            .with_min_delay(Duration::from_millis(1))
+            .without_max_times(),
+    );
+    let mut backoff2 = backon::BackoffBuilder::build(
+        ExponentialBuilder::default()
+            .with_jitter()
+            .with_min_delay(Duration::from_millis(1))
+            .without_max_times(),
+    );
     let timeout_duration = Duration::from_secs(30);
     let supervise = async {
         loop {
@@ -78,7 +80,7 @@ async fn restarts_failed_listener() {
             let attempts = Arc::clone(&attempts);
             let mut shutdown = shutdown.clone();
             tokio::spawn(async move {
-                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                     Err(anyhow::anyhow!("fail"))
                 } else {
                     let _ = shutdown.changed().await;
@@ -104,12 +106,12 @@ async fn restarts_failed_listener() {
         worker_maker,
         shutdown_rx,
     ));
-    while attempts.load(Ordering::SeqCst) < 2 {
+    while attempts.load(Ordering::Relaxed) < 2 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     shutdown_tx.send(()).unwrap();
     supervisor.await.unwrap();
-    assert!(attempts.load(Ordering::SeqCst) >= 2);
+    assert!(attempts.load(Ordering::Relaxed) >= 2);
 }
 
 #[tokio::test]
@@ -124,7 +126,7 @@ async fn restarts_failed_worker() {
             let attempts = Arc::clone(&attempts);
             let mut shutdown = shutdown.clone();
             tokio::spawn(async move {
-                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                     Err(anyhow::anyhow!("fail"))
                 } else {
                     let _ = shutdown.changed().await;
@@ -150,10 +152,10 @@ async fn restarts_failed_worker() {
         worker_maker,
         shutdown_rx,
     ));
-    while attempts.load(Ordering::SeqCst) < 2 {
+    while attempts.load(Ordering::Relaxed) < 2 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     shutdown_tx.send(()).unwrap();
     supervisor.await.unwrap();
-    assert!(attempts.load(Ordering::SeqCst) >= 2);
+    assert!(attempts.load(Ordering::Relaxed) >= 2);
 }

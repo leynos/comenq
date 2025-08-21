@@ -5,7 +5,7 @@
 //! applies the configured cooldown period between requests.
 use crate::config::Config;
 use anyhow::Result;
-use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
+use backon::{ExponentialBackoff, ExponentialBuilder};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -68,11 +68,12 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
 /// maximum attempt count. Used to space out task restarts and avoid tight
 /// respawn loops.
 fn backoff() -> ExponentialBackoff {
-    ExponentialBuilder::default()
-        .with_jitter()
-        .with_min_delay(Duration::from_millis(100))
-        .without_max_times()
-        .build()
+    backon::BackoffBuilder::build(
+        ExponentialBuilder::default()
+            .with_jitter()
+            .with_min_delay(Duration::from_millis(100))
+            .without_max_times(),
+    )
 }
 
 /// Attempts to post a comment to a GitHub pull request, enforcing a 30-second timeout.
@@ -99,8 +100,8 @@ async fn post_comment(
 /// The queue writer decouples the listener from the queue, ensuring a
 /// single writer for the `yaque` queue. It reads raw JSON payloads from the
 /// provided [`mpsc::UnboundedReceiver`] and attempts to enqueue each item
-/// using the [`yaque::Sender`]. Errors are logged and the loop continues so
-/// the daemon remains responsive.
+/// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
+/// loop terminates so a supervising task can recreate the sender.
 ///
 /// When the loop terminates the receiver is returned so a supervising task can
 /// resume consumption without losing any buffered requests.
@@ -128,6 +129,7 @@ pub async fn queue_writer(
     while let Some(bytes) = rx.recv().await {
         if let Err(e) = sender.send(bytes).await {
             tracing::error!(error = %e, "Queue enqueue failed");
+            break;
         }
     }
     rx
@@ -157,8 +159,22 @@ pub async fn run(config: Config) -> Result<()> {
     {
         let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
-            let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
-            let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to install SIGINT handler");
+                    let _ = shutdown_tx.send(());
+                    return;
+                }
+            };
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to install SIGTERM handler");
+                    let _ = shutdown_tx.send(());
+                    return;
+                }
+            };
 
             tokio::select! {
                 _ = sigint.recv() => {
