@@ -661,7 +661,8 @@ mod retry_helper_tests {
             }
         }));
 
-        tokio::time::advance(Duration::from_secs(5)).await;
+        let timeouts = cfg.with_progressive_retry();
+        tokio::time::advance(timeouts[0]).await;
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -673,16 +674,19 @@ mod retry_helper_tests {
     #[tokio::test(start_paused = true)]
     async fn fails_after_all_retries() {
         let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
-        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", || async {
-            sleep(Duration::from_secs(20)).await;
+        let timeouts = cfg.with_progressive_retry();
+        let final_timeout = *timeouts.last().expect("timeouts");
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || async move {
+            // Always exceed the final timeout so all attempts time out.
+            sleep(final_timeout + Duration::from_secs(1)).await;
             Ok(())
         }));
 
-        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::time::advance(timeouts[0]).await;
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::time::advance(timeouts[1]).await;
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(15)).await;
+        tokio::time::advance(timeouts[2]).await;
         tokio::task::yield_now().await;
 
         let err = handle.await.expect("join").expect_err("should time out");
