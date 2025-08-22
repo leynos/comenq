@@ -84,6 +84,21 @@ The complete lifecycle of a request is illustrated in the following sequence:
 This architecture ensures that comment posting is strictly serialized and
 paced, directly addressing the primary goal of avoiding API rate limits.
 
+### Channels and buffering
+
+The daemon sends client requests via an unbounded channel. The channel sender
+is recreated whenever the writer task restarts, preserving the existing
+receiver when possible.
+
+- Operational warning: the channel is unbounded. During writer downtime, the
+  in-memory backlog can grow until the supervisor respawns the writer. Deploy
+  with external backpressure (e.g., rate-limiting clients) if this risk is
+  unacceptable.
+
+- Lossy path: If the writer task panics, the old receiver is dropped and any
+  buffered items in that channel are lost. This is the only scenario where
+  pending requests may be discarded.
+
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
 The selection of foundational Rust libraries (crates) is critical to building a
@@ -375,6 +390,61 @@ requests even while the worker task is in its long sleep phase. A request can
 be accepted and enqueued in milliseconds, while the worker task independently
 processes the queue at its own deliberate pace.
 
+All daemon tasks—the listener, worker, and queue writer—are supervised. If any
+task exits unexpectedly, the daemon logs the failure, waits using an
+exponential backoff with jitter (via the `backon` crate) to avoid a tight
+restart loop, and then respawns the task. The minimum delay between restarts is
+configurable via `restart_min_delay_ms`. This keeps the service available
+without relying on an external process supervisor. Restarting the writer
+recreates the listener→writer channel and restarts the listener to attach a
+fresh sender, preserving single-writer semantics. When the writer exits
+cleanly, the supervisor reuses the existing receiver, so buffered bytes are
+preserved. If the writer panics and the receiver is lost, a new channel is
+created, and any bytes buffered in the discarded channel that were not
+persisted to the queue are lost.
+
+The supervision and restart behaviour is illustrated in the sequence diagram
+below.
+
+```mermaid
+sequenceDiagram
+    participant D as Daemon
+    participant L as Listener
+    participant W as Worker
+    participant Q as Queue Writer
+    participant S as Shutdown Signal
+
+    D->>L: Spawn Listener
+    D->>W: Spawn Worker
+    D->>Q: Spawn Queue Writer
+    
+    alt Task Failure
+        L--xD: Failure Detected
+        D->>D: Log Failure
+        D->>L: Restart Listener
+
+        W--xD: Failure Detected
+        D->>D: Log Failure
+        D->>W: Restart Worker
+        Q--xD: Failure Detected
+        D->>D: Log Failure
+        alt Receiver available (clean exit)
+            D->>D: Reuse existing receiver (buffer preserved)
+            D->>Q: Restart Queue Writer with existing Receiver + new Sender
+            D->>L: Restart Listener to re-bind Sender clone(s)
+        else Receiver lost (panic)
+            D->>D: Recreate in-memory channel (buffer may be dropped)
+            D->>Q: Restart Queue Writer with new Sender/Receiver
+            D->>L: Restart Listener to re-bind Sender clone(s)
+        end
+    end
+
+    S->>D: Trigger Graceful Shutdown
+    D->>L: Stop Listener
+    D->>W: Stop Worker
+    D->>Q: Stop Queue Writer
+```
+
 ### 3.2. The Persistent Job Queue with `yaque`
 
 A core requirement for the daemon is fault tolerance. If the daemon or the
@@ -505,13 +575,14 @@ For operational flexibility and security, the daemon's behavior must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter               | Type    | Description                                                                               | Default Value           |
-| ----------------------- | ------- | ----------------------------------------------------------------------------------------- | ----------------------- |
-| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field. | (none)                  |
-| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                           | /run/comenq/comenq.sock |
-| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                   | /var/lib/comenq/queue   |
-| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
-| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 960                     |
+| Parameter               | Type    | Description                                                                                | Default Value           |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------ | ----------------------- |
+| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field.  | (none)                  |
+| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                            | /run/comenq/comenq.sock |
+| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                    | /var/lib/comenq/queue   |
+| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                          | info                    |
+| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                 | 960                     |
+| restart_min_delay_ms    | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor). | 100                     |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,

@@ -43,7 +43,9 @@ async fn running_listener(world: &mut ListenerWorld) {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let cfg_clone = cfg.clone();
     let writer = tokio::spawn(async move {
-        queue_writer(sender, writer_rx).await.unwrap();
+        // Intentionally ignore the returned receiver: the writer remains
+        // alive for the test's duration and the channel is not reused.
+        let _ = queue_writer(sender, writer_rx).await;
     });
     let handle = tokio::spawn(async move {
         run_listener(cfg_clone, client_tx, shutdown_rx)

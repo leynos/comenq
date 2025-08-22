@@ -5,7 +5,7 @@
 
 #![expect(clippy::expect_used, reason = "simplify test setup")]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 /// Minimal configuration used in daemon tests.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestConfig {
     /// GitHub Personal Access Token.
     pub github_token: String,
@@ -23,17 +23,34 @@ pub struct TestConfig {
     pub queue_path: PathBuf,
     /// Cooldown between comment posts in seconds.
     pub cooldown_period_seconds: u64,
+    /// Minimum delay in milliseconds applied between task restarts.
+    pub restart_min_delay_ms: u64,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            github_token: String::new(),
+            socket_path: PathBuf::new(),
+            queue_path: PathBuf::new(),
+            cooldown_period_seconds: 1,
+            restart_min_delay_ms: 1,
+        }
+    }
 }
 
 /// Build a [`TestConfig`] using paths inside `tmp`.
 ///
 /// The configuration uses a dummy GitHub token and a one second cooldown.
+/// The minimum restart delay is set to 1 ms to exercise supervision paths
+/// without introducing flaky timing in tests.
 pub fn temp_config(tmp: &TempDir) -> TestConfig {
     TestConfig {
         github_token: "t".into(),
         socket_path: tmp.path().join("sock"),
         queue_path: tmp.path().join("q"),
         cooldown_period_seconds: 1,
+        restart_min_delay_ms: 1,
     }
 }
 
@@ -42,6 +59,22 @@ impl TestConfig {
     #[must_use]
     pub fn with_cooldown(mut self, secs: u64) -> Self {
         self.cooldown_period_seconds = secs;
+        self
+    }
+
+    /// Override the minimum restart delay (milliseconds) and return the updated
+    /// configuration.
+    #[must_use]
+    pub fn with_restart_min_delay_ms(mut self, ms: u64) -> Self {
+        self.restart_min_delay_ms = ms.max(1);
+        self
+    }
+
+    /// Override the minimum restart delay using a [`Duration`].
+    #[must_use]
+    pub fn with_restart_min_delay(mut self, d: Duration) -> Self {
+        let ms = d.as_millis().max(1) as u64;
+        self.restart_min_delay_ms = ms;
         self
     }
 }

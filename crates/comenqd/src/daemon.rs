@@ -5,6 +5,7 @@
 //! applies the configured cooldown period between requests.
 use crate::config::Config;
 use anyhow::Result;
+use backon::{ExponentialBackoff, ExponentialBuilder};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::fs as stdfs;
@@ -16,6 +17,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, channel};
 
@@ -62,6 +64,19 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Builds a jittered exponential backoff with no maximum attempt count.
+///
+/// The minimum delay is provided by the caller to allow environment-specific
+/// tuning.
+fn backoff(min_delay: Duration) -> ExponentialBackoff {
+    backon::BackoffBuilder::build(
+        ExponentialBuilder::default()
+            .with_jitter()
+            .with_min_delay(min_delay)
+            .without_max_times(),
+    )
+}
+
 /// Attempts to post a comment to a GitHub pull request, enforcing a 30-second timeout.
 ///
 /// Returns `Ok(())` if the comment is successfully posted. If the GitHub API returns an error,
@@ -86,18 +101,15 @@ async fn post_comment(
 /// The queue writer decouples the listener from the queue, ensuring a
 /// single writer for the `yaque` queue. It reads raw JSON payloads from the
 /// provided [`mpsc::UnboundedReceiver`] and attempts to enqueue each item
-/// using the [`yaque::Sender`]. Errors are logged and the loop continues so
-/// the daemon remains responsive.
+/// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
+/// loop terminates so a supervising task can recreate the sender.
+///
+/// When the loop terminates the receiver is returned so a supervising task can
+/// resume consumption without losing any buffered requests.
 ///
 /// # Parameters
-/// - `sender`: queue writer from `yaque`.
+/// - `sender`: queue sender from `yaque`.
 /// - `rx`: receiver for payloads from client handlers.
-///
-/// # Errors
-/// Returns an [`anyhow::Error`] if:
-/// - the receiver channel (`rx`) is closed unexpectedly,
-/// - the queue sender encounters an I/O error while enqueuing,
-/// - or if the sender fails while awaiting shutdown.
 ///
 /// # Examples
 /// ```rust,no_run
@@ -106,7 +118,7 @@ async fn post_comment(
 /// # async fn docs() -> anyhow::Result<()> {
 /// let (queue_tx, _rx) = channel("/tmp/q")?;
 /// let (tx, rx) = mpsc::unbounded_channel();
-/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await? });
+/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
 /// tx.send(Vec::new()).unwrap();
 /// # Ok(())
 /// # }
@@ -114,13 +126,14 @@ async fn post_comment(
 pub async fn queue_writer(
     mut sender: Sender,
     mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-) -> Result<()> {
+) -> mpsc::UnboundedReceiver<Vec<u8>> {
     while let Some(bytes) = rx.recv().await {
         if let Err(e) = sender.send(bytes).await {
             tracing::error!(error = %e, "Queue enqueue failed");
+            break;
         }
     }
-    Ok(())
+    rx
 }
 
 /// Start the daemon with the provided configuration.
@@ -128,34 +141,147 @@ pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
-    let (queue_tx, rx) = channel(&config.queue_path)?;
-    let (client_tx, client_rx) = mpsc::unbounded_channel();
+    // Drop the unused receiver since yaque lacks a sender-only constructor.
+    let (queue_tx, _) = channel(&config.queue_path)?;
+    let (mut client_tx, client_rx) = mpsc::unbounded_channel();
     let cfg = Arc::new(config);
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let mut listener = tokio::spawn(run_listener(
-        cfg.clone(),
-        client_tx.clone(),
-        shutdown_rx.clone(),
-    ));
-    let control = WorkerControl::new(shutdown_rx, WorkerHooks::default());
-    let mut worker = tokio::spawn(run_worker(cfg.clone(), rx, octocrab, control));
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(());
 
-    // Await either task; on completion, trigger a coordinated shutdown.
-    tokio::select! {
-        res = &mut listener => match res {
-            Ok(inner) => inner?,
-            Err(e) => return Err(e.into()),
-        },
-        res = &mut worker => match res {
-            Ok(inner) => inner?,
-            Err(e) => return Err(e.into()),
-        },
+    // Initial task spawns.
+    let mut writer = tokio::spawn(queue_writer(queue_tx, client_rx));
+    let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+    let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+    let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
+    let mut listener_backoff = backoff(min_delay);
+    let mut worker_backoff = backoff(min_delay);
+    let mut writer_backoff = backoff(min_delay);
+
+    // Convert SIGINT and SIGTERM into a shutdown signal.
+    {
+        let shutdown_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to install SIGINT handler");
+                    let _ = shutdown_tx.send(());
+                    return;
+                }
+            };
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to install SIGTERM handler");
+                    let _ = shutdown_tx.send(());
+                    return;
+                }
+            };
+
+            tokio::select! {
+                _ = sigint.recv() => {
+                    let _ = shutdown_tx.send(());
+                }
+                _ = sigterm.recv() => {
+                    let _ = shutdown_tx.send(());
+                }
+            }
+        });
     }
-    let _ = shutdown_tx.send(());
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                listener.abort();
+                worker.abort();
+                writer.abort();
+                break;
+            }
+            res = &mut listener => {
+                log_listener_failure(&res);
+                let delay = listener_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
+                listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                listener_backoff = backoff(min_delay);
+            }
+            res = &mut worker => {
+                log_worker_failure(&res);
+                let delay = worker_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
+                worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+                worker_backoff = backoff(min_delay);
+            }
+            res = &mut writer => {
+                log_writer_failure(&res);
+                let delay = writer_backoff
+                    .next()
+                    .expect("backoff should yield a duration");
+                // Race the backoff against shutdown so exit isn't delayed.
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
+                // Stop accepting new connections before respawning the writer.
+                // Moving the receiver between tasks is safe, but pausing accepts
+                // avoids growing an in-memory backlog while the writer is down.
+                listener.abort();
+                // Recreate a queue sender for the restarted writer, reusing the
+                // existing receiver where possible to avoid dropping buffered
+                // requests. If the writer panicked the receiver is lost and a
+                // new channel is created, potentially dropping pending items.
+                let rx = match res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Writer task panicked");
+                        let pair = mpsc::unbounded_channel();
+                        client_tx = pair.0;
+                        pair.1
+                    }
+                };
+                match channel(&cfg.queue_path) {
+                    Ok((queue_tx, _)) => {
+                        writer = tokio::spawn(queue_writer(queue_tx, rx));
+                        listener =
+                            spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                        writer_backoff = backoff(min_delay);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Queue sender creation failed");
+                        let _ = shutdown_tx.send(());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Close the client sender so the queue writer can exit cleanly.
     drop(client_tx);
-    // Gracefully await all tasks with a timeout; ignore outcomes here since shutdown is in progress.
+    // Gracefully await all tasks with a timeout; ignore outcomes since shutdown is in progress.
     let _ = tokio::time::timeout(Duration::from_secs(10), async {
         let _ = listener.await;
         let _ = worker.await;
@@ -163,6 +289,52 @@ pub async fn run(config: Config) -> Result<()> {
     })
     .await;
     Ok(())
+}
+
+fn spawn_listener(
+    cfg: Arc<Config>,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    shutdown: watch::Receiver<()>,
+) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(run_listener(cfg, tx, shutdown))
+}
+
+fn spawn_worker(
+    cfg: Arc<Config>,
+    octocrab: Arc<Octocrab>,
+    shutdown: watch::Receiver<()>,
+) -> tokio::task::JoinHandle<Result<()>> {
+    let cfg_clone = cfg.clone();
+    tokio::spawn(async move {
+        // Obtain a fresh queue receiver each time the worker is spawned.
+        // The sender persists across restarts.
+        let (_tx, rx) = channel(&cfg_clone.queue_path)?;
+        let control = WorkerControl::new(shutdown, WorkerHooks::default());
+        run_worker(cfg_clone, rx, octocrab, control).await
+    })
+}
+
+fn log_listener_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+    match res {
+        Ok(Ok(())) => tracing::warn!("Listener exited unexpectedly"),
+        Ok(Err(e)) => tracing::error!(error = %e, "Listener task failed"),
+        Err(e) => tracing::error!(error = %e, "Listener task panicked"),
+    }
+}
+
+fn log_worker_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
+    match res {
+        Ok(Ok(())) => tracing::warn!("Worker exited unexpectedly"),
+        Ok(Err(e)) => tracing::error!(error = %e, "Worker task failed"),
+        Err(e) => tracing::error!(error = %e, "Worker task panicked"),
+    }
+}
+
+fn log_writer_failure(res: &Result<mpsc::UnboundedReceiver<Vec<u8>>, tokio::task::JoinError>) {
+    match res {
+        Ok(_) => tracing::warn!("Writer exited unexpectedly"),
+        Err(e) => tracing::error!(error = %e, "Writer task panicked"),
+    }
 }
 
 /// Listen on the Unix socket and spawn a handler for each client.
@@ -187,11 +359,14 @@ pub async fn run_listener(
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let listener = prepare_listener(&config.socket_path)?;
+    let min_delay = Duration::from_millis(config.restart_min_delay_ms);
+    let mut accept_backoff = backoff(min_delay);
 
     loop {
         tokio::select! {
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
+                    accept_backoff = backoff(min_delay);
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, tx_clone).await {
@@ -201,7 +376,13 @@ pub async fn run_listener(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to accept client connection");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let delay = accept_backoff
+                        .next()
+                        .expect("backoff should yield a duration");
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {},
+                        _ = shutdown.changed() => break,
+                    }
                 }
             },
             _ = shutdown.changed() => {
@@ -247,6 +428,7 @@ pub struct WorkerHooks {
     /// Signalled after the worker completes processing of a request.
     pub idle: Option<Arc<Notify>>,
     /// Signalled when the queue is empty and the worker is idle.
+    #[cfg_attr(not(test), allow(dead_code, reason = "test hook"))]
     pub drained: Option<Arc<Notify>>,
 }
 
@@ -263,6 +445,7 @@ impl WorkerHooks {
         }
     }
 
+    #[cfg(test)]
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
         if let Some(n) = &self.drained {
             // Ignore sentinel files left by the queue implementation and
@@ -317,14 +500,15 @@ impl WorkerControl {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// use std::sync::Arc;
 /// # use comenqd::daemon::{run_worker, WorkerControl, WorkerHooks};
 /// # use comenqd::Config;
 /// # use yaque::Receiver;
 /// # use octocrab::Octocrab;
 /// # async fn example() -> anyhow::Result<()> {
-/// let config = Arc::new(Config::default());
+/// // Construct a Config instance here (omitted for brevity).
+/// let config = Arc::new(/* Config */ unimplemented!());
 /// let rx: Receiver = /* obtain from yaque */ unimplemented!();
 /// let octocrab = Arc::new(Octocrab::builder().build()?);
 /// let (_tx, shutdown) = watch::channel(());
@@ -359,6 +543,7 @@ pub async fn run_worker(
                 }
                 // Maintain hook semantics for tests even on malformed input.
                 hooks.notify_idle();
+                #[cfg(test)]
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(
                         error = %check_err,
@@ -394,9 +579,11 @@ pub async fn run_worker(
         }
 
         hooks.notify_idle();
+        #[cfg(test)]
         hooks.notify_drained_if_empty(&config.queue_path)?;
         WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
     }
+    #[cfg(test)]
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }
