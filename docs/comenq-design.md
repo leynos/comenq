@@ -90,7 +90,7 @@ The daemon sends client requests via an unbounded channel. The channel sender
 is recreated whenever the writer task restarts, preserving the existing
 receiver when possible.
 
-- Operational caveat: the channel is unbounded. During writer downtime the
+- Operational warning: the channel is unbounded. During writer downtime, the
   in-memory backlog can grow until the supervisor respawns the writer. Deploy
   with external backpressure (e.g., rate-limiting clients) if this risk is
   unacceptable.

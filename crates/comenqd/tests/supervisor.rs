@@ -155,7 +155,7 @@ async fn restarts_failed_task(#[case] failing: FailingTask) {
     while attempts.load(Ordering::Relaxed) < 2 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    shutdown_tx.send(()).unwrap();
-    supervisor.await.unwrap();
+    shutdown_tx.send(()).expect("send shutdown signal");
+    supervisor.await.expect("join supervisor");
     assert!(attempts.load(Ordering::Relaxed) >= 2);
 }
