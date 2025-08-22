@@ -428,6 +428,7 @@ pub struct WorkerHooks {
     /// Signalled after the worker completes processing of a request.
     pub idle: Option<Arc<Notify>>,
     /// Signalled when the queue is empty and the worker is idle.
+    #[cfg_attr(not(test), allow(dead_code, reason = "test hook"))]
     pub drained: Option<Arc<Notify>>,
 }
 
