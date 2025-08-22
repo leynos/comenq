@@ -235,7 +235,7 @@ pub async fn run(config: Config) -> Result<()> {
                 let delay = writer_backoff
                     .next()
                     .expect("backoff should yield a duration");
-                // Allow shutdown to pre-empt the restart delay.
+                // Race the backoff against shutdown so exit isn't delayed.
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {},
                     _ = shutdown_rx.changed() => {
