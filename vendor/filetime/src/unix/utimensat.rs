@@ -50,9 +50,11 @@ pub(crate) fn set_file_handle_times(
 ) -> io::Result<()> {
     let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
     // SAFETY:
-    // - `f.as_raw_fd()` is valid for the duration of the call.
-    // - `times` points to two initialised `timespec` values that outlive the call.
-    // - `futimens` has the expected ABI for the target platform.
+    // - `f.as_raw_fd()` yields a valid file descriptor for the duration of the
+    //   call.
+    // - `times` points to two initialised `timespec` values that outlive the
+    //   call.
+    // - libc does not retain the pointer; it is only read during the call.
     let rc = unsafe { libc::futimens(f.as_raw_fd(), times.as_ptr()) };
     if rc == 0 {
         Ok(())

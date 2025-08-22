@@ -59,11 +59,11 @@ pub(crate) fn set_file_handle_times(
     // - `times` points to two initialised `timeval` structures.
     // - `futimes` has the correct ABI for the current platform.
     let rc = unsafe { libc::futimes(f.as_raw_fd(), times.as_ptr()) };
-    return if rc == 0 {
+    if rc == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
-    };
+    }
 }
 
 #[cfg(target_env = "uclibc")]
@@ -87,11 +87,11 @@ pub(crate) fn set_file_handle_times(
     // - `times` points to two initialised `timespec` structures.
     // - `futimens` has the correct ABI for the current platform.
     let rc = unsafe { libc::futimens(f.as_raw_fd(), times.as_ptr()) };
-    return if rc == 0 {
+    if rc == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
-    };
+    }
 }
 
 fn get_times(
@@ -156,11 +156,11 @@ pub(crate) fn set_times(
             libc::utimes(p_cstr.as_ptr(), times.as_ptr())
         }
     };
-    return if rc == 0 {
+    if rc == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
-    };
+    }
 }
 
 fn to_timeval(ft: &FileTime) -> libc::timeval {
