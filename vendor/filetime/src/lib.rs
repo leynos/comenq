@@ -159,7 +159,8 @@ impl FileTime {
     /// Windows counts file times since 1601-01-01T00:00:00Z. It is possible to
     /// create a `SystemTime` earlier than this on some platforms. This
     /// implementation does not error; it returns a `FileTime` which may have
-    /// negative seconds to represent instants before the Windows epoch.
+    /// negative seconds to represent instants before the Windows epoch. Negative
+    /// values always indicate moments prior to 1601-01-01.
     pub fn from_system_time(time: SystemTime) -> FileTime {
         let epoch = if cfg!(windows) {
             UNIX_EPOCH - Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECS as u64)

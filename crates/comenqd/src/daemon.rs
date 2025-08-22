@@ -644,8 +644,7 @@ mod retry_helper_tests {
     #[tokio::test(start_paused = true)]
     async fn retries_after_timeout_then_succeeds() {
         let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
-        let timeouts = cfg.with_progressive_retry();
-        let first_timeout = timeouts[0];
+        let first_timeout = cfg.with_progressive_retry()[0];
         use std::sync::{
             Arc,
             atomic::{AtomicU32, Ordering},
