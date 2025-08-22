@@ -5,7 +5,7 @@
 
 #![expect(clippy::expect_used, reason = "simplify test setup")]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
@@ -72,8 +72,9 @@ impl TestConfig {
 
     /// Override the minimum restart delay using a [`Duration`].
     #[must_use]
-    pub fn with_restart_min_delay(mut self, d: std::time::Duration) -> Self {
-        self.restart_min_delay_ms = d.as_millis().max(1) as u64;
+    pub fn with_restart_min_delay(mut self, d: Duration) -> Self {
+        let ms = d.as_millis().max(1) as u64;
+        self.restart_min_delay_ms = ms;
         self
     }
 }
