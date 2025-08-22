@@ -352,7 +352,10 @@ pub async fn run_listener(
                     let delay = accept_backoff
                         .next()
                         .expect("backoff should yield a duration");
-                    tokio::time::sleep(delay).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {},
+                        _ = shutdown.changed() => break,
+                    }
                 }
             },
             _ = shutdown.changed() => {

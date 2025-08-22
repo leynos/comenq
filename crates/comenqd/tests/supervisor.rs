@@ -71,90 +71,85 @@ async fn supervise_until_restarts<F1, F2>(
     }
 }
 
-#[rstest]
-#[tokio::test]
-async fn restarts_failed_listener() {
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let attempts_clone = Arc::clone(&attempts);
-    let listener_maker = {
-        let attempts = Arc::clone(&attempts_clone);
-        let shutdown = shutdown_rx.clone();
-        move || {
-            let attempts = Arc::clone(&attempts);
-            let mut shutdown = shutdown.clone();
-            tokio::spawn(async move {
-                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
-                    Err(anyhow::anyhow!("fail"))
-                } else {
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                }
-            })
-        }
-    };
-
-    let worker_maker = {
-        let shutdown = shutdown_rx.clone();
-        move || {
-            let mut shutdown = shutdown.clone();
-            tokio::spawn(async move {
-                let _ = shutdown.changed().await;
-                Ok(())
-            })
-        }
-    };
-
-    let supervisor = tokio::spawn(supervise_until_restarts(
-        listener_maker,
-        worker_maker,
-        shutdown_rx,
-    ));
-    while attempts.load(Ordering::Relaxed) < 2 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    shutdown_tx.send(()).unwrap();
-    supervisor.await.unwrap();
-    assert!(attempts.load(Ordering::Relaxed) >= 2);
+enum FailingTask {
+    Listener,
+    Worker,
 }
 
 #[rstest]
+#[case(FailingTask::Listener)]
+#[case(FailingTask::Worker)]
 #[tokio::test]
-async fn restarts_failed_worker() {
+async fn restarts_failed_task(#[case] failing: FailingTask) {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_clone = Arc::clone(&attempts);
-    let worker_maker = {
-        let attempts = Arc::clone(&attempts_clone);
-        let shutdown = shutdown_rx.clone();
-        move || {
-            let attempts = Arc::clone(&attempts);
-            let mut shutdown = shutdown.clone();
-            tokio::spawn(async move {
-                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
-                    Err(anyhow::anyhow!("fail"))
-                } else {
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                }
-            })
-        }
-    };
 
-    let listener_maker = {
-        let shutdown = shutdown_rx.clone();
-        move || {
-            let mut shutdown = shutdown.clone();
-            tokio::spawn(async move {
-                let _ = shutdown.changed().await;
-                Ok(())
-            })
+    type Maker = Box<dyn FnMut() -> JoinHandle<anyhow::Result<()>> + Send>;
+    let (mut listener_maker, mut worker_maker): (Maker, Maker) = match failing {
+        FailingTask::Listener => {
+            let listener_maker: Maker = Box::new({
+                let attempts = Arc::clone(&attempts_clone);
+                let shutdown = shutdown_rx.clone();
+                move || {
+                    let attempts = Arc::clone(&attempts);
+                    let mut shutdown = shutdown.clone();
+                    tokio::spawn(async move {
+                        if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                            Err(anyhow::anyhow!("fail"))
+                        } else {
+                            let _ = shutdown.changed().await;
+                            Ok(())
+                        }
+                    })
+                }
+            });
+            let worker_maker: Maker = Box::new({
+                let shutdown = shutdown_rx.clone();
+                move || {
+                    let mut shutdown = shutdown.clone();
+                    tokio::spawn(async move {
+                        let _ = shutdown.changed().await;
+                        Ok(())
+                    })
+                }
+            });
+            (listener_maker, worker_maker)
+        }
+        FailingTask::Worker => {
+            let worker_maker: Maker = Box::new({
+                let attempts = Arc::clone(&attempts_clone);
+                let shutdown = shutdown_rx.clone();
+                move || {
+                    let attempts = Arc::clone(&attempts);
+                    let mut shutdown = shutdown.clone();
+                    tokio::spawn(async move {
+                        if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                            Err(anyhow::anyhow!("fail"))
+                        } else {
+                            let _ = shutdown.changed().await;
+                            Ok(())
+                        }
+                    })
+                }
+            });
+            let listener_maker: Maker = Box::new({
+                let shutdown = shutdown_rx.clone();
+                move || {
+                    let mut shutdown = shutdown.clone();
+                    tokio::spawn(async move {
+                        let _ = shutdown.changed().await;
+                        Ok(())
+                    })
+                }
+            });
+            (listener_maker, worker_maker)
         }
     };
 
     let supervisor = tokio::spawn(supervise_until_restarts(
-        listener_maker,
-        worker_maker,
+        move || listener_maker(),
+        move || worker_maker(),
         shutdown_rx,
     ));
     while attempts.load(Ordering::Relaxed) < 2 {

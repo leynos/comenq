@@ -30,6 +30,8 @@ pub struct TestConfig {
 /// Build a [`TestConfig`] using paths inside `tmp`.
 ///
 /// The configuration uses a dummy GitHub token and a one second cooldown.
+/// The minimum restart delay is set to 1 ms to exercise supervision paths
+/// without introducing flaky timing in tests.
 pub fn temp_config(tmp: &TempDir) -> TestConfig {
     TestConfig {
         github_token: "t".into(),
@@ -52,7 +54,7 @@ impl TestConfig {
     /// configuration.
     #[must_use]
     pub fn with_restart_min_delay_ms(mut self, ms: u64) -> Self {
-        self.restart_min_delay_ms = ms;
+        self.restart_min_delay_ms = ms.max(1);
         self
     }
 }
