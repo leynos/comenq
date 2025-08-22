@@ -23,6 +23,8 @@ pub struct TestConfig {
     pub queue_path: PathBuf,
     /// Cooldown between comment posts in seconds.
     pub cooldown_period_seconds: u64,
+    /// Minimum delay in milliseconds applied between task restarts.
+    pub restart_min_delay_ms: u64,
 }
 
 /// Build a [`TestConfig`] using paths inside `tmp`.
@@ -34,6 +36,7 @@ pub fn temp_config(tmp: &TempDir) -> TestConfig {
         socket_path: tmp.path().join("sock"),
         queue_path: tmp.path().join("q"),
         cooldown_period_seconds: 1,
+        restart_min_delay_ms: 1,
     }
 }
 

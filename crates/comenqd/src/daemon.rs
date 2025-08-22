@@ -64,14 +64,15 @@ async fn ensure_queue_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Builds a jittered exponential backoff with a 100 ms minimum delay and no
-/// maximum attempt count. Used to space out task restarts and avoid tight
-/// respawn loops.
-fn backoff() -> ExponentialBackoff {
+/// Builds a jittered exponential backoff with no maximum attempt count.
+///
+/// The minimum delay is provided by the caller to allow environment-specific
+/// tuning.
+fn backoff(min_delay: Duration) -> ExponentialBackoff {
     backon::BackoffBuilder::build(
         ExponentialBuilder::default()
             .with_jitter()
-            .with_min_delay(Duration::from_millis(100))
+            .with_min_delay(min_delay)
             .without_max_times(),
     )
 }
@@ -150,10 +151,10 @@ pub async fn run(config: Config) -> Result<()> {
     let mut writer = tokio::spawn(queue_writer(queue_tx, client_rx));
     let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
-
-    let mut listener_backoff = backoff();
-    let mut worker_backoff = backoff();
-    let mut writer_backoff = backoff();
+    let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
+    let mut listener_backoff = backoff(min_delay);
+    let mut worker_backoff = backoff(min_delay);
+    let mut writer_backoff = backoff(min_delay);
 
     // Convert SIGINT and SIGTERM into a shutdown signal.
     {
@@ -239,7 +240,7 @@ pub async fn run(config: Config) -> Result<()> {
                         writer = tokio::spawn(queue_writer(queue_tx, rx));
                         listener =
                             spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
-                        writer_backoff = backoff();
+                        writer_backoff = backoff(min_delay);
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Queue sender creation failed");
@@ -331,13 +332,14 @@ pub async fn run_listener(
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let listener = prepare_listener(&config.socket_path)?;
-    let mut accept_backoff = backoff();
+    let min_delay = Duration::from_millis(config.restart_min_delay_ms);
+    let mut accept_backoff = backoff(min_delay);
 
     loop {
         tokio::select! {
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
-                    accept_backoff = backoff();
+                    accept_backoff = backoff(min_delay);
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, tx_clone).await {
@@ -412,6 +414,7 @@ impl WorkerHooks {
         }
     }
 
+    #[cfg(test)]
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
         if let Some(n) = &self.drained {
             // Ignore sentinel files left by the queue implementation and
@@ -508,6 +511,7 @@ pub async fn run_worker(
                 }
                 // Maintain hook semantics for tests even on malformed input.
                 hooks.notify_idle();
+                #[cfg(test)]
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(
                         error = %check_err,
@@ -543,9 +547,11 @@ pub async fn run_worker(
         }
 
         hooks.notify_idle();
+        #[cfg(test)]
         hooks.notify_drained_if_empty(&config.queue_path)?;
         WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
     }
+    #[cfg(test)]
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }

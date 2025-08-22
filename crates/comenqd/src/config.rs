@@ -18,6 +18,8 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// The period was increased from 15 to 16 minutes to provide a larger
 /// buffer against GitHub's secondary rate limits.
 const DEFAULT_COOLDOWN: u64 = 960;
+/// Default minimum delay between task restarts in milliseconds.
+const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
@@ -33,6 +35,9 @@ pub struct Config {
     /// Cooldown between comment posts in seconds.
     #[serde(default = "default_cooldown")]
     pub cooldown_period_seconds: u64,
+    /// Minimum delay in milliseconds applied between task restarts.
+    #[serde(default = "default_restart_min_delay_ms")]
+    pub restart_min_delay_ms: u64,
 }
 
 /// Convert a [`test_support::daemon::TestConfig`] into a [`Config`].
@@ -58,6 +63,7 @@ impl From<test_support::daemon::TestConfig> for Config {
             socket_path: value.socket_path,
             queue_path: value.queue_path,
             cooldown_period_seconds: value.cooldown_period_seconds,
+            restart_min_delay_ms: value.restart_min_delay_ms,
         }
     }
 }
@@ -93,6 +99,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
+            restart_min_delay_ms: value.restart_min_delay_ms,
         }
     }
 }
@@ -124,6 +131,10 @@ fn default_queue_path() -> PathBuf {
 
 fn default_cooldown() -> u64 {
     DEFAULT_COOLDOWN
+}
+
+fn default_restart_min_delay_ms() -> u64 {
+    DEFAULT_RESTART_MIN_DELAY_MS
 }
 
 impl Config {
@@ -254,6 +265,7 @@ mod tests {
         assert_eq!(cfg.socket_path, PathBuf::from("/run/comenq/comenq.sock"));
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
+        assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
     }
 
     /// CLI arguments should take precedence over environment variables
@@ -294,5 +306,6 @@ mod tests {
             cfg.cooldown_period_seconds,
             test_cfg.cooldown_period_seconds
         );
+        assert_eq!(cfg.restart_min_delay_ms, test_cfg.restart_min_delay_ms);
     }
 }

@@ -378,7 +378,8 @@ processes the queue at its own deliberate pace.
 All daemon tasks—the listener, worker, and queue writer—are supervised. If any
 task exits unexpectedly, the daemon logs the failure, waits using an
 exponential backoff with jitter (via the `backon` crate) to avoid a tight
-restart loop, and then respawns the task. This keeps the service available
+restart loop, and then respawns the task. The minimum delay between restarts is
+configurable via `restart_min_delay_ms`. This keeps the service available
 without relying on an external process supervisor. Restarting the writer
 recreates the listener→writer channel and restarts the listener to attach a
 fresh sender, preserving single-writer semantics. When the writer exits

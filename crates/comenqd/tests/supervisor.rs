@@ -44,6 +44,7 @@ async fn supervise_until_restarts<F1, F2>(
                     let delay = backoff1
                         .next()
                         .expect("backoff should yield a duration");
+                    tracing::debug!(?delay, "listener restart backoff");
                     tokio::time::sleep(delay).await;
                     t1 = make1();
                 }
@@ -52,6 +53,7 @@ async fn supervise_until_restarts<F1, F2>(
                     let delay = backoff2
                         .next()
                         .expect("backoff should yield a duration");
+                    tracing::debug!(?delay, "worker restart backoff");
                     tokio::time::sleep(delay).await;
                     t2 = make2();
                 }
