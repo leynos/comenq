@@ -217,6 +217,8 @@ pub async fn run(config: Config) -> Result<()> {
                     .next()
                     .expect("backoff should yield a duration");
                 tokio::time::sleep(delay).await;
+                // Stop accepting new connections before re-binding the writer to
+                // avoid racing sends into a receiver that is being moved.
                 listener.abort();
                 // Recreate a queue sender for the restarted writer, reusing the
                 // existing receiver where possible to avoid dropping buffered
@@ -236,6 +238,7 @@ pub async fn run(config: Config) -> Result<()> {
                         writer = tokio::spawn(queue_writer(queue_tx, rx));
                         listener =
                             spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                        writer_backoff = backoff();
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Queue sender creation failed");
