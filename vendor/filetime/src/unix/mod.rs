@@ -3,8 +3,8 @@ use libc::{time_t, timespec};
 use std::fs;
 use std::os::unix::prelude::*;
 
-// Replace cfg_if! macro with explicit `cfg` attributes to avoid ambiguous
-// re-exports on certain toolchains.
+// Use explicit `cfg` attributes for module wiring; retain `cfg_if!` only for
+// small per-OS constants in helpers.
 #[cfg(target_os = "linux")]
 mod utimes;
 #[cfg(target_os = "linux")]
