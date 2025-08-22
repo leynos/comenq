@@ -84,6 +84,16 @@ The complete lifecycle of a request is illustrated in the following sequence:
 This architecture ensures that comment posting is strictly serialized and
 paced, directly addressing the primary goal of avoiding API rate limits.
 
+### Channels and buffering
+
+The daemon sends client requests via an unbounded channel. The channel sender
+is recreated whenever the writer task restarts, preserving the existing
+receiver when possible.
+
+- Lossy path: If the writer task panics, the old receiver is dropped and any
+  buffered items in that channel are lost. This is the only scenario where
+  pending requests may be discarded.
+
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
 The selection of foundational Rust libraries (crates) is critical to building a
@@ -383,10 +393,10 @@ configurable via `restart_min_delay_ms`. This keeps the service available
 without relying on an external process supervisor. Restarting the writer
 recreates the listener→writer channel and restarts the listener to attach a
 fresh sender, preserving single-writer semantics. When the writer exits
-cleanly, the supervisor reuses the existing receiver so buffered bytes are
+cleanly, the supervisor reuses the existing receiver, so buffered bytes are
 preserved. If the writer panics and the receiver is lost, a new channel is
-created and any bytes buffered in the discarded channel that were not persisted
-to the queue are lost.
+created, and any bytes buffered in the discarded channel that were not
+persisted to the queue are lost.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -560,13 +570,14 @@ For operational flexibility and security, the daemon's behavior must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter               | Type    | Description                                                                               | Default Value           |
-| ----------------------- | ------- | ----------------------------------------------------------------------------------------- | ----------------------- |
-| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field. | (none)                  |
-| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                           | /run/comenq/comenq.sock |
-| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                   | /var/lib/comenq/queue   |
-| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                         | info                    |
-| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                | 960                     |
+| Parameter               | Type    | Description                                                                                | Default Value           |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------ | ----------------------- |
+| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field.  | (none)                  |
+| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                            | /run/comenq/comenq.sock |
+| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                    | /var/lib/comenq/queue   |
+| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                          | info                    |
+| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                 | 960                     |
+| restart_min_delay_ms    | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor). | 100                     |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,

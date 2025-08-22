@@ -1,5 +1,6 @@
 //! Tests for the task supervision logic.
 use backon::ExponentialBuilder;
+use rstest::rstest;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -70,6 +71,7 @@ async fn supervise_until_restarts<F1, F2>(
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn restarts_failed_listener() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -116,6 +118,7 @@ async fn restarts_failed_listener() {
     assert!(attempts.load(Ordering::Relaxed) >= 2);
 }
 
+#[rstest]
 #[tokio::test]
 async fn restarts_failed_worker() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());

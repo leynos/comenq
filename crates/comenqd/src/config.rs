@@ -54,7 +54,7 @@ pub struct Config {
 /// let cfg: Config = temp_config(&tmp).into();
 /// assert_eq!(cfg.cooldown_period_seconds, 1);
 /// ```
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<test_support::daemon::TestConfig> for Config {
     fn from(value: test_support::daemon::TestConfig) -> Self {
@@ -90,7 +90,7 @@ impl From<test_support::daemon::TestConfig> for Config {
 /// assert_eq!(cfg.socket_path, test_cfg.socket_path);
 /// assert_eq!(cfg.queue_path, test_cfg.queue_path);
 /// ```
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
@@ -152,11 +152,8 @@ impl Config {
     /// Test-only helper that loads the configuration from the specified path,
     /// merging `COMENQD_*` environment variables and CLI arguments over file
     /// values.
-    #[cfg(feature = "test-support")]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "test-only helper for integration tests")
-    )]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn from_file(path: &Path) -> Result<Self, ortho_config::OrthoError> {
         Self::from_file_with_cli(path, &CliArgs::default())

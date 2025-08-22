@@ -469,14 +469,15 @@ impl WorkerControl {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// use std::sync::Arc;
 /// # use comenqd::daemon::{run_worker, WorkerControl, WorkerHooks};
 /// # use comenqd::Config;
 /// # use yaque::Receiver;
 /// # use octocrab::Octocrab;
 /// # async fn example() -> anyhow::Result<()> {
-/// let config = Arc::new(Config::default());
+/// // Construct a Config instance here (omitted for brevity).
+/// let config = Arc::new(/* Config */ unimplemented!());
 /// let rx: Receiver = /* obtain from yaque */ unimplemented!();
 /// let octocrab = Arc::new(Octocrab::builder().build()?);
 /// let (_tx, shutdown) = watch::channel(());

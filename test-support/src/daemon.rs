@@ -47,6 +47,14 @@ impl TestConfig {
         self.cooldown_period_seconds = secs;
         self
     }
+
+    /// Override the minimum restart delay (milliseconds) and return the updated
+    /// configuration.
+    #[must_use]
+    pub fn with_restart_min_delay_ms(mut self, ms: u64) -> Self {
+        self.restart_min_delay_ms = ms;
+        self
+    }
 }
 
 /// Construct an [`Octocrab`] client for a [`MockServer`].
