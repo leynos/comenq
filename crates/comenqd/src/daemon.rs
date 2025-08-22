@@ -203,6 +203,7 @@ pub async fn run(config: Config) -> Result<()> {
                     .expect("backoff should yield a duration");
                 tokio::time::sleep(delay).await;
                 listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+                listener_backoff = backoff(min_delay);
             }
             res = &mut worker => {
                 log_worker_failure(&res);
@@ -211,6 +212,7 @@ pub async fn run(config: Config) -> Result<()> {
                     .expect("backoff should yield a duration");
                 tokio::time::sleep(delay).await;
                 worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+                worker_backoff = backoff(min_delay);
             }
             res = &mut writer => {
                 log_writer_failure(&res);
