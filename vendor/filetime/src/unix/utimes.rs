@@ -1,0 +1,182 @@
+//! Fallback implementation using `utimes`/`lutimes` to update timestamps.
+//!
+//! These helpers are crate-internal and wrap older POSIX APIs.
+
+use crate::FileTime;
+use std::ffi::CString;
+use std::fs;
+use std::io;
+use std::os::unix::prelude::*;
+use std::path::Path;
+
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
+/// Set both access and modification times for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+    set_times(p, Some(atime), Some(mtime), false)
+}
+
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
+/// Set only the modification time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_mtime(p: &Path, mtime: FileTime) -> io::Result<()> {
+    set_times(p, None, Some(mtime), false)
+}
+
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
+/// Set only the access time for a file at `p`.
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `utimes` call fails.
+pub(crate) fn set_file_atime(p: &Path, atime: FileTime) -> io::Result<()> {
+    set_times(p, Some(atime), None, false)
+}
+
+#[cfg(not(target_env = "uclibc"))]
+/// Set times for an open file handle.
+///
+/// # Errors
+/// Propagates errors from the underlying `futimes` call.
+pub(crate) fn set_file_handle_times(
+    f: &fs::File,
+    atime: Option<FileTime>,
+    mtime: Option<FileTime>,
+) -> io::Result<()> {
+    let (atime, mtime) = match get_times(atime, mtime, || f.metadata())? {
+        Some(pair) => pair,
+        None => return Ok(()),
+    };
+    let times = [to_timeval(&atime), to_timeval(&mtime)];
+    // SAFETY:
+    // - `f.as_raw_fd()` is valid for the duration of the call.
+    // - `times` points to two initialised `timeval` structures.
+    // - `futimes` has the correct ABI for the current platform.
+    let rc = unsafe { libc::futimes(f.as_raw_fd(), times.as_ptr()) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_env = "uclibc")]
+#[expect(dead_code, reason = "Build-specific selection; compiled only on uclibc")]
+/// Set times for an open file handle on uClibc systems.
+///
+/// # Errors
+/// Propagates errors from the underlying `futimens` call.
+pub(crate) fn set_file_handle_times(
+    f: &fs::File,
+    atime: Option<FileTime>,
+    mtime: Option<FileTime>,
+) -> io::Result<()> {
+    let (atime, mtime) = match get_times(atime, mtime, || f.metadata())? {
+        Some(pair) => pair,
+        None => return Ok(()),
+    };
+    let times = [to_timespec(&atime), to_timespec(&mtime)];
+    // SAFETY:
+    // - `f.as_raw_fd()` is valid for the duration of the call.
+    // - `times` points to two initialised `timespec` structures.
+    // - `futimens` has the correct ABI for the current platform.
+    let rc = unsafe { libc::futimens(f.as_raw_fd(), times.as_ptr()) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn get_times(
+    atime: Option<FileTime>,
+    mtime: Option<FileTime>,
+    current: impl FnOnce() -> io::Result<fs::Metadata>,
+) -> io::Result<Option<(FileTime, FileTime)>> {
+    let pair = match (atime, mtime) {
+        (Some(a), Some(b)) => (a, b),
+        (None, None) => return Ok(None),
+        (Some(a), None) => {
+            let meta = current()?;
+            (a, FileTime::from_last_modification_time(&meta))
+        }
+        (None, Some(b)) => {
+            let meta = current()?;
+            (FileTime::from_last_access_time(&meta), b)
+        }
+    };
+    Ok(Some(pair))
+}
+
+#[expect(dead_code, reason = "Public-in-module APIs may be unused on some targets")]
+/// Set access and modification times for a symlink at `p` (no-follow).
+///
+/// # Errors
+/// Returns an error if `p` contains interior NUL bytes or if the underlying
+/// `lutimes` call fails.
+pub(crate) fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+    set_times(p, Some(atime), Some(mtime), true)
+}
+
+/// Low-level helper around `utimes`/`lutimes`.
+///
+/// # Safety
+/// The path is converted to a `CString`, ensuring a terminating NUL and no
+/// interior NUL bytes before calling the FFI.
+pub(crate) fn set_times(
+    p: &Path,
+    atime: Option<FileTime>,
+    mtime: Option<FileTime>,
+    symlink: bool,
+) -> io::Result<()> {
+    let (atime, mtime) = match get_times(
+        atime,
+        mtime,
+        || if symlink { fs::symlink_metadata(p) } else { fs::metadata(p) },
+    )? {
+        Some(pair) => pair,
+        None => return Ok(()),
+    };
+    let p_cstr = CString::new(p.as_os_str().as_bytes())?;
+    let times = [to_timeval(&atime), to_timeval(&mtime)];
+    let rc = unsafe {
+        // SAFETY:
+        // - `p_cstr` is a valid NUL-terminated C string derived from `Path` bytes.
+        // - `times` points to two initialised `timeval` values.
+        // - `lutimes` does not follow the link when `symlink` is true.
+        if symlink {
+            libc::lutimes(p_cstr.as_ptr(), times.as_ptr())
+        } else {
+            libc::utimes(p_cstr.as_ptr(), times.as_ptr())
+        }
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn to_timeval(ft: &FileTime) -> libc::timeval {
+    libc::timeval {
+        tv_sec: ft.seconds() as libc::time_t,
+        tv_usec: (ft.nanoseconds() / 1000) as libc::suseconds_t,
+    }
+}
+
+#[cfg(target_env = "uclibc")]
+fn to_timespec(ft: &FileTime) -> libc::timespec {
+    libc::timespec {
+        tv_sec: ft.seconds() as libc::time_t,
+        #[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
+        tv_nsec: (ft.nanoseconds()) as i64,
+        #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
+        tv_nsec: (ft.nanoseconds()) as libc::c_long,
+    }
+}

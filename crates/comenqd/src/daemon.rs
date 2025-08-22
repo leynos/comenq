@@ -402,6 +402,300 @@ pub async fn run_worker(
 }
 
 #[cfg(test)]
+mod smart_timeouts {
+    //! Adaptive timeout utilities for test execution.
+    //!
+    //! Provides configurable timeout calculation that scales based on test
+    //! complexity, build configuration (debug/release), coverage
+    //! instrumentation, and CI environment. Enforces minimum and maximum
+    //! bounds to ensure reasonable timeout values across different execution
+    //! contexts.
+
+    use std::time::Duration;
+
+    /// Lower bound applied to calculated timeouts to avoid flakiness from tiny values.
+    pub const MIN_TIMEOUT_SECS: u64 = 10;
+    /// Upper bound to prevent tests from hanging indefinitely.
+    pub const MAX_TIMEOUT_SECS: u64 = 600;
+    /// Multiplier applied when running in debug mode where builds are slower.
+    pub const DEBUG_MULTIPLIER: u64 = 2;
+    /// Multiplier applied under coverage instrumentation.
+    pub const COVERAGE_MULTIPLIER: u64 = 5;
+    /// Multiplier when executing in CI environments which may be resource constrained.
+    pub const CI_MULTIPLIER: u64 = 2;
+    /// Percentage multipliers applied to the calculated timeout for successive
+    /// retry attempts. Adjust to tune the backoff strategy.
+    pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
+
+    /// Test complexity levels used to scale timeout durations.
+    #[derive(Debug, Clone, Copy)]
+    pub enum TestComplexity {
+        /// Basic operations with minimal computational overhead.
+        Simple,
+        /// Standard operations with moderate processing requirements.
+        Moderate,
+        /// Complex operations involving multiple steps or heavy computation.
+        Complex,
+    }
+
+    /// Configuration for calculating adaptive test timeouts.
+    #[derive(Debug, Clone, Copy)]
+    pub struct TimeoutConfig {
+        /// Base timeout in seconds before scaling.
+        base_seconds: u64,
+        /// Complexity of the operation being timed.
+        complexity: TestComplexity,
+    }
+
+    impl TimeoutConfig {
+        pub const fn new(base_seconds: u64, complexity: TestComplexity) -> Self {
+            Self {
+                base_seconds,
+                complexity,
+            }
+        }
+
+        pub fn calculate_timeout(&self) -> Duration {
+            let mut timeout = self.base_seconds;
+
+            timeout = timeout.saturating_mul(match self.complexity {
+                TestComplexity::Simple => 1,
+                TestComplexity::Moderate => 2,
+                TestComplexity::Complex => 3,
+            });
+
+            #[cfg(debug_assertions)]
+            {
+                timeout = timeout.saturating_mul(DEBUG_MULTIPLIER);
+            }
+
+            if std::env::var("LLVM_PROFILE_FILE").is_ok() {
+                timeout = timeout.saturating_mul(COVERAGE_MULTIPLIER);
+            }
+
+            if std::env::var("CI").is_ok() {
+                timeout = timeout.saturating_mul(CI_MULTIPLIER);
+            }
+
+            timeout = timeout.max(MIN_TIMEOUT_SECS);
+            timeout = timeout.min(MAX_TIMEOUT_SECS);
+
+            Duration::from_secs(timeout)
+        }
+
+        pub fn with_progressive_retry(&self) -> Vec<Duration> {
+            let base = self.calculate_timeout().as_secs();
+            PROGRESSIVE_RETRY_PERCENTS
+                .iter()
+                .map(|p| Duration::from_secs(base * p / 100))
+                .collect()
+        }
+    }
+
+    pub const DRAINED_NOTIFICATION: TimeoutConfig =
+        TimeoutConfig::new(15, TestComplexity::Moderate);
+    pub const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
+    pub const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
+
+    #[cfg(test)]
+    mod tests {
+        //! Tests for the `smart_timeouts` helpers.
+
+        use super::*;
+        use std::env;
+
+        #[test]
+        fn calculate_timeout_caps_bounds() {
+            // Safety: these tests run single-threaded and modifications to the
+            // process environment cannot race with other threads.
+            unsafe {
+                env::remove_var("CI");
+            }
+            let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
+            assert_eq!(
+                cfg.calculate_timeout(),
+                Duration::from_secs(MIN_TIMEOUT_SECS)
+            );
+
+            unsafe {
+                env::set_var("CI", "1");
+            }
+            let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
+            assert_eq!(
+                cfg.calculate_timeout(),
+                Duration::from_secs(MAX_TIMEOUT_SECS)
+            );
+            unsafe {
+                env::remove_var("CI");
+            }
+        }
+
+        #[test]
+        fn calculate_timeout_scales_with_ci_env() {
+            unsafe {
+                env::set_var("CI", "1");
+            }
+            let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+            // base 10 * debug 2 * CI 2 * optional coverage multiplier
+            let mut expected = 10 * DEBUG_MULTIPLIER * CI_MULTIPLIER;
+            if std::env::var("LLVM_PROFILE_FILE").is_ok() {
+                expected *= COVERAGE_MULTIPLIER;
+            }
+            assert_eq!(cfg.calculate_timeout(), Duration::from_secs(expected));
+            unsafe {
+                env::remove_var("CI");
+            }
+        }
+
+        #[test]
+        fn with_progressive_retry_scales_base() {
+            let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+            let base = cfg.calculate_timeout().as_secs();
+            let expected = vec![
+                Duration::from_secs(base * 50 / 100),
+                Duration::from_secs(base * 100 / 100),
+                Duration::from_secs(base * 150 / 100),
+            ];
+            assert_eq!(cfg.with_progressive_retry(), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+/// Execute `operation` under progressively increasing timeouts.
+///
+/// Retries the operation using the multipliers defined in
+/// `PROGRESSIVE_RETRY_PERCENTS`. Returns the first successful result or an
+/// error message after all attempts time out or return an error.
+async fn timeout_with_retries<F, Fut, T>(
+    config: smart_timeouts::TimeoutConfig,
+    operation_name: &str,
+    mut operation: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>> + Send,
+    T: Send,
+{
+    let timeouts = config.with_progressive_retry();
+
+    for (attempt, timeout_duration) in timeouts.iter().enumerate() {
+        let attempt_num = attempt + 1;
+        tracing::info!(
+            "⏱️  Attempt {}/{} with {}s timeout for {}",
+            attempt_num,
+            timeouts.len(),
+            timeout_duration.as_secs(),
+            operation_name
+        );
+
+        match tokio::time::timeout(*timeout_duration, operation()).await {
+            Ok(Ok(result)) => {
+                tracing::info!(
+                    "✅ {} completed successfully on attempt {}",
+                    operation_name,
+                    attempt_num
+                );
+                return Ok(result);
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "❌ {} failed on attempt {}: {}",
+                    operation_name,
+                    attempt_num,
+                    e
+                );
+                return Err(e);
+            }
+            Err(_) => {
+                if attempt_num < timeouts.len() {
+                    tracing::warn!(
+                        "⏳ {} timed out after {}s, retrying...",
+                        operation_name,
+                        timeout_duration.as_secs()
+                    );
+                } else {
+                    tracing::error!(
+                        "💥 {} failed after {} attempts, final timeout: {}s",
+                        operation_name,
+                        timeouts.len(),
+                        timeout_duration.as_secs()
+                    );
+                    return Err(format!(
+                        "{} timed out after all retry attempts",
+                        operation_name
+                    ));
+                }
+            }
+        }
+    }
+
+    Err(format!("{} exhausted all retry attempts", operation_name))
+}
+
+#[cfg(test)]
+mod retry_helper_tests {
+    //! Tests for the `timeout_with_retries` helper.
+
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_after_timeout_then_succeeds() {
+        let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
+        let first_timeout = cfg.with_progressive_retry()[0];
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+        let attempts = Arc::new(AtomicU32::new(0));
+        let handle_attempts = attempts.clone();
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || {
+            let attempts = handle_attempts.clone();
+            let first_timeout = first_timeout;
+            async move {
+                let current = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                if current == 1 {
+                    sleep(first_timeout + Duration::from_secs(1)).await;
+                }
+                Ok(current)
+            }
+        }));
+
+        tokio::time::advance(first_timeout).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        let result = handle.await.expect("join").expect("timeout_with_retries");
+        assert_eq!(result, 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fails_after_all_retries() {
+        let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
+        let timeouts = cfg.with_progressive_retry();
+        let final_timeout = *timeouts.last().expect("timeouts");
+        let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || async move {
+            // Always exceed the final timeout so all attempts time out.
+            sleep(final_timeout + Duration::from_secs(1)).await;
+            Ok(())
+        }));
+
+        tokio::time::advance(timeouts[0]).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(timeouts[1]).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(timeouts[2]).await;
+        tokio::task::yield_now().await;
+
+        let err = handle.await.expect("join").expect_err("should time out");
+        assert!(err.contains("timed out"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     //! Tests for the daemon tasks.
     use super::*;
@@ -416,31 +710,12 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
     use tokio::sync::{Notify, mpsc, watch};
-    use tokio::time::{sleep, timeout};
+    use tokio::time::sleep;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yaque::Receiver;
 
     const TEST_COOLDOWN_SECONDS: u64 = 60;
-
-    #[cfg(test)]
-    #[expect(
-        unexpected_cfgs,
-        reason = "unit tests: detect non-standard coverage cfg flags across environments"
-    )]
-    fn is_coverage_run() -> bool {
-        // Detect if running under coverage instrumentation
-        std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
-            || std::env::var("RUSTFLAGS").map_or(false, |flags| flags.contains("coverage"))
-            || cfg!(coverage_nightly)
-            || cfg!(coverage)
-    }
-
-    #[cfg(test)]
-    fn coverage_timeout_multiplier() -> u32 {
-        if is_coverage_run() { 10 } else { 1 }
-    }
-
     async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         for _ in 0..tries {
             if path.exists() {
@@ -636,11 +911,40 @@ mod tests {
         let stored: CommentRequest = serde_json::from_slice(&guard).expect("parse");
         assert_eq!(stored, req);
         let _ = shutdown_tx.send(());
-        let _ = tokio::time::timeout(Duration::from_secs(10), async {
-            let _ = listener_task.await;
-            let _ = writer.await;
-        })
-        .await;
+        let mut listener_task = Some(listener_task);
+        let mut writer = Some(writer);
+        timeout_with_retries(
+            smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Moderate),
+            "listener and writer join",
+            || match (listener_task.take(), writer.take()) {
+                (Some(listener_handle), Some(writer_handle)) => {
+                    async move {
+                        let listener_res = listener_handle.await;
+                        let writer_res = writer_handle.await;
+
+                        if let Err(e) = &listener_res {
+                            return Err(if e.is_panic() {
+                                "listener task panicked".to_string()
+                            } else {
+                                format!("listener task failed: {e}")
+                            });
+                        }
+                        if let Err(e) = &writer_res {
+                            return Err(if e.is_panic() {
+                                "writer task panicked".to_string()
+                            } else {
+                                format!("writer task failed: {e}")
+                            });
+                        }
+
+                        Ok(())
+                    }
+                }
+                _ => async { Err("join handles consumed".to_string()) },
+            },
+        )
+        .await
+        .expect("listener and writer join");
     }
 
     #[rstest]
@@ -654,7 +958,6 @@ mod tests {
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
         let drained_for_wait = Arc::clone(&drained);
-        let drained_notified = drained_for_wait.notified();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let control = WorkerControl {
             shutdown: shutdown_rx,
@@ -666,43 +969,51 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        let drain_timeout = Duration::from_secs(30 * coverage_timeout_multiplier() as u64);
-        match timeout(drain_timeout, drained_notified).await {
-            Ok(_) => println!("Worker drained notification received successfully"),
-            Err(_) => {
-                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-                eprintln!(
-                    "Timeout waiting for worker drained notification after {} seconds",
-                    drain_timeout.as_secs()
-                );
-                eprintln!(
-                    "Coverage mode: {}, Timeout used: {}s",
-                    is_coverage_run(),
-                    30 * coverage_timeout_multiplier()
-                );
-                eprintln!("{}", diagnostics);
-                panic!("worker drained: QUEUE CLEANUP FAILURE");
-            }
+        if let Err(e) = timeout_with_retries(
+            smart_timeouts::DRAINED_NOTIFICATION,
+            "worker drained notification",
+            || {
+                let drained = Arc::clone(&drained_for_wait);
+                async move {
+                    drained.notified().await;
+                    Ok(())
+                }
+            },
+        )
+        .await
+        {
+            let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
+            tracing::error!("Timeout waiting for worker drained notification: {e}");
+            tracing::error!("{diagnostics}");
+            panic!("worker drained: QUEUE CLEANUP FAILURE");
         }
         shutdown_tx.send(()).expect("send shutdown");
-        let join_timeout = Duration::from_secs(30 * coverage_timeout_multiplier() as u64);
-        match timeout(join_timeout, h).await {
-            Ok(join_result) => {
-                join_result.expect("join worker").expect("worker result");
-                println!("\u{2713} Worker task completed successfully");
+        let mut join_handle = Some(h);
+        if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker join", || {
+            let handle = join_handle.take();
+            async move {
+                let handle = handle.ok_or_else(|| "join handle consumed".to_string())?;
+                match handle.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => {
+                        if e.is_panic() {
+                            Err("worker task panicked".to_string())
+                        } else {
+                            Err(format!("worker task failed: {e}"))
+                        }
+                    }
+                }
             }
-            Err(_) => {
-                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
-                eprintln!(
-                    "\u{274C} Worker join timeout after {}s",
-                    join_timeout.as_secs()
-                );
-                eprintln!("{}", diagnostics);
-                panic!(
-                    "join worker: timeout in success test after {}s",
-                    join_timeout.as_secs()
-                );
-            }
+        })
+        .await
+        {
+            let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
+            tracing::error!("\u{274C} Worker join timeout: {e}");
+            tracing::error!("{diagnostics}");
+            panic!("join worker: timeout in success test");
+        } else {
+            tracing::info!("\u{2713} Worker task completed successfully");
         }
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         let data_files = stdfs::read_dir(&ctx.cfg.queue_path)
@@ -733,7 +1044,6 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
         let enqueued_for_wait = Arc::clone(&enqueued);
-        let enqueued_notified = enqueued_for_wait.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
@@ -744,32 +1054,42 @@ mod tests {
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        // The unit value from `timeout` is irrelevant; `expect` handles expiry.
-        let _ = timeout(
-            Duration::from_secs(30 * coverage_timeout_multiplier() as u64),
-            enqueued_notified,
-        )
+        timeout_with_retries(smart_timeouts::WORKER_SUCCESS, "worker enqueued", || {
+            let enqueued = Arc::clone(&enqueued_for_wait);
+            async move {
+                enqueued.notified().await;
+                Ok(())
+            }
+        })
         .await
         .expect("worker picked up job");
         shutdown_tx.send(()).expect("send shutdown");
-        let join_timeout = Duration::from_secs(45 * coverage_timeout_multiplier() as u64);
-        match timeout(join_timeout, h).await {
-            Ok(join_result) => {
-                join_result.expect("join worker").expect("worker result");
-                println!("\u{2713} Worker task completed with error handling");
+        let mut join_handle = Some(h);
+        if let Err(e) = timeout_with_retries(smart_timeouts::WORKER_ERROR, "worker join", || {
+            let handle = join_handle.take();
+            async move {
+                let handle = handle.ok_or_else(|| "join handle consumed".to_string())?;
+                match handle.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => {
+                        if e.is_panic() {
+                            Err("worker task panicked".to_string())
+                        } else {
+                            Err(format!("worker task failed: {e}"))
+                        }
+                    }
+                }
             }
-            Err(_) => {
-                let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 1).await;
-                eprintln!(
-                    "\u{274C} Worker join timeout after {}s",
-                    join_timeout.as_secs()
-                );
-                eprintln!("{}", diagnostics);
-                panic!(
-                    "join worker: timeout in error test after {}s",
-                    join_timeout.as_secs()
-                );
-            }
+        })
+        .await
+        {
+            let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 1).await;
+            tracing::error!("\u{274C} Worker join timeout: {e}");
+            tracing::error!("{diagnostics}");
+            panic!("join worker: timeout in error test");
+        } else {
+            tracing::info!("\u{2713} Worker task completed with error handling");
         }
         assert_eq!(
             server.received_requests().await.expect("requests").len(),
