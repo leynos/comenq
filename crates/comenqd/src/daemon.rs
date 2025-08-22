@@ -644,6 +644,8 @@ mod retry_helper_tests {
     #[tokio::test(start_paused = true)]
     async fn retries_after_timeout_then_succeeds() {
         let cfg = smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Simple);
+        let timeouts = cfg.with_progressive_retry();
+        let first_timeout = timeouts[0];
         use std::sync::{
             Arc,
             atomic::{AtomicU32, Ordering},
@@ -652,17 +654,17 @@ mod retry_helper_tests {
         let handle_attempts = attempts.clone();
         let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || {
             let attempts = handle_attempts.clone();
+            let first_timeout = first_timeout;
             async move {
                 let current = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 if current == 1 {
-                    sleep(Duration::from_secs(6)).await;
+                    sleep(first_timeout + Duration::from_secs(1)).await;
                 }
                 Ok(current)
             }
         }));
 
-        let timeouts = cfg.with_progressive_retry();
-        tokio::time::advance(timeouts[0]).await;
+        tokio::time::advance(first_timeout).await;
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -915,36 +917,31 @@ mod tests {
         timeout_with_retries(
             smart_timeouts::TimeoutConfig::new(10, smart_timeouts::TestComplexity::Moderate),
             "listener and writer join",
-            || {
-                let listener_handle = listener_task.take();
-                let writer_handle = writer.take();
-                async move {
-                    let listener_res = match listener_handle {
-                        Some(h) => h.await,
-                        None => return Err("listener handle consumed".to_string()),
-                    };
-                    let writer_res = match writer_handle {
-                        Some(h) => h.await,
-                        None => return Err("writer handle consumed".to_string()),
-                    };
+            || match (listener_task.take(), writer.take()) {
+                (Some(listener_handle), Some(writer_handle)) => {
+                    async move {
+                        let listener_res = listener_handle.await;
+                        let writer_res = writer_handle.await;
 
-                    if let Err(e) = &listener_res {
-                        return Err(if e.is_panic() {
-                            "listener task panicked".to_string()
-                        } else {
-                            format!("listener task failed: {e}")
-                        });
-                    }
-                    if let Err(e) = &writer_res {
-                        return Err(if e.is_panic() {
-                            "writer task panicked".to_string()
-                        } else {
-                            format!("writer task failed: {e}")
-                        });
-                    }
+                        if let Err(e) = &listener_res {
+                            return Err(if e.is_panic() {
+                                "listener task panicked".to_string()
+                            } else {
+                                format!("listener task failed: {e}")
+                            });
+                        }
+                        if let Err(e) = &writer_res {
+                            return Err(if e.is_panic() {
+                                "writer task panicked".to_string()
+                            } else {
+                                format!("writer task failed: {e}")
+                            });
+                        }
 
-                    Ok(())
+                        Ok(())
+                    }
                 }
+                _ => async { Err("join handles consumed".to_string()) },
             },
         )
         .await
