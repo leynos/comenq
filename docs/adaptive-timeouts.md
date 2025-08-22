@@ -17,6 +17,8 @@ failures from transient delays.
 Note: coverage scaling activates when the environment variable
 `LLVM_PROFILE_FILE` is set.
 
+Note: CI scaling activates when the environment variable `CI` is set.
+
 ```rust
 // Note: These utilities are only available in test builds (#[cfg(test)])
 # use crate::daemon::{smart_timeouts, timeout_with_retries};

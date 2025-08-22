@@ -458,23 +458,23 @@ mod smart_timeouts {
         pub fn calculate_timeout(&self) -> Duration {
             let mut timeout = self.base_seconds;
 
-            timeout *= match self.complexity {
+            timeout = timeout.saturating_mul(match self.complexity {
                 TestComplexity::Simple => 1,
                 TestComplexity::Moderate => 2,
                 TestComplexity::Complex => 3,
-            };
+            });
 
             #[cfg(debug_assertions)]
             {
-                timeout *= DEBUG_MULTIPLIER;
+                timeout = timeout.saturating_mul(DEBUG_MULTIPLIER);
             }
 
             if std::env::var("LLVM_PROFILE_FILE").is_ok() {
-                timeout *= COVERAGE_MULTIPLIER;
+                timeout = timeout.saturating_mul(COVERAGE_MULTIPLIER);
             }
 
             if std::env::var("CI").is_ok() {
-                timeout *= CI_MULTIPLIER;
+                timeout = timeout.saturating_mul(CI_MULTIPLIER);
             }
 
             timeout = timeout.max(MIN_TIMEOUT_SECS);

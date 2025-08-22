@@ -81,10 +81,10 @@ impl FileTime {
         }
     }
 
+    /// Upstream `filetime` truncates timestamps to whole seconds on some
+    /// platforms. The vendored build disables that emulation to preserve
+    /// nanosecond precision, returning the original value unchanged.
     const fn emulate_second_only_system(self) -> FileTime {
-        // Emulation is disabled in this patched build to preserve nanosecond
-        // precision across all platforms. The upstream behaviour truncates to
-        // seconds on some systems.
         self
     }
 
