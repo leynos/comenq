@@ -217,8 +217,9 @@ pub async fn run(config: Config) -> Result<()> {
                     .next()
                     .expect("backoff should yield a duration");
                 tokio::time::sleep(delay).await;
-                // Stop accepting new connections before re-binding the writer to
-                // avoid racing sends into a receiver that is being moved.
+                // Stop accepting new connections before respawning the writer.
+                // Moving the receiver between tasks is safe, but pausing accepts
+                // avoids growing an in-memory backlog while the writer is down.
                 listener.abort();
                 // Recreate a queue sender for the restarted writer, reusing the
                 // existing receiver where possible to avoid dropping buffered

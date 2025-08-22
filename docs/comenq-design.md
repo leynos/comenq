@@ -381,8 +381,11 @@ exponential backoff with jitter (via the `backon` crate) to avoid a tight
 restart loop, and then respawns the task. This keeps the service available
 without relying on an external process supervisor. Restarting the writer
 recreates the listener→writer channel and restarts the listener to attach a
-fresh sender, preserving single-writer semantics. Any bytes buffered in the
-discarded channel that were not persisted to the queue are lost.
+fresh sender, preserving single-writer semantics. When the writer exits
+cleanly, the supervisor reuses the existing receiver so buffered bytes are
+preserved. If the writer panics and the receiver is lost, a new channel is
+created and any bytes buffered in the discarded channel that were not persisted
+to the queue are lost.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -409,9 +412,15 @@ sequenceDiagram
         D->>W: Restart Worker
         Q--xD: Failure Detected
         D->>D: Log Failure
-        D->>D: Recreate in-memory channel
-        D->>Q: Restart Queue Writer with new Sender
-        D->>L: Restart Listener to re-bind Sender clone(s)
+        alt Receiver available (clean exit)
+            D->>D: Reuse existing receiver (buffer preserved)
+            D->>Q: Restart Queue Writer with existing Receiver + new Sender
+            D->>L: Restart Listener to re-bind Sender clone(s)
+        else Receiver lost (panic)
+            D->>D: Recreate in-memory channel (buffer may be dropped)
+            D->>Q: Restart Queue Writer with new Sender/Receiver
+            D->>L: Restart Listener to re-bind Sender clone(s)
+        end
     end
 
     S->>D: Trigger Graceful Shutdown
