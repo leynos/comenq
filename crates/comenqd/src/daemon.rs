@@ -201,7 +201,15 @@ pub async fn run(config: Config) -> Result<()> {
                 let delay = listener_backoff
                     .next()
                     .expect("backoff should yield a duration");
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
                 listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
                 listener_backoff = backoff(min_delay);
             }
@@ -210,7 +218,15 @@ pub async fn run(config: Config) -> Result<()> {
                 let delay = worker_backoff
                     .next()
                     .expect("backoff should yield a duration");
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
                 worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
                 worker_backoff = backoff(min_delay);
             }
@@ -219,7 +235,15 @@ pub async fn run(config: Config) -> Result<()> {
                 let delay = writer_backoff
                     .next()
                     .expect("backoff should yield a duration");
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = shutdown_rx.changed() => {
+                        listener.abort();
+                        worker.abort();
+                        writer.abort();
+                        break;
+                    }
+                }
                 // Stop accepting new connections before respawning the writer.
                 // Moving the receiver between tasks is safe, but pausing accepts
                 // avoids growing an in-memory backlog while the writer is down.
