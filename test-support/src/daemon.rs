@@ -25,6 +25,8 @@ pub struct TestConfig {
     pub cooldown_period_seconds: u64,
     /// Minimum delay in milliseconds applied between task restarts.
     pub restart_min_delay_ms: u64,
+    /// Timeout for GitHub API requests in seconds.
+    pub github_api_timeout_secs: u64,
 }
 
 impl Default for TestConfig {
@@ -35,6 +37,7 @@ impl Default for TestConfig {
             queue_path: PathBuf::new(),
             cooldown_period_seconds: 1,
             restart_min_delay_ms: 1,
+            github_api_timeout_secs: 30,
         }
     }
 }
@@ -51,6 +54,7 @@ pub fn temp_config(tmp: &TempDir) -> TestConfig {
         queue_path: tmp.path().join("q"),
         cooldown_period_seconds: 1,
         restart_min_delay_ms: 1,
+        github_api_timeout_secs: 30,
     }
 }
 

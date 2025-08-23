@@ -18,8 +18,6 @@ use std::fs as stdfs;
 #[cfg(test)]
 use std::path::Path;
 
-const GITHUB_API_TIMEOUT_SECS: u64 = 30;
-
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
 enum PostCommentError {
@@ -41,10 +39,11 @@ pub(crate) fn build_octocrab(token: &str) -> Result<Octocrab> {
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
+    config: &Config,
 ) -> Result<(), PostCommentError> {
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
-    match tokio::time::timeout(Duration::from_secs(GITHUB_API_TIMEOUT_SECS), fut).await {
+    match tokio::time::timeout(Duration::from_secs(config.github_api_timeout_secs), fut).await {
         Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
         Err(_) => Err(PostCommentError::Timeout),
     }
@@ -152,7 +151,7 @@ pub async fn run_worker(
             }
         };
 
-        match post_comment(&octocrab, &request).await {
+        match post_comment(&octocrab, &request, &config).await {
             Ok(_) => {
                 guard.commit()?;
             }

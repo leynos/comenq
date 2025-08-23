@@ -22,8 +22,11 @@ use crate::supervisor::backoff;
 /// Removes any stale file at `path` before binding and sets its permissions to
 /// `0o660`.
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
-    if stdfs::metadata(path).is_ok() {
-        stdfs::remove_file(path)?;
+    // Remove any stale socket without a race-prone existence check.
+    match stdfs::remove_file(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        Err(_) => {}
     }
     let listener = UnixListener::bind(path)?;
     stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))?;
@@ -94,8 +97,19 @@ pub async fn handle_client(
     mut stream: UnixStream,
     tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> Result<()> {
+    const MAX_REQUEST_SIZE: usize = 64 * 1024; // 64 KiB
     let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer).await?;
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+        if buffer.len() > MAX_REQUEST_SIZE {
+            return Err(anyhow::anyhow!("request too large"));
+        }
+    }
     let request: CommentRequest = serde_json::from_slice(&buffer)?;
     let bytes = serde_json::to_vec(&request)?;
     tx.send(bytes)

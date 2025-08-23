@@ -20,6 +20,8 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 const DEFAULT_COOLDOWN: u64 = 960;
 /// Default minimum delay between task restarts in milliseconds.
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
+/// Default timeout in seconds for GitHub API calls.
+const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
@@ -38,6 +40,9 @@ pub struct Config {
     /// Minimum delay in milliseconds applied between task restarts.
     #[serde(default = "default_restart_min_delay_ms")]
     pub restart_min_delay_ms: u64,
+    /// Timeout applied to GitHub API requests in seconds.
+    #[serde(default = "default_github_api_timeout_secs")]
+    pub github_api_timeout_secs: u64,
 }
 
 /// Convert a [`test_support::daemon::TestConfig`] into a [`Config`].
@@ -64,6 +69,7 @@ impl From<test_support::daemon::TestConfig> for Config {
             queue_path: value.queue_path,
             cooldown_period_seconds: value.cooldown_period_seconds,
             restart_min_delay_ms: value.restart_min_delay_ms,
+            github_api_timeout_secs: value.github_api_timeout_secs,
         }
     }
 }
@@ -100,6 +106,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
             restart_min_delay_ms: value.restart_min_delay_ms,
+            github_api_timeout_secs: value.github_api_timeout_secs,
         }
     }
 }
@@ -135,6 +142,10 @@ fn default_cooldown() -> u64 {
 
 fn default_restart_min_delay_ms() -> u64 {
     DEFAULT_RESTART_MIN_DELAY_MS
+}
+
+fn default_github_api_timeout_secs() -> u64 {
+    DEFAULT_GITHUB_API_TIMEOUT_SECS
 }
 
 impl Config {
@@ -264,6 +275,7 @@ mod tests {
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
         assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
+        assert_eq!(cfg.github_api_timeout_secs, DEFAULT_GITHUB_API_TIMEOUT_SECS);
     }
 
     /// CLI arguments should take precedence over environment variables
@@ -305,5 +317,9 @@ mod tests {
             test_cfg.cooldown_period_seconds
         );
         assert_eq!(cfg.restart_min_delay_ms, test_cfg.restart_min_delay_ms);
+        assert_eq!(
+            cfg.github_api_timeout_secs,
+            test_cfg.github_api_timeout_secs
+        );
     }
 }

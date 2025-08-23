@@ -37,6 +37,98 @@ pub(crate) fn backoff(min_delay: Duration) -> ExponentialBackoff {
     )
 }
 
+/// Sleep for `d` or return early if `shutdown` is triggered.
+///
+/// Returns `true` if a shutdown occurred.
+async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(d) => false,
+        _ = shutdown.changed() => true,
+    }
+}
+
+/// Supervise a task that returns `Result<()>` and respawn it on failure.
+async fn supervise_task<F, B>(
+    name: &str,
+    mut handle: tokio::task::JoinHandle<Result<()>>,
+    mut backoff: ExponentialBackoff,
+    mut spawn_fn: F,
+    mut shutdown: watch::Receiver<()>,
+    mut backoff_builder: B,
+) where
+    F: FnMut() -> tokio::task::JoinHandle<Result<()>>,
+    B: FnMut() -> ExponentialBackoff,
+{
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => {
+                handle.abort();
+                break;
+            }
+            res = &mut handle => {
+                match &res {
+                    Ok(Ok(())) => tracing::warn!(task = name, "exited"),
+                    Ok(Err(e)) => tracing::error!(task = name, error = %e),
+                    Err(e) => tracing::error!(task = name, error = %e),
+                }
+                let delay = backoff.next().expect("backoff should yield a duration");
+                if sleep_or_shutdown(&mut shutdown, delay).await {
+                    break;
+                }
+                backoff = backoff_builder();
+                handle = spawn_fn();
+            }
+        }
+    }
+}
+
+async fn supervise_writer<B>(
+    mut handle: tokio::task::JoinHandle<mpsc::UnboundedReceiver<Vec<u8>>>,
+    mut backoff: ExponentialBackoff,
+    mut backoff_builder: B,
+    cfg: Arc<Config>,
+    client_tx: Arc<std::sync::Mutex<mpsc::UnboundedSender<Vec<u8>>>>,
+    shutdown_tx: watch::Sender<()>,
+    mut shutdown: watch::Receiver<()>,
+) where
+    B: FnMut() -> ExponentialBackoff,
+{
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => {
+                handle.abort();
+                break;
+            }
+            res = &mut handle => {
+                let rx = match res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!(task = "writer", error = %e);
+                        let pair = mpsc::unbounded_channel();
+                        *client_tx.lock().unwrap() = pair.0;
+                        pair.1
+                    }
+                };
+                let delay = backoff.next().expect("backoff should yield a duration");
+                if sleep_or_shutdown(&mut shutdown, delay).await {
+                    break;
+                }
+                backoff = backoff_builder();
+                match channel(&cfg.queue_path) {
+                    Ok((queue_tx, _)) => {
+                        handle = tokio::spawn(queue_writer(queue_tx, rx));
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Queue sender creation failed");
+                        let _ = shutdown_tx.send(());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Forward bytes from a channel into the persistent queue.
 ///
 /// The queue writer decouples the listener from the queue, ensuring a
@@ -79,18 +171,24 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let (queue_tx, _) = channel(&config.queue_path)?; // drop unused receiver
-    let (mut client_tx, client_rx) = mpsc::unbounded_channel();
+    let (client_tx_initial, client_rx) = mpsc::unbounded_channel();
+    let client_tx = Arc::new(std::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
 
-    // Initial task spawns.
-    let mut writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let mut listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
-    let mut worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+    // Initial task spawns and backoff builders.
+    let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
+    let listener_tx = client_tx.clone();
+    let listener = spawn_listener(
+        cfg.clone(),
+        listener_tx.lock().unwrap().clone(),
+        shutdown_rx.clone(),
+    );
+    let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
-    let mut listener_backoff = backoff(min_delay);
-    let mut worker_backoff = backoff(min_delay);
-    let mut writer_backoff = backoff(min_delay);
+    let listener_backoff = backoff(min_delay);
+    let worker_backoff = backoff(min_delay);
+    let writer_backoff = backoff(min_delay);
 
     // Convert SIGINT and SIGTERM into a shutdown signal.
     {
@@ -120,91 +218,41 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
 
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.changed() => {
-                listener.abort();
-                worker.abort();
-                writer.abort();
-                break;
-            }
-            res = &mut listener => {
-                log_listener_failure(&res);
-                let delay = listener_backoff.next().expect("backoff should yield a duration");
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {},
-                    _ = shutdown_rx.changed() => {
-                        listener.abort();
-                        worker.abort();
-                        writer.abort();
-                        break;
-                    }
-                }
-                listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
-                listener_backoff = backoff(min_delay);
-            }
-            res = &mut worker => {
-                log_worker_failure(&res);
-                let delay = worker_backoff.next().expect("backoff should yield a duration");
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {},
-                    _ = shutdown_rx.changed() => {
-                        listener.abort();
-                        worker.abort();
-                        writer.abort();
-                        break;
-                    }
-                }
-                worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
-                worker_backoff = backoff(min_delay);
-            }
-            res = &mut writer => {
-                log_writer_failure(&res);
-                let delay = writer_backoff.next().expect("backoff should yield a duration");
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {},
-                    _ = shutdown_rx.changed() => {
-                        listener.abort();
-                        worker.abort();
-                        writer.abort();
-                        break;
-                    }
-                }
-                listener.abort();
-                let rx = match res {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Writer task panicked");
-                        let pair = mpsc::unbounded_channel();
-                        client_tx = pair.0;
-                        pair.1
-                    }
-                };
-                match channel(&cfg.queue_path) {
-                    Ok((queue_tx, _)) => {
-                        writer = tokio::spawn(queue_writer(queue_tx, rx));
-                        listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
-                        writer_backoff = backoff(min_delay);
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Queue sender creation failed");
-                        let _ = shutdown_tx.send(());
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Supervise tasks concurrently.
+    let client_tx_clone = client_tx.clone();
+    let shutdown_listener = shutdown_rx.clone();
+    let shutdown_worker = shutdown_rx.clone();
+    tokio::join!(
+        supervise_task(
+            "listener",
+            listener,
+            listener_backoff,
+            || {
+                let tx = client_tx_clone.lock().unwrap().clone();
+                spawn_listener(cfg.clone(), tx, shutdown_listener.clone())
+            },
+            shutdown_listener.clone(),
+            || backoff(min_delay),
+        ),
+        supervise_task(
+            "worker",
+            worker,
+            worker_backoff,
+            || spawn_worker(cfg.clone(), octocrab.clone(), shutdown_worker.clone()),
+            shutdown_worker.clone(),
+            || backoff(min_delay),
+        ),
+        supervise_writer(
+            writer,
+            writer_backoff,
+            || backoff(min_delay),
+            cfg.clone(),
+            client_tx,
+            shutdown_tx.clone(),
+            shutdown_rx,
+        ),
+    );
 
-    // Close the client sender so the queue writer can exit cleanly.
-    drop(client_tx);
-    // Gracefully await all tasks with a timeout; ignore outcomes since shutdown is in progress.
-    let _ = tokio::time::timeout(Duration::from_secs(10), async {
-        let _ = listener.await;
-        let _ = worker.await;
-        let _ = writer.await;
-    })
-    .await;
     Ok(())
 }
 
@@ -229,25 +277,4 @@ fn spawn_worker(
     })
 }
 
-fn log_listener_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
-    match res {
-        Ok(Ok(())) => tracing::warn!("Listener exited unexpectedly"),
-        Ok(Err(e)) => tracing::error!(error = %e, "Listener task failed"),
-        Err(e) => tracing::error!(error = %e, "Listener task panicked"),
-    }
-}
-
-fn log_worker_failure(res: &Result<Result<()>, tokio::task::JoinError>) {
-    match res {
-        Ok(Ok(())) => tracing::warn!("Worker exited unexpectedly"),
-        Ok(Err(e)) => tracing::error!(error = %e, "Worker task failed"),
-        Err(e) => tracing::error!(error = %e, "Worker task panicked"),
-    }
-}
-
-fn log_writer_failure(res: &Result<mpsc::UnboundedReceiver<Vec<u8>>, tokio::task::JoinError>) {
-    match res {
-        Ok(_) => tracing::warn!("Writer exited unexpectedly"),
-        Err(e) => tracing::error!(error = %e, "Writer task panicked"),
-    }
-}
+// Logging helpers are no longer required; supervision handles reporting.
