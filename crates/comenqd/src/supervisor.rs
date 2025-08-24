@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::fs;
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
 use yaque::{Sender, channel};
@@ -72,7 +73,11 @@ async fn supervise_task<F, B>(
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
-                handle.abort();
+                let grace = tokio::time::sleep(Duration::from_millis(100));
+                tokio::select! {
+                    _ = &mut handle => {}
+                    _ = grace => handle.abort(),
+                }
                 break;
             }
             res = &mut handle => {
@@ -106,7 +111,11 @@ async fn supervise_writer<B>(
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
-                handle.abort();
+                let grace = tokio::time::sleep(Duration::from_millis(100));
+                tokio::select! {
+                    _ = &mut handle => {}
+                    _ = grace => handle.abort(),
+                }
                 break;
             }
             res = &mut handle => {
@@ -201,6 +210,7 @@ pub async fn run(config: Config) -> Result<()> {
     let writer_backoff = backoff(min_delay);
 
     // Convert SIGINT and SIGTERM into a shutdown signal.
+    #[cfg(unix)]
     {
         let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
