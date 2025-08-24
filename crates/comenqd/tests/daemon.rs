@@ -11,6 +11,7 @@ use comenqd::daemon::{
 use octocrab::Octocrab;
 use rstest::{fixture, rstest};
 use std::fs as stdfs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,10 +22,10 @@ use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 use yaque::{Receiver, channel};
 
-use util::{DRAINED_NOTIFICATION, WORKER_ERROR, WORKER_SUCCESS, timeout_with_retries};
+use util::timeout_with_retries;
 
 const TEST_COOLDOWN_SECONDS: u64 = 60;
 
@@ -127,29 +128,37 @@ async fn run_listener_accepts_connections() {
     timeout_with_retries(
         util::TimeoutConfig::new(10, util::TestComplexity::Moderate),
         "listener and writer join",
-        || match (listener_task.take(), writer.take()) {
-            (Some(listener_handle), Some(writer_handle)) => {
-                async move {
-                    let listener_res = listener_handle.await;
-                    let writer_res = writer_handle.await;
-                    if let Err(e) = &listener_res {
+        || {
+            let listener_handle = listener_task.take();
+            let writer_handle = writer.take();
+            async move {
+                let listener_handle =
+                    listener_handle.ok_or_else(|| "join handles consumed".to_string())?;
+                let writer_handle =
+                    writer_handle.ok_or_else(|| "join handles consumed".to_string())?;
+                match listener_handle.await {
+                    Ok(res) => {
+                        if let Err(e) = res {
+                            return Err(format!("listener task failed: {e}"));
+                        }
+                    }
+                    Err(e) => {
                         return Err(if e.is_panic() {
                             "listener task panicked".to_string()
                         } else {
                             format!("listener task failed: {e}")
                         });
                     }
-                    if let Err(e) = &writer_res {
-                        return Err(if e.is_panic() {
-                            "writer task panicked".to_string()
-                        } else {
-                            format!("writer task failed: {e}")
-                        });
-                    }
-                    Ok(())
                 }
+                if let Err(e) = writer_handle.await {
+                    return Err(if e.is_panic() {
+                        "writer task panicked".to_string()
+                    } else {
+                        format!("writer task failed: {e}")
+                    });
+                }
+                Ok(())
             }
-            _ => async { Err("join handles consumed".to_string()) },
         },
     )
     .await
