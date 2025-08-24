@@ -46,7 +46,7 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
 /// and not treated as an error.
 pub async fn run_listener(
     config: Arc<Config>,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+    tx: mpsc::Sender<Vec<u8>>,
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let listener = prepare_listener(&config.socket_path)?;
@@ -58,10 +58,18 @@ pub async fn run_listener(
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
                     accept_backoff = backoff(min_delay);
+                    let cred = stream.peer_cred().ok();
+                    let pid = cred.as_ref().map(|c| c.pid());
+                    let uid = cred.as_ref().map(|c| c.uid());
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, tx_clone).await {
-                            tracing::warn!(error = %e, "Client handling failed");
+                            match (pid, uid) {
+                                (Some(pid), Some(uid)) => {
+                                    tracing::warn!(pid, uid, error = %e, "Client handling failed");
+                                }
+                                _ => tracing::warn!(error = %e, "Client handling failed"),
+                            }
                         }
                     });
                 }
@@ -93,26 +101,25 @@ pub async fn run_listener(
 /// # Errors
 /// Fails if reading from the socket or parsing JSON fails, or if the queue
 /// writer has shut down.
-pub async fn handle_client(
-    mut stream: UnixStream,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-) -> Result<()> {
-    const MAX_REQUEST_SIZE: usize = 64 * 1024; // 64 KiB
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        let n = stream.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        buffer.extend_from_slice(&chunk[..n]);
-        if buffer.len() > MAX_REQUEST_SIZE {
-            return Err(anyhow::anyhow!("request too large"));
-        }
+const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
+const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
+
+pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
+    let mut buffer = Vec::with_capacity(8 * 1024);
+    let mut limited = stream.take(MAX_REQUEST_BYTES as u64);
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_READ_TIMEOUT_SECS),
+        limited.read_to_end(&mut buffer),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client read timed out"))??;
+    if buffer.len() >= MAX_REQUEST_BYTES {
+        anyhow::bail!("client payload exceeds {} bytes", MAX_REQUEST_BYTES);
     }
     let request: CommentRequest = serde_json::from_slice(&buffer)?;
     let bytes = serde_json::to_vec(&request)?;
     tx.send(bytes)
+        .await
         .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
     Ok(())
 }

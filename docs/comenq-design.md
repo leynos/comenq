@@ -1038,16 +1038,20 @@ listener and queue worker as described above. Structured logging is initialized
 using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
 environment variable. The queue directory is created asynchronously on start if
 it does not already exist before `yaque` opens it. Incoming requests are
-forwarded from the listener to a dedicated queue writer task over a Tokio
-`mpsc` channel. This task serializes writes to the `yaque::Sender`, preserving
-single-writer semantics without per-connection locking.
+forwarded from the listener to a dedicated queue writer task over a bounded
+Tokio `mpsc` channel sized by `client_channel_capacity`. This task serializes
+writes to the `yaque::Sender`, preserving single-writer semantics without
+per-connection locking.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
 secondary rate limits.
 
-GitHub API calls are wrapped in `tokio::time::timeout` with a 30-second limit
-to ensure the worker does not block indefinitely if the network stalls.
+GitHub API calls are wrapped in `tokio::time::timeout` with a configurable
+limit (default 30 seconds) to ensure the worker does not block indefinitely if
+the network stalls. The limit can be overridden via the
+`github_api_timeout_secs` configuration or the `--github-api-timeout-secs` CLI
+flag.
 
 ## Works cited
 

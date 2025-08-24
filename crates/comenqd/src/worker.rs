@@ -30,10 +30,11 @@ enum PostCommentError {
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
-pub(crate) fn build_octocrab(token: &str) -> Result<Octocrab> {
-    Ok(Octocrab::builder()
+#[expect(clippy::result_large_err, reason = "propagate Octocrab errors")]
+pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
+    Octocrab::builder()
         .personal_token(token.to_string())
-        .build()?)
+        .build()
 }
 
 async fn post_comment(

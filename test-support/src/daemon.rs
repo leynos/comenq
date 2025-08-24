@@ -27,6 +27,8 @@ pub struct TestConfig {
     pub restart_min_delay_ms: u64,
     /// Timeout for GitHub API requests in seconds.
     pub github_api_timeout_secs: u64,
+    /// Capacity of the channel buffering client requests.
+    pub client_channel_capacity: usize,
 }
 
 impl Default for TestConfig {
@@ -38,6 +40,7 @@ impl Default for TestConfig {
             cooldown_period_seconds: 1,
             restart_min_delay_ms: 1,
             github_api_timeout_secs: 30,
+            client_channel_capacity: 1024,
         }
     }
 }
@@ -55,6 +58,7 @@ pub fn temp_config(tmp: &TempDir) -> TestConfig {
         cooldown_period_seconds: 1,
         restart_min_delay_ms: 1,
         github_api_timeout_secs: 30,
+        client_channel_capacity: 1024,
     }
 }
 
@@ -79,6 +83,27 @@ impl TestConfig {
     pub fn with_restart_min_delay(mut self, d: Duration) -> Self {
         let ms = d.as_millis().max(1) as u64;
         self.restart_min_delay_ms = ms;
+        self
+    }
+
+    /// Override the GitHub API timeout (seconds).
+    #[must_use]
+    pub fn with_github_api_timeout_secs(mut self, secs: u64) -> Self {
+        self.github_api_timeout_secs = secs;
+        self
+    }
+
+    /// Override the GitHub API timeout using a [`Duration`].
+    #[must_use]
+    pub fn with_github_api_timeout(mut self, d: Duration) -> Self {
+        self.github_api_timeout_secs = d.as_secs();
+        self
+    }
+
+    /// Override the client channel capacity.
+    #[must_use]
+    pub fn with_client_channel_capacity(mut self, cap: usize) -> Self {
+        self.client_channel_capacity = cap;
         self
     }
 }

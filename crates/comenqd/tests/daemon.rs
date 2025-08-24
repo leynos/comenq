@@ -75,7 +75,7 @@ async fn handle_client_enqueues_request() {
     let dir = tempdir().expect("tempdir");
     let queue_path = dir.path().join("q");
     let (sender, mut receiver) = channel(&queue_path).expect("channel");
-    let (client_tx, writer_rx) = mpsc::unbounded_channel();
+    let (client_tx, writer_rx) = mpsc::channel(4);
     let writer = tokio::spawn(queue_writer(sender, writer_rx));
 
     let (mut client, server) = UnixStream::pair().expect("pair");
@@ -101,7 +101,7 @@ async fn run_listener_accepts_connections() {
     let dir = tempdir().expect("tempdir");
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
     let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
-    let (client_tx, writer_rx) = mpsc::unbounded_channel();
+    let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer = tokio::spawn(queue_writer(sender, writer_rx));
     let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
