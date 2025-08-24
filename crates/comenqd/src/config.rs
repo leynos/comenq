@@ -20,6 +20,10 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 const DEFAULT_COOLDOWN: u64 = 960;
 /// Default minimum delay between task restarts in milliseconds.
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
+/// Default timeout in seconds for GitHub API calls.
+const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
+/// Default capacity for the listener channel buffering client requests.
+const DEFAULT_CLIENT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
@@ -38,6 +42,12 @@ pub struct Config {
     /// Minimum delay in milliseconds applied between task restarts.
     #[serde(default = "default_restart_min_delay_ms")]
     pub restart_min_delay_ms: u64,
+    /// Timeout applied to GitHub API requests in seconds.
+    #[serde(default = "default_github_api_timeout_secs")]
+    pub github_api_timeout_secs: u64,
+    /// Capacity of the channel buffering client requests.
+    #[serde(default = "default_client_channel_capacity")]
+    pub client_channel_capacity: usize,
 }
 
 /// Convert a [`test_support::daemon::TestConfig`] into a [`Config`].
@@ -64,6 +74,8 @@ impl From<test_support::daemon::TestConfig> for Config {
             queue_path: value.queue_path,
             cooldown_period_seconds: value.cooldown_period_seconds,
             restart_min_delay_ms: value.restart_min_delay_ms,
+            github_api_timeout_secs: value.github_api_timeout_secs,
+            client_channel_capacity: value.client_channel_capacity,
         }
     }
 }
@@ -100,6 +112,8 @@ impl From<&test_support::daemon::TestConfig> for Config {
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
             restart_min_delay_ms: value.restart_min_delay_ms,
+            github_api_timeout_secs: value.github_api_timeout_secs,
+            client_channel_capacity: value.client_channel_capacity,
         }
     }
 }
@@ -119,6 +133,9 @@ struct CliArgs {
     /// Override the queue directory.
     #[arg(long)]
     queue_path: Option<PathBuf>,
+    /// Override GitHub API timeout (seconds).
+    #[arg(long)]
+    github_api_timeout_secs: Option<u64>,
 }
 
 fn default_socket_path() -> PathBuf {
@@ -135,6 +152,14 @@ fn default_cooldown() -> u64 {
 
 fn default_restart_min_delay_ms() -> u64 {
     DEFAULT_RESTART_MIN_DELAY_MS
+}
+
+fn default_github_api_timeout_secs() -> u64 {
+    DEFAULT_GITHUB_API_TIMEOUT_SECS
+}
+
+fn default_client_channel_capacity() -> usize {
+    DEFAULT_CLIENT_CHANNEL_CAPACITY
 }
 
 impl Config {
@@ -183,6 +208,9 @@ impl Config {
         }
         if let Some(queue) = &cli.queue_path {
             cfg.queue_path = queue.clone();
+        }
+        if let Some(secs) = cli.github_api_timeout_secs {
+            cfg.github_api_timeout_secs = secs;
         }
         Ok(cfg)
     }
@@ -264,6 +292,8 @@ mod tests {
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
         assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
+        assert_eq!(cfg.github_api_timeout_secs, DEFAULT_GITHUB_API_TIMEOUT_SECS);
+        assert_eq!(cfg.client_channel_capacity, DEFAULT_CLIENT_CHANNEL_CAPACITY);
     }
 
     /// CLI arguments should take precedence over environment variables
@@ -280,6 +310,7 @@ mod tests {
             github_token: None,
             socket_path: Some(PathBuf::from("/tmp/cli.sock")),
             queue_path: None,
+            github_api_timeout_secs: None,
         };
         let cfg = Config::from_file_with_cli(&path, &cli).unwrap();
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
@@ -305,5 +336,13 @@ mod tests {
             test_cfg.cooldown_period_seconds
         );
         assert_eq!(cfg.restart_min_delay_ms, test_cfg.restart_min_delay_ms);
+        assert_eq!(
+            cfg.github_api_timeout_secs,
+            test_cfg.github_api_timeout_secs
+        );
+        assert_eq!(
+            cfg.client_channel_capacity,
+            test_cfg.client_channel_capacity
+        );
     }
 }

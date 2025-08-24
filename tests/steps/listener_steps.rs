@@ -39,7 +39,7 @@ async fn running_listener(world: &mut ListenerWorld) {
     let dir = TempDir::new().expect("tempdir");
     let cfg = Arc::new(Config::from(temp_config(&dir)));
     let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
-    let (client_tx, writer_rx) = mpsc::unbounded_channel();
+    let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let cfg_clone = cfg.clone();
     let writer = tokio::spawn(async move {
