@@ -408,41 +408,40 @@ below.
 
 ```mermaid
 sequenceDiagram
-    participant D as Daemon
-    participant L as Listener
-    participant W as Worker
-    participant Q as Queue Writer
-    participant S as Shutdown Signal
+  autonumber
+  actor OS as OS Signals
+  participant Sup as Supervisor::run
+  participant L as Listener
+  participant W as Worker
+  participant QW as QueueWriter
+  participant YQ as YaQue
 
-    D->>L: Spawn Listener
-    D->>W: Spawn Worker
-    D->>Q: Spawn Queue Writer
-    
-    alt Task Failure
-        L--xD: Failure Detected
-        D->>D: Log Failure
-        D->>L: Restart Listener
+  Sup->>Sup: ensure_queue_dir()
+  Sup->>YQ: init Sender
+  Sup->>QW: spawn queue_writer(rx)
+  Sup->>L: spawn run_listener(tx, shutdown)
+  Sup->>W: spawn run_worker(yaque_rx, octocrab, control)
 
-        W--xD: Failure Detected
-        D->>D: Log Failure
-        D->>W: Restart Worker
-        Q--xD: Failure Detected
-        D->>D: Log Failure
-        alt Receiver available (clean exit)
-            D->>D: Reuse existing receiver (buffer preserved)
-            D->>Q: Restart Queue Writer with existing Receiver + new Sender
-            D->>L: Restart Listener to re-bind Sender clone(s)
-        else Receiver lost (panic)
-            D->>D: Recreate in-memory channel (buffer may be dropped)
-            D->>Q: Restart Queue Writer with new Sender/Receiver
-            D->>L: Restart Listener to re-bind Sender clone(s)
-        end
-    end
+  par Normal flow
+    L->>QW: tx.send(bytes)
+    QW->>YQ: enqueue(bytes)
+    YQ-->>W: deliver entry
+    W->>W: deserialize & post to GitHub
+    W->>YQ: commit()
+  and Error/backoff
+    L--x Sup: accept error
+    Sup->>L: restart after backoff
+    QW--x Sup: enqueue error
+    Sup->>QW: restart after backoff
+    W--x Sup: fatal error
+    Sup->>W: restart after backoff
+  end
 
-    S->>D: Trigger Graceful Shutdown
-    D->>L: Stop Listener
-    D->>W: Stop Worker
-    D->>Q: Stop Queue Writer
+  OS-->>Sup: SIGINT/SIGTERM
+  Sup->>L: signal shutdown
+  Sup->>W: signal shutdown
+  Sup->>QW: abort/await
+  Sup-->>OS: exit
 ```
 
 ### 3.2. The Persistent Job Queue with `yaque`
@@ -507,6 +506,27 @@ Its workflow is as follows:
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
 the main worker loop.
+
+The interaction between the client, listener, and queue writer is shown in the
+sequence diagram below.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Client as Client
+  participant L as Listener
+  participant H as handle_client
+  participant TX as mpsc::UnboundedSender
+  participant QW as QueueWriter
+
+  Client->>L: connect(socket)
+  L->>H: spawn handler(stream)
+  Client->>H: write JSON CommentRequest
+  H->>H: read & deserialize
+  H->>TX: send JSON bytes
+  TX-->>QW: deliver payload
+  H-->>Client: close
+```
 
 ### 3.4. The GitHub Comment-Posting Worker (`task_process_queue`)
 
@@ -960,18 +980,19 @@ At a high level, the daemon:
 
 - loads configuration and initializes logging
 - spawns a Unix socket listener for incoming requests
-- constructs a [WorkerControl](../crates/comenqd/src/daemon.rs#L296) with a
+- constructs a [WorkerControl](../crates/comenqd/src/worker.rs#L108) with a
   shutdown channel and optional test hooks
-- starts the worker with [run_worker](../crates/comenqd/src/daemon.rs#L336)
+- starts the worker with [run_worker](../crates/comenqd/src/worker.rs#L122)
 - awaits one task, signals shutdown, and then awaits both tasks to terminate
    within a bounded timeout for a clean, deterministic shutdown
 
-Refer to [daemon::run](../crates/comenqd/src/daemon.rs#L127) for the canonical
-shutdown sequence, which signals both tasks and awaits them with a timeout.
+Refer to [supervisor::run](../crates/comenqd/src/supervisor.rs#L168) for the
+canonical shutdown sequence, which signals both tasks and awaits them with a
+timeout.
 
 The worker task itself is implemented in
-[run_worker](../crates/comenqd/src/daemon.rs#L336), which accepts a
-[WorkerControl](../crates/comenqd/src/daemon.rs#L296) struct bundling shutdown
+[run_worker](../crates/comenqd/src/worker.rs#L122), which accepts a
+[WorkerControl](../crates/comenqd/src/worker.rs#L108) struct bundling shutdown
 and optional test hooks.
 
 The sequence diagram in Figure&nbsp;1 illustrates how the worker interacts with
