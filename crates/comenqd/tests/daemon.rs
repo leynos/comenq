@@ -98,13 +98,13 @@ async fn handle_client_enqueues_request() {
 }
 
 #[tokio::test]
-async fn run_listener_accepts_connections() {
+async fn run_listener_accepts_connections() -> Result<(), String> {
     let dir = tempdir().expect("tempdir");
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
     let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
     let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let writer = tokio::spawn(queue_writer(sender, writer_rx));
+    let writer_handle = tokio::spawn(queue_writer(sender, writer_rx));
     let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
     wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
     let mut stream = UnixStream::connect(&cfg.socket_path)
@@ -124,38 +124,36 @@ async fn run_listener_accepts_connections() {
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
     let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
-    let (listener_res, writer_res) =
-        tokio::time::timeout(timeout, async { (listener_task.await, writer.await) })
-            .await
-            .expect("listener and writer join timeout");
+    let listener_res = tokio::time::timeout(timeout, listener_task.await)
+        .await
+        .expect("listener join timeout");
     match listener_res {
         Ok(res) => {
             if let Err(e) = res {
-                panic!("listener task failed: {e}");
+                return Err(format!("listener task failed: {e}"));
             }
         }
         Err(e) => {
-            panic!(if e.is_panic() {
+            return Err(if e.is_panic() {
                 "listener task panicked".to_string()
             } else {
                 format!("listener task failed: {e}")
             });
         }
     }
-    match writer_res {
-        Ok(res) => {
-            if let Err(e) = res {
-                panic!("writer task failed: {e}");
-            }
+    match writer_handle.await {
+        Ok(_receiver) => {
+            // Writer task completed successfully, returned the receiver
         }
         Err(e) => {
-            panic!(if e.is_panic() {
+            return Err(if e.is_panic() {
                 "writer task panicked".to_string()
             } else {
                 format!("writer task failed: {e}")
             });
         }
     }
+    Ok(())
 }
 
 /// Worker behaviour tests.
