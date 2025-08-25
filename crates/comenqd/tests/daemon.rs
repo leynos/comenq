@@ -169,7 +169,10 @@ async fn run_listener_accepts_connections() {
 #[cfg(test)]
 mod worker_tests {
     use super::*;
-    use util::{DRAINED_NOTIFICATION, WORKER_ERROR, WORKER_SUCCESS};
+    use util::{TestComplexity, TimeoutConfig};
+    const DRAINED_NOTIFICATION: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Moderate);
+    const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
+    const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
     use wiremock::MockServer;
 
     struct WorkerTestContext {

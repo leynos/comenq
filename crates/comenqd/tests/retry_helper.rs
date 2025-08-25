@@ -51,6 +51,13 @@ fn calculate_timeout_scales_with_ci_env() {
 }
 
 #[test]
+fn calculate_timeout_respects_complexity() {
+    let simple = TimeoutConfig::new(10, TestComplexity::Simple).calculate_timeout();
+    let moderate = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
+    assert_eq!(moderate, Duration::from_secs(simple.as_secs() * 2));
+}
+
+#[test]
 fn with_progressive_retry_scales_base() {
     let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
     let base = cfg.calculate_timeout().as_secs();
