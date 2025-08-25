@@ -22,7 +22,7 @@ pub struct Args {
     pub comment_body: String,
 
     /// Path to the daemon's Unix Domain Socket.
-    #[arg(long, default_value = "/run/comenq/socket")]
+    #[arg(long, default_value = "/run/comenq/comenq.sock")]
     pub socket: PathBuf,
 }
 

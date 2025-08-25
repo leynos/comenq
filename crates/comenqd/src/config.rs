@@ -10,6 +10,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Default socket path when none is provided.
+///
+/// This value is mirrored by the CLI to avoid configuration drift.
 const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";

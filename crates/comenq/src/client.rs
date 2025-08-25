@@ -44,7 +44,7 @@ pub enum ClientError {
 ///     repo_slug: "owner/repo".into(),
 ///     pr_number: 1,
 ///     comment_body: String::from("Hi"),
-///     socket: PathBuf::from("/run/comenq/socket"),
+///     socket: PathBuf::from("/run/comenq/comenq.sock"),
 /// };
 /// run(args).await?;
 /// # Ok(())
