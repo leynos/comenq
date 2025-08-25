@@ -4,20 +4,19 @@
 
 use tracing::info;
 
-mod logging;
+use comenqd::{config::Config, daemon};
 
-mod config;
-mod daemon;
-mod listener;
-mod supervisor;
-mod worker;
-use config::Config;
-use daemon::run;
+mod logging;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logging::init();
     let cfg = Config::load()?;
-    info!(socket = ?cfg.socket_path, queue = ?cfg.queue_path, "Comenqd daemon started");
-    run(cfg).await
+    info!(
+        socket = ?cfg.socket_path,
+        queue = ?cfg.queue_path,
+        "Comenqd daemon started"
+    );
+    daemon::run(cfg).await?;
+    Ok(())
 }
