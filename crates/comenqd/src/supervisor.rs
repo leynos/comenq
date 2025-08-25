@@ -81,11 +81,7 @@ async fn supervise_task<F, B>(
                 break;
             }
             res = &mut handle => {
-                match &res {
-                    Ok(Ok(())) => tracing::warn!(task = name, "exited"),
-                    Ok(Err(e)) => tracing::error!(task = name, error = %e),
-                    Err(e) => tracing::error!(task = name, error = %e),
-                }
+                log_task_failure(name, &res);
                 let delay = backoff.next().expect("backoff should yield a duration");
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
@@ -119,10 +115,10 @@ async fn supervise_writer<B>(
                 break;
             }
             res = &mut handle => {
+                log_task_failure("writer", &res.as_ref().map(|_| Ok(())));
                 let rx = match res {
                     Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!(task = "writer", error = %e);
+                    Err(_e) => {
                         let pair = mpsc::channel(cfg.client_channel_capacity);
                         *client_tx.lock().unwrap() = pair.0;
                         pair.1
@@ -297,4 +293,13 @@ fn spawn_worker(
     })
 }
 
-// Logging helpers are no longer required; supervision handles reporting.
+fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
+where
+    E: std::fmt::Display,
+{
+    match res {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::error!(task = task, error = %e),
+        Err(e) => tracing::error!(task = task, error = %e),
+    }
+}
