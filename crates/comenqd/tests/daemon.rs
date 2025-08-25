@@ -25,7 +25,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 use yaque::{Receiver, channel};
 
-use util::timeout_with_retries;
+use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 60;
 
@@ -123,60 +123,44 @@ async fn run_listener_accepts_connections() {
     let stored: comenq_lib::CommentRequest = serde_json::from_slice(&guard).expect("parse");
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
-    let mut listener_task = Some(listener_task);
-    let mut writer = Some(writer);
-    timeout_with_retries(
-        util::TimeoutConfig::new(10, util::TestComplexity::Moderate),
-        "listener and writer join",
-        || {
-            let listener_handle = listener_task.take();
-            let writer_handle = writer.take();
-            async move {
-                let listener_handle =
-                    listener_handle.ok_or_else(|| "join handles consumed".to_string())?;
-                let writer_handle =
-                    writer_handle.ok_or_else(|| "join handles consumed".to_string())?;
-                match listener_handle.await {
-                    Ok(res) => {
-                        if let Err(e) = res {
-                            return Err(format!("listener task failed: {e}"));
-                        }
-                    }
-                    Err(e) => {
-                        return Err(if e.is_panic() {
-                            "listener task panicked".to_string()
-                        } else {
-                            format!("listener task failed: {e}")
-                        });
-                    }
-                }
-                match writer_handle.await {
-                    Ok(res) => {
-                        if let Err(e) = res {
-                            return Err(format!("writer task failed: {e}"));
-                        }
-                    }
-                    Err(e) => {
-                        return Err(if e.is_panic() {
-                            "writer task panicked".to_string()
-                        } else {
-                            format!("writer task failed: {e}")
-                        });
-                    }
-                }
-                Ok(())
+    let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
+    let (listener_res, writer_res) =
+        tokio::time::timeout(timeout, async { (listener_task.await, writer.await) })
+            .await
+            .expect("listener and writer join timeout");
+    match listener_res {
+        Ok(res) => {
+            if let Err(e) = res {
+                panic!("listener task failed: {e}");
             }
-        },
-    )
-    .await
-    .expect("listener and writer join");
+        }
+        Err(e) => {
+            panic!(if e.is_panic() {
+                "listener task panicked".to_string()
+            } else {
+                format!("listener task failed: {e}")
+            });
+        }
+    }
+    match writer_res {
+        Ok(res) => {
+            if let Err(e) = res {
+                panic!("writer task failed: {e}");
+            }
+        }
+        Err(e) => {
+            panic!(if e.is_panic() {
+                "writer task panicked".to_string()
+            } else {
+                format!("writer task failed: {e}")
+            });
+        }
+    }
 }
 
-// Worker tests
-#[cfg(test)]
+/// Worker behaviour tests.
 mod worker_tests {
     use super::*;
-    use util::{TestComplexity, TimeoutConfig};
     const DRAINED_NOTIFICATION: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Moderate);
     const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
     const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
