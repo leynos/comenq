@@ -41,6 +41,9 @@ async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
 
 #[tokio::test]
 async fn ensure_queue_dir_creates_directory() {
+    // Touch the `Simple` variant to satisfy dead code detection in modules that
+    // do not exercise it directly.
+    let _ = TestComplexity::Simple;
     let dir = tempdir().expect("Failed to create temporary directory");
     let path = dir.path().join("queue");
     comenqd::daemon::ensure_queue_dir(&path)
@@ -124,7 +127,7 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
     let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
-    let listener_res = tokio::time::timeout(timeout, listener_task.await)
+    let listener_res = tokio::time::timeout(timeout, listener_task)
         .await
         .expect("listener join timeout");
     match listener_res {
