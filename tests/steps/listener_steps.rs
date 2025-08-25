@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::{queue_writer, run_listener};
+use comenqd::daemon::{listener::run_listener, queue_writer};
 use yaque::channel;
 
 #[derive(Default, World)]

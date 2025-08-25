@@ -150,12 +150,19 @@ async fn run_listener_accepts_connections() {
                         });
                     }
                 }
-                if let Err(e) = writer_handle.await {
-                    return Err(if e.is_panic() {
-                        "writer task panicked".to_string()
-                    } else {
-                        format!("writer task failed: {e}")
-                    });
+                match writer_handle.await {
+                    Ok(res) => {
+                        if let Err(e) = res {
+                            return Err(format!("writer task failed: {e}"));
+                        }
+                    }
+                    Err(e) => {
+                        return Err(if e.is_panic() {
+                            "writer task panicked".to_string()
+                        } else {
+                            format!("writer task failed: {e}")
+                        });
+                    }
                 }
                 Ok(())
             }
