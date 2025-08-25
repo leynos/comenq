@@ -11,6 +11,7 @@ use comenqd::daemon::{
 use octocrab::Octocrab;
 use rstest::{fixture, rstest};
 use std::fs as stdfs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,10 +22,10 @@ use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 use yaque::{Receiver, channel};
 
-use util::{DRAINED_NOTIFICATION, WORKER_ERROR, WORKER_SUCCESS, timeout_with_retries};
+use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 60;
 
@@ -97,13 +98,13 @@ async fn handle_client_enqueues_request() {
 }
 
 #[tokio::test]
-async fn run_listener_accepts_connections() {
+async fn run_listener_accepts_connections() -> Result<(), String> {
     let dir = tempdir().expect("tempdir");
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
     let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
     let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let writer = tokio::spawn(queue_writer(sender, writer_rx));
+    let writer_handle = tokio::spawn(queue_writer(sender, writer_rx));
     let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
     wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
     let mut stream = UnixStream::connect(&cfg.socket_path)
@@ -122,45 +123,45 @@ async fn run_listener_accepts_connections() {
     let stored: comenq_lib::CommentRequest = serde_json::from_slice(&guard).expect("parse");
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
-    let mut listener_task = Some(listener_task);
-    let mut writer = Some(writer);
-    timeout_with_retries(
-        util::TimeoutConfig::new(10, util::TestComplexity::Moderate),
-        "listener and writer join",
-        || match (listener_task.take(), writer.take()) {
-            (Some(listener_handle), Some(writer_handle)) => {
-                async move {
-                    let listener_res = listener_handle.await;
-                    let writer_res = writer_handle.await;
-                    if let Err(e) = &listener_res {
-                        return Err(if e.is_panic() {
-                            "listener task panicked".to_string()
-                        } else {
-                            format!("listener task failed: {e}")
-                        });
-                    }
-                    if let Err(e) = &writer_res {
-                        return Err(if e.is_panic() {
-                            "writer task panicked".to_string()
-                        } else {
-                            format!("writer task failed: {e}")
-                        });
-                    }
-                    Ok(())
-                }
+    let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
+    let listener_res = tokio::time::timeout(timeout, listener_task.await)
+        .await
+        .expect("listener join timeout");
+    match listener_res {
+        Ok(res) => {
+            if let Err(e) = res {
+                return Err(format!("listener task failed: {e}"));
             }
-            _ => async { Err("join handles consumed".to_string()) },
-        },
-    )
-    .await
-    .expect("listener and writer join");
+        }
+        Err(e) => {
+            return Err(if e.is_panic() {
+                "listener task panicked".to_string()
+            } else {
+                format!("listener task failed: {e}")
+            });
+        }
+    }
+    match writer_handle.await {
+        Ok(_receiver) => {
+            // Writer task completed successfully, returned the receiver
+        }
+        Err(e) => {
+            return Err(if e.is_panic() {
+                "writer task panicked".to_string()
+            } else {
+                format!("writer task failed: {e}")
+            });
+        }
+    }
+    Ok(())
 }
 
-// Worker tests
-#[cfg(test)]
+/// Worker behaviour tests.
 mod worker_tests {
     use super::*;
-    use util::{DRAINED_NOTIFICATION, WORKER_ERROR, WORKER_SUCCESS};
+    const DRAINED_NOTIFICATION: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Moderate);
+    const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
+    const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
     use wiremock::MockServer;
 
     struct WorkerTestContext {

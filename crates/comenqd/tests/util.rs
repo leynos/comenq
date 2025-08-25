@@ -61,10 +61,6 @@ impl TimeoutConfig {
     }
 }
 
-pub const DRAINED_NOTIFICATION: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Moderate);
-pub const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);
-pub const WORKER_ERROR: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Complex);
-
 pub async fn timeout_with_retries<F, Fut, T>(
     config: TimeoutConfig,
     operation_name: &str,
