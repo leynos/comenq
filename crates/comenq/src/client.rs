@@ -21,9 +21,6 @@ pub enum ClientError {
     /// Serializing the request failed.
     #[error("failed to serialize request: {0}")]
     Serialize(#[from] serde_json::Error),
-    /// The repository slug was invalid.
-    #[error("invalid repository format")]
-    BadSlug,
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
     Write(#[source] std::io::Error),
@@ -41,7 +38,7 @@ pub enum ClientError {
 /// # use std::path::PathBuf;
 /// # async fn try_run() -> Result<(), comenq::ClientError> {
 /// let args = Args {
-///     repo_slug: "owner/repo".into(),
+///     repo_slug: "owner/repo".parse().expect("slug"),
 ///     pr_number: 1,
 ///     comment_body: String::from("Hi"),
 ///     socket: PathBuf::from("/run/comenq/socket"),
@@ -51,13 +48,9 @@ pub enum ClientError {
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    if crate::validate_repo_slug(&args.repo_slug).is_err() {
-        return Err(ClientError::BadSlug);
-    }
-    let (owner, repo) = parse_slug(&args.repo_slug);
     let request = CommentRequest {
-        owner,
-        repo,
+        owner: args.repo_slug.owner.clone(),
+        repo: args.repo_slug.repo.clone(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };
@@ -78,18 +71,10 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
     Ok(())
 }
 
-fn parse_slug(slug: &str) -> (String, String) {
-    // safe expect: `validate_repo_slug` ensures two non-empty parts
-    let (owner, repo) = slug
-        .split_once('/')
-        .expect("slug should have been validated by validate_repo_slug");
-    (owner.to_owned(), repo.to_owned())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ClientError, parse_slug, run};
-    use crate::Args;
+    use super::{ClientError, run};
+    use crate::{Args, RepoSlug};
     use comenq_lib::CommentRequest;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
@@ -109,7 +94,7 @@ mod tests {
         });
 
         let args = Args {
-            repo_slug: "octocat/hello-world".into(),
+            repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
             socket: socket.clone(),
@@ -129,7 +114,7 @@ mod tests {
         let socket = dir.path().join("nosock");
 
         let args = Args {
-            repo_slug: "octocat/hello-world".into(),
+            repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
             socket: socket.clone(),
@@ -139,27 +124,10 @@ mod tests {
         assert!(matches!(err, ClientError::Connect(_)));
     }
 
-    #[tokio::test]
-    async fn run_errors_on_bad_slug() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let _listener = UnixListener::bind(&socket).expect("bind socket");
-
-        let args = Args {
-            repo_slug: "badslug".into(),
-            pr_number: 1,
-            comment_body: "Hi".into(),
-            socket,
-        };
-
-        let err = run(args).await.expect_err("should error");
-        assert!(matches!(err, ClientError::BadSlug));
-    }
-
     #[test]
-    fn slug_is_split() {
-        let (owner, repo) = parse_slug("octocat/hello-world");
-        assert_eq!(owner, "octocat");
-        assert_eq!(repo, "hello-world");
+    fn slug_parses() {
+        let slug: RepoSlug = "octocat/hello-world".parse().expect("slug");
+        assert_eq!(slug.owner, "octocat");
+        assert_eq!(slug.repo, "hello-world");
     }
 }

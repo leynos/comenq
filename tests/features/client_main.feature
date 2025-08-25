@@ -12,10 +12,3 @@ Feature: Client main function
     Given no daemon is listening on a socket
     When the client sends the request
     Then an error occurs
-
-  @edge_case
-  Scenario: invalid repository slug
-    Given a dummy daemon listening on a socket
-    And the arguments contain an invalid slug
-    When the client sends the request
-    Then a slug error occurs

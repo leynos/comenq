@@ -33,7 +33,7 @@ fn dummy_daemon(world: &mut ClientWorld) {
     });
 
     world.args = Some(Args {
-        repo_slug: "octocat/hello-world".into(),
+        repo_slug: "octocat/hello-world".parse().expect("slug"),
         pr_number: 1,
         comment_body: "Hi".into(),
         socket: socket.clone(),
@@ -47,7 +47,7 @@ fn no_daemon(world: &mut ClientWorld) {
     let dir = TempDir::new().expect("tempdir");
     let socket = dir.path().join("sock");
     world.args = Some(Args {
-        repo_slug: "octocat/hello-world".into(),
+        repo_slug: "octocat/hello-world".parse().expect("slug"),
         pr_number: 1,
         comment_body: "Hi".into(),
         socket,
@@ -77,21 +77,6 @@ async fn daemon_receives(world: &mut ClientWorld) {
 fn an_error_occurs(world: &mut ClientWorld) {
     match world.result.take() {
         Some(Err(ClientError::Connect(_))) => {}
-        other => panic!("unexpected result: {other:?}"),
-    }
-}
-
-#[given("the arguments contain an invalid slug")]
-fn invalid_slug(world: &mut ClientWorld) {
-    if let Some(args) = &mut world.args {
-        args.repo_slug = "bad".into();
-    }
-}
-
-#[then("a slug error occurs")]
-fn slug_error_occurs(world: &mut ClientWorld) {
-    match world.result.take() {
-        Some(Err(ClientError::BadSlug)) => {}
         other => panic!("unexpected result: {other:?}"),
     }
 }
