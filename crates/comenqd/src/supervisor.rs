@@ -115,10 +115,10 @@ async fn supervise_writer<B>(
                 break;
             }
             res = &mut handle => {
-                log_task_failure("writer", &res.as_ref().map(|_| Ok(())));
                 let rx = match res {
                     Ok(r) => r,
-                    Err(_e) => {
+                    Err(e) => {
+                        log_task_failure::<(), _>("writer", &Err(e));
                         let pair = mpsc::channel(cfg.client_channel_capacity);
                         *client_tx.lock().unwrap() = pair.0;
                         pair.1
@@ -293,6 +293,11 @@ fn spawn_worker(
     })
 }
 
+/// Log any failure from a supervised task.
+///
+/// Accepts the task name and the result yielded when awaiting its
+/// [`JoinHandle`](tokio::task::JoinHandle). Both inner errors and join errors
+/// are reported using [`tracing::error!`].
 fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
 where
     E: std::fmt::Display,
