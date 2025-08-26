@@ -27,7 +27,7 @@ use yaque::{Receiver, channel};
 
 use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
 
-const TEST_COOLDOWN_SECONDS: u64 = 60;
+const TEST_COOLDOWN_SECONDS: u64 = 1;
 
 async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
     for _ in 0..tries {
@@ -41,9 +41,6 @@ async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
 
 #[tokio::test]
 async fn ensure_queue_dir_creates_directory() {
-    // Touch the `Simple` variant to satisfy dead code detection in modules that
-    // do not exercise it directly.
-    let _ = TestComplexity::Simple;
     let dir = tempdir().expect("Failed to create temporary directory");
     let path = dir.path().join("queue");
     comenqd::daemon::ensure_queue_dir(&path)
@@ -127,9 +124,23 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
     let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
-    let listener_res = tokio::time::timeout(timeout, listener_task)
-        .await
-        .expect("listener join timeout");
+    let mut listener_handle = Some(listener_task);
+    let listener_res = match tokio::time::timeout(timeout, async {
+        listener_handle
+            .as_mut()
+            .expect("listener handle already taken")
+            .await
+    })
+    .await
+    {
+        Ok(join_res) => join_res,
+        Err(_elapsed) => {
+            if let Some(h) = listener_handle.take() {
+                h.abort();
+            }
+            return Err("listener join timeout".to_string());
+        }
+    };
     match listener_res {
         Ok(res) => {
             if let Err(e) = res {
