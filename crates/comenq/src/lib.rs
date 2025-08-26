@@ -1,7 +1,7 @@
 //! Library utilities for the `comenq` CLI.
 
 use clap::Parser;
-use std::{path::PathBuf, str::FromStr};
+use std::{fmt, path::PathBuf, str::FromStr};
 
 mod client;
 
@@ -21,16 +21,22 @@ impl FromStr for RepoSlug {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Perform the split once to avoid redundant parsing elsewhere.
-        let (owner, repo) = s
-            .split_once('/')
-            .ok_or_else(|| String::from("invalid repository format, use 'owner/repo'"))?;
+        const ERR: &str = "invalid repository format, use 'owner/repo'";
+        let s = s.trim();
+        let (owner, repo) = s.split_once('/').ok_or_else(|| String::from(ERR))?;
         if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-            return Err(String::from("invalid repository format, use 'owner/repo'"));
+            return Err(String::from(ERR));
         }
         Ok(Self {
             owner: owner.to_owned(),
             repo: repo.to_owned(),
         })
+    }
+}
+
+impl fmt::Display for RepoSlug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.owner, self.repo)
     }
 }
 
@@ -78,5 +84,26 @@ mod tests {
     fn rejects_invalid_slug(#[case] slug: &str) {
         let result = Args::try_parse_from(["comenq", slug, "1", "Hi"]);
         assert!(result.is_err());
+    }
+
+    #[rstest]
+    #[case("/repo")]
+    #[case("owner/")]
+    #[case("owner/repo/extra")]
+    fn from_str_rejects_invalid(#[case] slug: &str) {
+        assert!(slug.parse::<RepoSlug>().is_err());
+    }
+
+    #[test]
+    fn display_round_trips() {
+        let slug: RepoSlug = "octocat/hello".parse().expect("slug parses");
+        assert_eq!(slug.to_string(), "octocat/hello");
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        let slug: RepoSlug = "  octocat/hello-world  ".parse().expect("slug parses");
+        assert_eq!(slug.owner, "octocat");
+        assert_eq!(slug.repo, "hello-world");
     }
 }
