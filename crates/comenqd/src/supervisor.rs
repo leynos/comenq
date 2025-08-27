@@ -124,6 +124,7 @@ async fn supervise_writer<B>(
                 let rx = match res {
                     Ok(r) => r,
                     Err(e) => {
+                        // Only log join failures here; queue_writer logs enqueue errors.
                         log_task_failure::<(), _>("writer", &Err(e));
                         let pair = mpsc::channel(cfg.client_channel_capacity);
                         *client_tx
@@ -156,7 +157,7 @@ async fn supervise_writer<B>(
 ///
 /// The queue writer decouples the listener from the queue, ensuring a
 /// single writer for the `yaque` queue. It reads raw JSON payloads from the
-/// provided [`mpsc::UnboundedReceiver`] and attempts to enqueue each item
+/// provided [`mpsc::Receiver`] and attempts to enqueue each item
 /// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
 /// loop terminates so a supervising task can recreate the sender.
 ///
