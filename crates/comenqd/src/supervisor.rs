@@ -312,10 +312,9 @@ fn spawn_worker(
 /// Log any failure from a supervised task.
 ///
 /// Accepts the task name and the result yielded when awaiting its
-/// [`JoinHandle`](tokio::task::JoinHandle). On success the function returns
-/// without emitting any log entries. On failure it records the error and a
-/// `kind` field distinguishing whether the failure came from the task itself
-/// or from joining the handle.
+/// [`JoinHandle`](tokio::task::JoinHandle). This is a no-op when the task
+/// completes successfully. On failure it logs the error and tags it with
+/// `kind` to distinguish an `inner_error` from a `join_error`.
 fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
 where
     E: std::fmt::Display,
