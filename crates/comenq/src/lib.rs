@@ -1,6 +1,6 @@
 //! Library utilities for the `comenq` CLI.
 
-use clap::Parser;
+use clap::{Parser, builder::ValueHint};
 use std::path::PathBuf;
 
 mod client;
@@ -22,7 +22,11 @@ pub struct Args {
     pub comment_body: String,
 
     /// Path to the daemon's Unix Domain Socket.
-    #[arg(long, default_value_os_t = PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH))]
+    #[arg(
+        long,
+        value_hint = ValueHint::FilePath,
+        default_value_os_t = PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH),
+    )]
     pub socket: PathBuf,
 }
 
