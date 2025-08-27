@@ -4,15 +4,12 @@
 //! overridden by environment variables using the `COMENQD_` prefix.
 
 use clap::Parser;
+use comenq_lib::DEFAULT_SOCKET_PATH;
 use figment::providers::Env;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Default socket path when none is provided.
-///
-/// This value is mirrored by the CLI to avoid configuration drift.
-const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// Default cooldown in seconds between comment posts.
@@ -290,7 +287,10 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "github_token='abc'").unwrap();
         let cfg = Config::from_file(&path).unwrap();
-        assert_eq!(cfg.socket_path, PathBuf::from("/run/comenq/comenq.sock"));
+        assert_eq!(
+            cfg.socket_path,
+            PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)
+        );
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
         assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
