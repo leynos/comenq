@@ -81,8 +81,14 @@ async fn supervise_task<F, B>(
                 break;
             }
             res = &mut handle => {
+                if matches!(res, Ok(Ok(_))) {
+                    // Normal completion; do not respawn.
+                    break;
+                }
                 log_task_failure(name, &res);
-                let delay = backoff.next().expect("backoff should yield a duration");
+                let delay = backoff
+                    .next()
+                    .expect("backoff should yield a duration");
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
@@ -120,7 +126,9 @@ async fn supervise_writer<B>(
                     Err(e) => {
                         log_task_failure::<(), _>("writer", &Err(e));
                         let pair = mpsc::channel(cfg.client_channel_capacity);
-                        *client_tx.lock().unwrap() = pair.0;
+                        *client_tx
+                            .lock()
+                            .expect("client_tx lock poisoned") = pair.0;
                         pair.1
                     }
                 };
@@ -163,7 +171,9 @@ async fn supervise_writer<B>(
 /// let (queue_tx, _rx) = channel("/tmp/q")?;
 /// let (tx, rx) = mpsc::channel(1);
 /// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
-/// tx.send(Vec::new()).await.unwrap();
+/// tx.send(Vec::new())
+///     .await
+///     .expect("send on docs channel failed");
 /// # Ok(())
 /// # }
 /// ```
@@ -196,7 +206,10 @@ pub async fn run(config: Config) -> Result<()> {
     let listener_tx = client_tx.clone();
     let listener = spawn_listener(
         cfg.clone(),
-        listener_tx.lock().unwrap().clone(),
+        listener_tx
+            .lock()
+            .expect("listener_tx lock poisoned")
+            .clone(),
         shutdown_rx.clone(),
     );
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
@@ -244,7 +257,10 @@ pub async fn run(config: Config) -> Result<()> {
             listener,
             listener_backoff,
             || {
-                let tx = client_tx_clone.lock().unwrap().clone();
+                let tx = client_tx_clone
+                    .lock()
+                    .expect("client_tx lock poisoned")
+                    .clone();
                 spawn_listener(cfg.clone(), tx, shutdown_listener.clone())
             },
             shutdown_listener.clone(),
@@ -296,15 +312,27 @@ fn spawn_worker(
 /// Log any failure from a supervised task.
 ///
 /// Accepts the task name and the result yielded when awaiting its
-/// [`JoinHandle`](tokio::task::JoinHandle). Both inner errors and join errors
-/// are reported using [`tracing::error!`].
+/// [`JoinHandle`](tokio::task::JoinHandle). On success the function returns
+/// without emitting any log entries. On failure it records the error and a
+/// `kind` field distinguishing whether the failure came from the task itself
+/// or from joining the handle.
 fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
 where
     E: std::fmt::Display,
 {
     match res {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => tracing::error!(task = task, error = %e),
-        Err(e) => tracing::error!(task = task, error = %e),
+        Ok(Err(e)) => tracing::error!(
+            task = task,
+            kind = "inner_error",
+            error = %e,
+            "Task failed"
+        ),
+        Err(e) => tracing::error!(
+            task = task,
+            kind = "join_error",
+            error = %e,
+            "Task failed"
+        ),
     }
 }
