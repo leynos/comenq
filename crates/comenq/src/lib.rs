@@ -86,12 +86,19 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[rstest]
-    #[case("/repo")]
-    #[case("owner/")]
-    #[case("owner/repo/extra")]
-    fn from_str_rejects_invalid(#[case] slug: &str) {
-        assert!(slug.parse::<RepoSlug>().is_err());
+    #[test]
+    fn from_str_rejects_empty_owner() {
+        assert!("/repo".parse::<RepoSlug>().is_err());
+    }
+
+    #[test]
+    fn from_str_rejects_empty_repo() {
+        assert!("owner/".parse::<RepoSlug>().is_err());
+    }
+
+    #[test]
+    fn from_str_rejects_extra_slashes() {
+        assert!("owner/repo/extra".parse::<RepoSlug>().is_err());
     }
 
     #[test]
