@@ -1,6 +1,6 @@
 //! Library utilities for the `comenq` CLI.
 
-use clap::Parser;
+use clap::{Parser, builder::ValueHint};
 use std::path::PathBuf;
 
 mod client;
@@ -22,7 +22,11 @@ pub struct Args {
     pub comment_body: String,
 
     /// Path to the daemon's Unix Domain Socket.
-    #[arg(long, default_value = "/run/comenq/socket")]
+    #[arg(
+        long,
+        value_hint = ValueHint::FilePath,
+        default_value_os_t = PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH),
+    )]
     pub socket: PathBuf,
 }
 
@@ -40,6 +44,7 @@ mod tests {
     use super::Args;
     use clap::Parser;
     use rstest::rstest;
+    use std::path::PathBuf;
 
     #[rstest]
     #[case("octocat/hello-world", 1, "Hi")]
@@ -60,5 +65,12 @@ mod tests {
     fn rejects_invalid_slug(#[case] slug: &str) {
         let result = Args::try_parse_from(["comenq", slug, "1", "Hi"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn socket_default_matches_constant() {
+        let args = Args::try_parse_from(["comenq", "octocat/hello-world", "1", "Hi"])
+            .expect("valid arguments should parse");
+        assert_eq!(args.socket, PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH));
     }
 }

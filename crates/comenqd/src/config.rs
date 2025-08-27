@@ -4,13 +4,12 @@
 //! overridden by environment variables using the `COMENQD_` prefix.
 
 use clap::Parser;
+use comenq_lib::DEFAULT_SOCKET_PATH;
 use figment::providers::Env;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Default socket path when none is provided.
-const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// Default cooldown in seconds between comment posts.
@@ -179,7 +178,10 @@ impl Config {
     /// values.
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
-    #[cfg_attr(not(test), allow(dead_code, reason = "test-only helper"))]
+    #[cfg_attr(
+        all(not(test), not(feature = "test-support")),
+        expect(dead_code, reason = "test-only helper")
+    )]
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn from_file(path: &Path) -> Result<Self, ortho_config::OrthoError> {
         Self::from_file_with_cli(path, &CliArgs::default())
@@ -228,15 +230,15 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn loads_from_file() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
         fs::write(
             &path,
             "github_token='abc'\nsocket_path='/tmp/s.sock'\nqueue_path='/tmp/q'",
         )
-        .unwrap();
+        .expect("write config fixture");
         remove_env_var("COMENQD_SOCKET_PATH");
-        let cfg = Config::from_file(&path).unwrap();
+        let cfg = Config::from_file(&path).expect("load config");
         assert_eq!(cfg.github_token, "abc");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/s.sock"));
         assert_eq!(cfg.queue_path, PathBuf::from("/tmp/q"));
@@ -253,20 +255,21 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn env_vars_override_file() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/s.sock'").unwrap();
+        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/s.sock'")
+            .expect("write config fixture");
         let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/override.sock");
-        let cfg = Config::from_file(&path).unwrap();
+        let cfg = Config::from_file(&path).expect("load config");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/override.sock"));
     }
 
     #[rstest]
     #[serial_test::serial]
     fn error_with_invalid_toml() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc' this is not toml").unwrap();
+        fs::write(&path, "github_token='abc' this is not toml").expect("write invalid toml");
         let res = Config::from_file(&path);
         assert!(res.is_err());
     }
@@ -274,9 +277,9 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn error_when_missing_token() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
-        fs::write(&path, "socket_path='/tmp/s.sock'").unwrap();
+        fs::write(&path, "socket_path='/tmp/s.sock'").expect("write config without token");
         let res = Config::from_file(&path);
         assert!(res.is_err());
     }
@@ -284,11 +287,14 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn defaults_are_applied() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'").unwrap();
-        let cfg = Config::from_file(&path).unwrap();
-        assert_eq!(cfg.socket_path, PathBuf::from("/run/comenq/comenq.sock"));
+        fs::write(&path, "github_token='abc'").expect("write config fixture");
+        let cfg = Config::from_file(&path).expect("load config");
+        assert_eq!(
+            cfg.socket_path,
+            PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)
+        );
         assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
         assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
         assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
@@ -301,9 +307,10 @@ mod tests {
     #[rstest]
     #[serial_test::serial]
     fn cli_overrides_env_and_file() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("create tempdir");
         let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/file.sock'").unwrap();
+        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/file.sock'")
+            .expect("write config fixture");
         let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
         let cli = CliArgs {
             config: path.clone(),
@@ -312,7 +319,7 @@ mod tests {
             queue_path: None,
             github_api_timeout_secs: None,
         };
-        let cfg = Config::from_file_with_cli(&path, &cli).unwrap();
+        let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
     }
 

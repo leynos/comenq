@@ -39,12 +39,13 @@ pub enum ClientError {
 /// ```no_run
 /// # use comenq::{Args, run};
 /// # use std::path::PathBuf;
+/// # use comenq_lib::DEFAULT_SOCKET_PATH;
 /// # async fn try_run() -> Result<(), comenq::ClientError> {
 /// let args = Args {
 ///     repo_slug: "owner/repo".into(),
 ///     pr_number: 1,
 ///     comment_body: String::from("Hi"),
-///     socket: PathBuf::from("/run/comenq/socket"),
+///     socket: PathBuf::from(DEFAULT_SOCKET_PATH),
 /// };
 /// run(args).await?;
 /// # Ok(())
