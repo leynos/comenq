@@ -28,6 +28,7 @@ tempfile = { workspace = true } # latest 3.x at time of writing; update as new p
 serial_test = "2"
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+test-support = { workspace = true }
 
 [features]
 default = []

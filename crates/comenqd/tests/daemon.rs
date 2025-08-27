@@ -29,6 +29,29 @@ use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 1;
 
+/// Convert a test configuration into the runtime `Config`.
+///
+/// The conversion normally relies on the crate's `test-support` feature.
+/// When that feature is disabled (e.g. during coverage builds), perform the
+/// field mapping manually to avoid pulling in optional code.
+#[cfg(feature = "test-support")]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config::from(cfg)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config {
+        github_token: cfg.github_token,
+        socket_path: cfg.socket_path,
+        queue_path: cfg.queue_path,
+        cooldown_period_seconds: cfg.cooldown_period_seconds,
+        restart_min_delay_ms: cfg.restart_min_delay_ms,
+        github_api_timeout_secs: cfg.github_api_timeout_secs,
+        client_channel_capacity: cfg.client_channel_capacity,
+    }
+}
+
 async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
     for _ in 0..tries {
         if path.exists() {
@@ -52,7 +75,7 @@ async fn ensure_queue_dir_creates_directory() {
 #[tokio::test]
 async fn run_creates_queue_directory() {
     let dir = tempdir().expect("Failed to create temporary directory");
-    let cfg = Config::from(temp_config(&dir).with_cooldown(1));
+    let cfg = cfg_from(temp_config(&dir).with_cooldown(1));
     assert!(!cfg.queue_path.exists());
     let handle = tokio::spawn(run(cfg.clone()));
     wait_for_file(&cfg.queue_path, 200, Duration::from_millis(10)).await;
@@ -100,7 +123,7 @@ async fn handle_client_enqueues_request() {
 #[tokio::test]
 async fn run_listener_accepts_connections() -> Result<(), String> {
     let dir = tempdir().expect("tempdir");
-    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
+    let cfg = Arc::new(cfg_from(temp_config(&dir).with_cooldown(1)));
     let (sender, mut receiver) = channel(&cfg.queue_path).expect("channel");
     let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -189,7 +212,7 @@ mod worker_tests {
     #[fixture]
     async fn worker_test_context(#[default(201)] status: u16) -> WorkerTestContext {
         let dir = tempdir().expect("tempdir");
-        let cfg = Arc::new(Config::from(
+        let cfg = Arc::new(cfg_from(
             temp_config(&dir).with_cooldown(TEST_COOLDOWN_SECONDS),
         ));
         let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
