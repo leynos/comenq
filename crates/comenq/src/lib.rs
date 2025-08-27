@@ -2,30 +2,64 @@
 
 use clap::Parser;
 use std::{fmt, path::PathBuf, str::FromStr};
+use thiserror::Error;
 
 mod client;
 
 pub use client::{ClientError, run};
 
 /// A GitHub repository slug in `owner/repo` format.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RepoSlug {
     /// Repository owner.
-    pub owner: String,
+    owner: String,
     /// Repository name.
-    pub repo: String,
+    repo: String,
+}
+
+impl RepoSlug {
+    /// Repository owner.
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    /// Repository name.
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+}
+
+/// Error returned when parsing a [`RepoSlug`] fails.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum RepoSlugParseError {
+    /// Missing slash separator.
+    #[error("invalid repository format, use 'owner/repo'")]
+    MissingSlash,
+    /// Owner segment is empty.
+    #[error("invalid repository format, use 'owner/repo'")]
+    EmptyOwner,
+    /// Repository segment is empty.
+    #[error("invalid repository format, use 'owner/repo'")]
+    EmptyRepo,
+    /// Extra slash found in repository segment.
+    #[error("invalid repository format, use 'owner/repo'")]
+    ExtraSlashes,
 }
 
 impl FromStr for RepoSlug {
-    type Err = String;
+    type Err = RepoSlugParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Perform the split once to avoid redundant parsing elsewhere.
-        const ERR: &str = "invalid repository format, use 'owner/repo'";
         let s = s.trim();
-        let (owner, repo) = s.split_once('/').ok_or_else(|| String::from(ERR))?;
-        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-            return Err(String::from(ERR));
+        let (owner, repo) = s.split_once('/').ok_or(RepoSlugParseError::MissingSlash)?;
+        if owner.is_empty() {
+            return Err(RepoSlugParseError::EmptyOwner);
+        }
+        if repo.is_empty() {
+            return Err(RepoSlugParseError::EmptyRepo);
+        }
+        if repo.contains('/') {
+            return Err(RepoSlugParseError::ExtraSlashes);
         }
         Ok(Self {
             owner: owner.to_owned(),
@@ -60,7 +94,7 @@ pub struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, RepoSlug};
+    use super::{Args, RepoSlug, RepoSlugParseError};
     use clap::Parser;
     use rstest::rstest;
 
@@ -86,19 +120,15 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn from_str_rejects_empty_owner() {
-        assert!("/repo".parse::<RepoSlug>().is_err());
-    }
-
-    #[test]
-    fn from_str_rejects_empty_repo() {
-        assert!("owner/".parse::<RepoSlug>().is_err());
-    }
-
-    #[test]
-    fn from_str_rejects_extra_slashes() {
-        assert!("owner/repo/extra".parse::<RepoSlug>().is_err());
+    #[rstest]
+    #[case("/repo", RepoSlugParseError::EmptyOwner)]
+    #[case("owner/", RepoSlugParseError::EmptyRepo)]
+    #[case("owner/repo/extra", RepoSlugParseError::ExtraSlashes)]
+    fn from_str_rejects_invalid_inputs(#[case] input: &str, #[case] expected: RepoSlugParseError) {
+        let err = input
+            .parse::<RepoSlug>()
+            .expect_err("invalid slug should fail");
+        assert_eq!(err, expected);
     }
 
     #[test]
@@ -110,7 +140,7 @@ mod tests {
     #[test]
     fn trims_whitespace() {
         let slug: RepoSlug = "  octocat/hello-world  ".parse().expect("slug parses");
-        assert_eq!(slug.owner, "octocat");
-        assert_eq!(slug.repo, "hello-world");
+        assert_eq!(slug.owner(), "octocat");
+        assert_eq!(slug.repo(), "hello-world");
     }
 }
