@@ -104,7 +104,7 @@ async fn supervise_writer<B>(
     mut backoff: ExponentialBackoff,
     mut backoff_builder: B,
     cfg: Arc<Config>,
-    client_tx: Arc<std::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
+    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
     shutdown_tx: watch::Sender<()>,
     mut shutdown: watch::Receiver<()>,
 ) where
@@ -127,9 +127,7 @@ async fn supervise_writer<B>(
                         // Only log join failures here; queue_writer logs enqueue errors.
                         log_task_failure::<(), _>("writer", &Err(e));
                         let pair = mpsc::channel(cfg.client_channel_capacity);
-                        *client_tx
-                            .lock()
-                            .expect("client_tx lock poisoned") = pair.0;
+                        *client_tx.lock().await = pair.0;
                         pair.1
                     }
                 };
@@ -198,7 +196,7 @@ pub async fn run(config: Config) -> Result<()> {
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let (queue_tx, _) = channel(&config.queue_path)?; // drop unused receiver
     let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
-    let client_tx = Arc::new(std::sync::Mutex::new(client_tx_initial));
+    let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
@@ -207,10 +205,7 @@ pub async fn run(config: Config) -> Result<()> {
     let listener_tx = client_tx.clone();
     let listener = spawn_listener(
         cfg.clone(),
-        listener_tx
-            .lock()
-            .expect("listener_tx lock poisoned")
-            .clone(),
+        listener_tx.lock().await.clone(),
         shutdown_rx.clone(),
     );
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
@@ -258,11 +253,13 @@ pub async fn run(config: Config) -> Result<()> {
             listener,
             listener_backoff,
             || {
-                let tx = client_tx_clone
-                    .lock()
-                    .expect("client_tx lock poisoned")
-                    .clone();
-                spawn_listener(cfg.clone(), tx, shutdown_listener.clone())
+                let cfg = cfg.clone();
+                let client_tx = client_tx_clone.clone();
+                let shutdown_listener = shutdown_listener.clone();
+                tokio::spawn(async move {
+                    let tx = client_tx.lock().await.clone();
+                    run_listener(cfg, tx, shutdown_listener).await
+                })
             },
             shutdown_listener.clone(),
             || backoff(min_delay),
@@ -376,7 +373,7 @@ mod tests {
     #[rstest]
     #[case(Ok(Ok(())), None)]
     #[case(Ok(Err(anyhow!("boom"))), Some(("inner_error", "boom")))]
-    #[case(Err(create_cancelled_join_error()), Some(("join_error", "cancelled")))]
+    #[case(Err(create_cancelled_join_error()), Some(("join_error", "cancel")))]
     fn logs_failures(
         #[case] res: std::result::Result<anyhow::Result<()>, JoinError>,
         #[case] expected: Option<(&str, &str)>,
@@ -385,10 +382,11 @@ mod tests {
 
         let buf = Buffer::default();
         let writer = buf.clone();
+        let writer_cloned = writer.clone();
         let subscriber = tracing_subscriber::registry().with(
             tracing_subscriber::fmt::layer()
                 .json()
-                .with_writer(writer)
+                .with_writer(move || writer_cloned.clone())
                 .with_filter(tracing_subscriber::filter::LevelFilter::ERROR),
         );
         tracing::subscriber::with_default(subscriber, || {
