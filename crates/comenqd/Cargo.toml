@@ -29,7 +29,6 @@ serial_test = "2"
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
-test-support = { workspace = true }
 
 [features]
 default = []
