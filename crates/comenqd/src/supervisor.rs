@@ -81,12 +81,14 @@ async fn supervise_task<F, B>(
                 break;
             }
             res = &mut handle => {
-                match &res {
-                    Ok(Ok(())) => tracing::warn!(task = name, "exited"),
-                    Ok(Err(e)) => tracing::error!(task = name, error = %e),
-                    Err(e) => tracing::error!(task = name, error = %e),
+                if matches!(&res, Ok(Ok(_))) {
+                    // Normal completion; do not respawn.
+                    break;
                 }
-                let delay = backoff.next().expect("backoff should yield a duration");
+                log_task_failure(name, &res);
+                let delay = backoff
+                    .next()
+                    .expect("backoff should yield a duration");
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
@@ -102,7 +104,7 @@ async fn supervise_writer<B>(
     mut backoff: ExponentialBackoff,
     mut backoff_builder: B,
     cfg: Arc<Config>,
-    client_tx: Arc<std::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
+    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
     shutdown_tx: watch::Sender<()>,
     mut shutdown: watch::Receiver<()>,
 ) where
@@ -122,9 +124,10 @@ async fn supervise_writer<B>(
                 let rx = match res {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::error!(task = "writer", error = %e);
+                        // Only log join failures here; queue_writer logs enqueue errors.
+                        log_task_failure::<(), _>("writer", &Err(e));
                         let pair = mpsc::channel(cfg.client_channel_capacity);
-                        *client_tx.lock().unwrap() = pair.0;
+                        *client_tx.lock().await = pair.0;
                         pair.1
                     }
                 };
@@ -152,7 +155,7 @@ async fn supervise_writer<B>(
 ///
 /// The queue writer decouples the listener from the queue, ensuring a
 /// single writer for the `yaque` queue. It reads raw JSON payloads from the
-/// provided [`mpsc::UnboundedReceiver`] and attempts to enqueue each item
+/// provided [`mpsc::Receiver`] and attempts to enqueue each item
 /// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
 /// loop terminates so a supervising task can recreate the sender.
 ///
@@ -167,7 +170,9 @@ async fn supervise_writer<B>(
 /// let (queue_tx, _rx) = channel("/tmp/q")?;
 /// let (tx, rx) = mpsc::channel(1);
 /// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
-/// tx.send(Vec::new()).await.unwrap();
+/// tx.send(Vec::new())
+///     .await
+///     .expect("send on docs channel failed");
 /// # Ok(())
 /// # }
 /// ```
@@ -191,7 +196,7 @@ pub async fn run(config: Config) -> Result<()> {
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let (queue_tx, _) = channel(&config.queue_path)?; // drop unused receiver
     let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
-    let client_tx = Arc::new(std::sync::Mutex::new(client_tx_initial));
+    let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
@@ -200,7 +205,7 @@ pub async fn run(config: Config) -> Result<()> {
     let listener_tx = client_tx.clone();
     let listener = spawn_listener(
         cfg.clone(),
-        listener_tx.lock().unwrap().clone(),
+        listener_tx.lock().await.clone(),
         shutdown_rx.clone(),
     );
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
@@ -248,8 +253,13 @@ pub async fn run(config: Config) -> Result<()> {
             listener,
             listener_backoff,
             || {
-                let tx = client_tx_clone.lock().unwrap().clone();
-                spawn_listener(cfg.clone(), tx, shutdown_listener.clone())
+                let cfg = cfg.clone();
+                let client_tx = client_tx_clone.clone();
+                let shutdown_listener = shutdown_listener.clone();
+                tokio::spawn(async move {
+                    let tx = client_tx.lock().await.clone();
+                    run_listener(cfg, tx, shutdown_listener).await
+                })
             },
             shutdown_listener.clone(),
             || backoff(min_delay),
@@ -297,4 +307,32 @@ fn spawn_worker(
     })
 }
 
-// Logging helpers are no longer required; supervision handles reporting.
+/// Log any failure from a supervised task.
+///
+/// Accepts the task name and the result yielded when awaiting its
+/// [`JoinHandle`](tokio::task::JoinHandle). This is a no-op when the task
+/// completes successfully. On failure it logs the error and tags it with
+/// `kind` to distinguish an `inner_error` from a `join_error`.
+fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
+where
+    E: std::fmt::Display,
+{
+    match res {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::error!(
+            task = task,
+            kind = "inner_error",
+            error = %e,
+            "Task failed"
+        ),
+        Err(e) => tracing::error!(
+            task = task,
+            kind = "join_error",
+            error = %e,
+            "Task failed"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests;
