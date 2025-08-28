@@ -5,6 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default Unix Domain Socket path for the Comenq daemon.
+///
+/// Shared by the daemon and CLI to avoid configuration drift.
+pub const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
+
 /// Request sent from the client to the daemon.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommentRequest {

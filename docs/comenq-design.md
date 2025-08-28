@@ -147,6 +147,7 @@ be the core of the `comenq` client's `main.rs`.
 
 use clap::Parser;
 use std::path::PathBuf;
+use comenq::RepoSlug;
 
 /// A CLI client to enqueue a comment for a GitHub Pull Request.
 #
@@ -154,7 +155,7 @@ use std::path::PathBuf;
 pub struct Args {
     /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
     #
-    repo_slug: String,
+    repo_slug: RepoSlug,
 
     /// The pull request number to comment on.
     #
@@ -254,6 +255,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
 use tracing::warn;
+use comenq::RepoSlug;
 
 // Assume CommentRequest is in a shared library: `use comenq_lib::CommentRequest;`
 // For this example, we define it here.
@@ -273,7 +275,7 @@ pub struct CommentRequest {
 pub struct Args {
     /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
     #
-    repo_slug: String,
+    repo_slug: RepoSlug,
 
     /// The pull request number to comment on.
     #
@@ -293,27 +295,16 @@ async fn main() {
     // 1. Parse command-line arguments using clap's derive macro.
     let args = Args::parse();
 
-    // 2. Validate and parse the 'owner/repo' slug.
-    let (owner, repo) = args
-        .repo_slug
-        .split_once('/')
-        .expect("validated by clap value parser");
-    let owner = owner.to_string();
-    let repo = repo.to_string();
-
-    // Using a custom value parser keeps the error handling within `clap`
-    // itself, providing immediate feedback if the slug is malformed.
-
-
-    // 3. Construct the request payload.
+    // 2. Construct the request payload. The slug has already been validated
+    //    and split by `clap`.
     let request = CommentRequest {
-        owner,
-        repo,
+        owner: args.repo_slug.owner().to_owned(),
+        repo: args.repo_slug.repo().to_owned(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };
 
-    // 4. Serialize the request to JSON.
+    // 3. Serialize the request to JSON.
     let payload = match serde_json::to_vec(&request) {
         Ok(p) => p,
         Err(e) => {
@@ -357,9 +348,8 @@ resides in a dedicated `client` module to keep the argument parser focused. The
 binary parses the CLI arguments and delegates to `run`, allowing the test suite
 to exercise the network code directly. Any failures to serialize the request or
 communicate with the daemon are surfaced via a small `ClientError` enumeration.
-The `run` function also verifies the repository slug at runtime to guard
-against misuse in other contexts. An invalid slug results in a `BadSlug`
-variant, keeping the code panic free while still surfacing helpful errors.
+The repository slug is converted into a structured `RepoSlug` during argument
+handling, so `run` operates on validated data without rechecking it.
 
 ## Section 3: Design of the `comenqd` Daemon
 
@@ -909,12 +899,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use comenq_lib::CommentRequest; // Using the shared library
 use tracing::warn;
+use comenq::RepoSlug;
 
 #
 #
 struct Args {
     #
-    repo_slug: String,
+    repo_slug: RepoSlug,
     #
     pr_number: u64,
     #
@@ -927,16 +918,9 @@ struct Args {
 async fn main() {
     let args = Args::parse();
 
-    let (owner, repo) = args
-        .repo_slug
-        .split_once('/')
-        .expect("validated by clap value parser");
-    let owner = owner.to_string();
-    let repo = repo.to_string();
-
     let request = CommentRequest {
-        owner,
-        repo,
+        owner: args.repo_slug.owner().to_owned(),
+        repo: args.repo_slug.repo().to_owned(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };
