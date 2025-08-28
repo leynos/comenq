@@ -15,6 +15,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+color-eyre = { workspace = true }
 comenq-lib = { path = "../.." }
 ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
@@ -27,6 +28,7 @@ tempfile = { workspace = true } # latest 3.x at time of writing; update as new p
 serial_test = "2"
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+test-support = { workspace = true }
 
 [features]
 default = []
