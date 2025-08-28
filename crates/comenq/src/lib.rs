@@ -148,6 +148,7 @@ mod tests {
         let slug: RepoSlug = "  octocat/hello-world  ".parse().expect("slug parses");
         assert_eq!(slug.owner(), "octocat");
         assert_eq!(slug.repo(), "hello-world");
+    }
 
     #[test]
     fn socket_default_matches_constant() {
