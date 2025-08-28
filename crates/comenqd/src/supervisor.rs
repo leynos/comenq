@@ -81,7 +81,7 @@ async fn supervise_task<F, B>(
                 break;
             }
             res = &mut handle => {
-                if matches!(res, Ok(Ok(_))) {
+                if matches!(&res, Ok(Ok(_))) {
                     // Normal completion; do not respawn.
                     break;
                 }
@@ -334,5 +334,65 @@ where
             error = %e,
             "Task failed"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_task_failure;
+    use anyhow::anyhow;
+    use rstest::rstest;
+    use serde_json::Value;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tokio::task::JoinError;
+
+    /// In-memory writer used to capture JSON-formatted tracing events.
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Buffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[rstest]
+    #[case(Ok(Ok(())), None)]
+    #[case(Ok(Err(anyhow!("boom"))), Some(("inner_error", "boom")))]
+    #[case(Err(JoinError::cancelled()), Some(("join_error", "cancelled")))]
+    fn logs_failures(
+        #[case] res: std::result::Result<anyhow::Result<()>, JoinError>,
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        let buf = Buffer::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(writer)
+            .with_max_level(tracing::Level::ERROR)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            log_task_failure("task", &res);
+        });
+
+        let output = String::from_utf8(buf.0.lock().expect("read buffer").clone()).expect("utf8");
+        match expected {
+            None => assert!(output.is_empty()),
+            Some((kind, err)) => {
+                let line = output.lines().next().expect("log entry");
+                let v: Value = serde_json::from_str(line).expect("json");
+                let fields = &v["fields"];
+                assert_eq!(fields["task"], "task");
+                assert_eq!(fields["kind"], kind);
+                assert!(fields["error"].as_str().expect("error str").contains(err));
+                assert_eq!(fields["message"], "Task failed");
+            }
+        }
     }
 }
