@@ -122,7 +122,15 @@ mod tests {
     #[case("owner/repo/extra")]
     fn rejects_invalid_slug(#[case] slug: &str) {
         let result = Args::try_parse_from(["comenq", slug, "1", "Hi"]);
-        assert!(result.is_err());
+        // Ensure the CLI surfaces the canonical repo format error.
+        // This guards regressions in the Display of the parse error
+        // as rendered through clap's error handling.
+        let err = result.expect_err("invalid slug should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid repository format, use 'owner/repo'"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[rstest]
