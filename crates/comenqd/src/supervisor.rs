@@ -362,21 +362,35 @@ mod tests {
         }
     }
 
+    /// Create a [`JoinError`] representing a cancelled task.
+    fn create_cancelled_join_error() -> JoinError {
+        tokio::runtime::Runtime::new()
+            .expect("create runtime")
+            .block_on(async {
+                let handle = tokio::spawn(async {});
+                handle.abort();
+                handle.await.unwrap_err()
+            })
+    }
+
     #[rstest]
     #[case(Ok(Ok(())), None)]
     #[case(Ok(Err(anyhow!("boom"))), Some(("inner_error", "boom")))]
-    #[case(Err(JoinError::cancelled()), Some(("join_error", "cancelled")))]
+    #[case(Err(create_cancelled_join_error()), Some(("join_error", "cancelled")))]
     fn logs_failures(
         #[case] res: std::result::Result<anyhow::Result<()>, JoinError>,
         #[case] expected: Option<(&str, &str)>,
     ) {
+        use tracing_subscriber::prelude::*;
+
         let buf = Buffer::default();
         let writer = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(writer)
-            .with_max_level(tracing::Level::ERROR)
-            .finish();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_filter(tracing_subscriber::filter::LevelFilter::ERROR),
+        );
         tracing::subscriber::with_default(subscriber, || {
             log_task_failure("task", &res);
         });
