@@ -1,6 +1,7 @@
-//! Shared test utilities for adaptive timeouts.
+//! Shared test utilities for adaptive timeouts and task join diagnostics.
 
 use std::time::Duration;
+use tokio::task::JoinError;
 
 pub const MIN_TIMEOUT_SECS: u64 = 10;
 pub const MAX_TIMEOUT_SECS: u64 = 600;
@@ -88,4 +89,22 @@ where
         }
     }
     Err(format!("{operation_name} exhausted all retry attempts"))
+}
+
+/// Map a task [`JoinError`] into a concise diagnostic message.
+///
+/// ```ignore
+/// let handle = tokio::spawn(async {});
+/// handle.abort();
+/// let err = handle.await.unwrap_err();
+/// assert_eq!(join_err("worker", err), "worker task cancelled");
+/// ```
+pub(crate) fn join_err(name: &str, e: JoinError) -> String {
+    if e.is_panic() {
+        format!("{name} task panicked")
+    } else if e.is_cancelled() {
+        format!("{name} task cancelled")
+    } else {
+        format!("{name} task failed: {e}")
+    }
 }

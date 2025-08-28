@@ -25,7 +25,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 use yaque::{Receiver, channel};
 
-use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
+use util::{TestComplexity, TimeoutConfig, join_err, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 1;
 
@@ -60,15 +60,6 @@ async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
         sleep(delay).await;
     }
     path.exists()
-}
-
-/// Convert a `JoinError` into a concise diagnostic message for the given task.
-fn join_err(name: &str, e: tokio::task::JoinError) -> String {
-    if e.is_panic() {
-        format!("{name} task panicked")
-    } else {
-        format!("{name} task failed: {e}")
-    }
 }
 
 #[tokio::test]
@@ -182,7 +173,7 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
         Err(e) => return Err(join_err("listener", e)),
     }
     match writer_handle.await {
-        Ok(_receiver) => {}
+        Ok(_) => {}
         Err(e) => return Err(join_err("writer", e)),
     }
     Ok(())
