@@ -121,6 +121,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case("octocat", RepoSlugParseError::MissingSlash)]
     #[case("/repo", RepoSlugParseError::EmptyOwner)]
     #[case("owner/", RepoSlugParseError::EmptyRepo)]
     #[case("owner/repo/extra", RepoSlugParseError::ExtraSlashes)]

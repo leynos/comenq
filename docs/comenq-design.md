@@ -298,8 +298,8 @@ async fn main() {
     // 2. Construct the request payload. The slug has already been validated
     //    and split by `clap`.
     let request = CommentRequest {
-        owner: args.repo_slug.owner.clone(),
-        repo: args.repo_slug.repo.clone(),
+        owner: args.repo_slug.owner().to_owned(),
+        repo: args.repo_slug.repo().to_owned(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };
@@ -919,8 +919,8 @@ async fn main() {
     let args = Args::parse();
 
     let request = CommentRequest {
-        owner: args.repo_slug.owner.clone(),
-        repo: args.repo_slug.repo.clone(),
+        owner: args.repo_slug.owner().to_owned(),
+        repo: args.repo_slug.repo().to_owned(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };

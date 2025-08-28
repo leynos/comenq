@@ -49,8 +49,8 @@ pub enum ClientError {
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
     let request = CommentRequest {
-        owner: args.repo_slug.owner.clone(),
-        repo: args.repo_slug.repo.clone(),
+        owner: args.repo_slug.owner().to_owned(),
+        repo: args.repo_slug.repo().to_owned(),
         pr_number: args.pr_number,
         body: args.comment_body,
     };
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn slug_parses() {
         let slug: RepoSlug = "octocat/hello-world".parse().expect("slug");
-        assert_eq!(slug.owner, "octocat");
-        assert_eq!(slug.repo, "hello-world");
+        assert_eq!(slug.owner(), "octocat");
+        assert_eq!(slug.repo(), "hello-world");
     }
 }
