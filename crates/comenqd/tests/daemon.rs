@@ -62,6 +62,15 @@ async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
     path.exists()
 }
 
+/// Convert a `JoinError` into a concise diagnostic message for the given task.
+fn join_err(name: &str, e: tokio::task::JoinError) -> String {
+    if e.is_panic() {
+        format!("{name} task panicked")
+    } else {
+        format!("{name} task failed: {e}")
+    }
+}
+
 #[tokio::test]
 async fn ensure_queue_dir_creates_directory() {
     let dir = tempdir().expect("Failed to create temporary directory");
@@ -170,25 +179,11 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
                 return Err(format!("listener task failed: {e}"));
             }
         }
-        Err(e) => {
-            return Err(if e.is_panic() {
-                "listener task panicked".to_string()
-            } else {
-                format!("listener task failed: {e}")
-            });
-        }
+        Err(e) => return Err(join_err("listener", e)),
     }
     match writer_handle.await {
-        Ok(_receiver) => {
-            // Writer task completed successfully, returned the receiver
-        }
-        Err(e) => {
-            return Err(if e.is_panic() {
-                "writer task panicked".to_string()
-            } else {
-                format!("writer task failed: {e}")
-            });
-        }
+        Ok(_receiver) => {}
+        Err(e) => return Err(join_err("writer", e)),
     }
     Ok(())
 }
@@ -333,13 +328,7 @@ mod worker_tests {
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),
-                    Err(e) => {
-                        if e.is_panic() {
-                            Err("worker task panicked".to_string())
-                        } else {
-                            Err(format!("worker task failed: {e}"))
-                        }
-                    }
+                    Err(e) => Err(join_err("worker", e)),
                 }
             }
         })
@@ -407,13 +396,7 @@ mod worker_tests {
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),
-                    Err(e) => {
-                        if e.is_panic() {
-                            Err("worker task panicked".to_string())
-                        } else {
-                            Err(format!("worker task failed: {e}"))
-                        }
-                    }
+                    Err(e) => Err(join_err("worker", e)),
                 }
             }
         })
