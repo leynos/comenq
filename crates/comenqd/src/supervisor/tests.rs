@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinError;
+use tracing_subscriber::fmt::MakeWriterFn;
 
 /// In-memory writer used to capture JSON-formatted tracing events.
 #[derive(Clone, Default)]
@@ -45,11 +46,14 @@ fn logs_failures(
     use tracing_subscriber::prelude::*;
 
     let buf = Buffer::default();
-    let writer_cloned = buf.clone();
+    let make_writer = {
+        let writer = buf.clone();
+        MakeWriterFn::new(move || writer.clone())
+    };
     let subscriber = tracing_subscriber::registry().with(
         tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(move || writer_cloned.clone())
+            .with_writer(make_writer)
             .with_filter(tracing_subscriber::filter::LevelFilter::ERROR),
     );
     tracing::subscriber::with_default(subscriber, || {
