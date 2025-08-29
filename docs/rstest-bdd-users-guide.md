@@ -137,12 +137,12 @@ the body of `test_add_to_basket`.
 
 ## Encapsulating BDD State with `rstest-bdd` Fixtures
 
-Use `rstest` fixtures for per-scenario data instead of a thread-local world.
-Inject the fixture into steps with `#[from]`, marking it `&mut` when mutation
-is required. Bind the fixture to scenarios using `#[with(cli_state)]` so each
-test receives a fresh instance. Fixtures can implement `Drop` for automatic
-cleanup, and the `inventory` registry keeps step functions reusable across
-modules.
+Use `rstest` fixtures for per-scenario data instead of a thread-local world,
+for example `#[fixture] fn cli_state() -> CliState { … }`. Inject the fixture
+into steps with `#[from]`, marking it `&mut` when mutation is required. Bind
+the fixture to scenarios using `#[with(cli_state)]` so each test receives a
+fresh instance. Fixtures can implement `Drop` for automatic cleanup, and the
+`inventory` registry keeps step functions reusable across modules.
 
 ## Binding tests to scenarios
 
