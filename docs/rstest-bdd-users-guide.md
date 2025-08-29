@@ -137,71 +137,12 @@ the body of `test_add_to_basket`.
 
 ## Encapsulating BDD State with `rstest-bdd` Fixtures
 
-To modernize step definitions and avoid thread-local state, rely on `rstest`
-fixtures for per-scenario data. This section outlines an approach that mirrors
-`rstest` conventions while keeping steps reusable.
-
-### 1. Use `rstest` fixtures instead of a global world state
-
-Define a fixture representing the scenario state rather than a static or
-thread-local "world". Each scenario receives a fresh instance, ensuring
-isolation and preventing test interference.
-
-- Example: `#[fixture] fn cli_state() -> CliState { ... }`.
-
-### 2. Inject state into steps with `#[from]` attributes
-
-Include a parameter annotated with `#[from(cli_state)]` in each step to access
-the fixture. Use `&mut` when the step modifies the state and `&` when it only
-reads it.
-
-```rust
-#[given("CLI arguments with repo slug \"{slug}\"")]
-fn cli_args_with_repo_slug(#[from(cli_state)] state: &mut CliState, slug: String) {
-    state.args = Some(vec![/* ...slug... */]);
-}
-
-#[then("parsing succeeds")]
-fn parsing_succeeds(#[from(cli_state)] state: &CliState) {
-    assert!(state.result.as_ref().unwrap().is_ok());
-}
-```
-
-### 3. Ensure per-scenario isolation and reset
-
-Attach the fixture to each scenario with `#[with(cli_state)]`. `rstest-bdd`
-inserts the value into the step context before running the steps, so state is
-never shared between tests.
-
-```rust
-#[scenario(path = "features/cli_parser.feature", index = 0)]
-fn cli_valid_args_succeeds(#[with(cli_state)] _: CliState) {}
-```
-
-### 4. Leverage RAII for setup and cleanup
-
-Because fixtures are ordinary Rust values, use their constructors for setup and
-their `Drop` implementations for teardown. When the scenario ends, the fixture
-is dropped automatically, removing the need for manual cleanup.
-
-### 5. Reuse step definitions across modules
-
-Step functions registered with `#[given]`, `#[when]` and `#[then]` are
-available globally. Organize them by domain but avoid duplication; a single
-definition can serve multiple scenarios as long as it uses the appropriate
-fixture.
-
-### 6. Consider parallel execution and step dependencies
-
-Scenario tests run in parallel by default. Isolation via fixtures means steps
-do not clash across scenarios. Within a scenario, steps execute sequentially,
-so design them assuming the `Given–When–Then` order.
-
-### 7. Write idiomatic, reusable step functions
-
- Let fixture injection handle context, so steps focus on behaviour. Use
- meaningful fixture names and combine `#[scenario]` with other `rstest`
- features, such as parameterization, to keep tests concise and expressive.
+Use `rstest` fixtures for per-scenario data instead of a thread-local world.
+Inject the fixture into steps with `#[from]`, marking it `&mut` when mutation
+is required. Bind the fixture to scenarios using `#[with(cli_state)]` so each
+test receives a fresh instance. Fixtures can implement `Drop` for automatic
+cleanup, and the `inventory` registry keeps step functions reusable across
+modules.
 
 ## Binding tests to scenarios
 
