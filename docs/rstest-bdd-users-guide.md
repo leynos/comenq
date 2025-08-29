@@ -137,7 +137,7 @@ the body of `test_add_to_basket`.
 
 ## Encapsulating BDD State with `rstest-bdd` Fixtures
 
-To modernise step definitions and avoid thread-local state, rely on `rstest`
+To modernize step definitions and avoid thread-local state, rely on `rstest`
 fixtures for per-scenario data. This section outlines an approach that mirrors
 `rstest` conventions while keeping steps reusable.
 
@@ -187,7 +187,7 @@ is dropped automatically, removing the need for manual cleanup.
 ### 5. Reuse step definitions across modules
 
 Step functions registered with `#[given]`, `#[when]` and `#[then]` are
-available globally. Organise them by domain but avoid duplication; a single
+available globally. Organize them by domain but avoid duplication; a single
 definition can serve multiple scenarios as long as it uses the appropriate
 fixture.
 
@@ -201,7 +201,7 @@ so design them assuming the `Given–When–Then` order.
 
 Let fixture injection handle context so steps focus on behaviour. Use
 meaningful fixture names and combine `#[scenario]` with other `rstest`
-features, such as parameterisation, to keep tests concise and expressive.
+features, such as parameterization, to keep tests concise and expressive.
 
 ## Binding tests to scenarios
 

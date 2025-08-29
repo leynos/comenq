@@ -3,7 +3,6 @@
 //! These steps drive scenarios that verify valid and invalid
 //! command line inputs, including the optional `--socket` flag.
 //! They ensure the parser surface behaves as documented.
-#![expect(clippy::expect_used, reason = "simplify test failure output")]
 
 use clap::Parser;
 use rstest::fixture;
@@ -58,19 +57,19 @@ fn no_cli_arguments(#[from(cli_state)] state: &CliState) {
 
 #[given("socket path \"{path}\"")]
 fn socket_path(#[from(cli_state)] state: &CliState, path: String) {
-    if let Some(args) = state.args.borrow_mut().as_mut() {
-        args.push(OsString::from("--socket"));
-        args.push(OsString::from(path));
-    }
+    let mut args_ref = state.args.borrow_mut();
+    let Some(args) = args_ref.as_mut() else {
+        panic!("args must be initialised by a Given step before setting socket path");
+    };
+    args.push(OsString::from("--socket"));
+    args.push(OsString::from(path));
 }
 
 #[when("they are parsed")]
 fn they_are_parsed(#[from(cli_state)] state: &CliState) {
-    let args = state
-        .args
-        .borrow()
-        .clone()
-        .expect("args should be set by a given step");
+    let Some(args) = state.args.borrow().clone() else {
+        panic!("args should be set by a given step");
+    };
     *state.result.borrow_mut() = Some(Args::try_parse_from(args));
 }
 

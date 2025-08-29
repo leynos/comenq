@@ -9,5 +9,6 @@ use rstest_bdd_macros::scenario;
 mod cli_steps;
 use cli_steps::{CliState, cli_state};
 
+/// Execute scenarios from `tests/features/cli.feature`.
 #[scenario(path = "tests/features/cli.feature")]
 fn cli_feature(cli_state: CliState) {}
