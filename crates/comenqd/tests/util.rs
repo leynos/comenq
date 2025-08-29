@@ -13,6 +13,7 @@ pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
 #[derive(Debug, Clone, Copy)]
 pub enum TestComplexity {
+    #[expect(dead_code, reason = "Constructed in integration tests but unused here")]
     Simple,
     Moderate,
     Complex,
