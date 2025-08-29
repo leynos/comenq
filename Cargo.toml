@@ -24,6 +24,9 @@ octocrab = { workspace = true }
 test-support = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
+rstest = { workspace = true }
+rstest-bdd = "0.1.0-alpha2"
+rstest-bdd-macros = "0.1.0-alpha2"
 
 [[test]]
 name = "cucumber"
