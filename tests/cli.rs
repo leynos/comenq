@@ -11,4 +11,6 @@ use cli_steps::{CliState, cli_state};
 
 /// Execute scenarios from `tests/features/cli.feature`.
 #[scenario(path = "tests/features/cli.feature")]
-fn cli_feature(cli_state: CliState) {}
+fn cli_feature(cli_state: CliState) {
+    let _ = cli_state;
+}

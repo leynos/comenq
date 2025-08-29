@@ -9,6 +9,7 @@ use rstest::fixture;
 use rstest_bdd_macros::{given, then, when};
 use std::cell::RefCell;
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 
 use comenq::Args;
@@ -20,6 +21,8 @@ use comenq::Args;
 /// are dropped at scope exit.
 #[derive(Default)]
 pub struct CliState {
+    // `rstest-bdd` fixtures are injected as shared references, so interior
+    // mutability allows steps to update the arguments and parse result.
     args: RefCell<Option<Vec<OsString>>>,
     result: RefCell<Option<Result<Args, clap::Error>>>,
 }
@@ -90,11 +93,13 @@ fn an_error_is_returned(#[from(cli_state)] state: &CliState) {
 }
 
 #[then("the socket path is \"{expected}\"")]
-fn the_socket_path_is(#[from(cli_state)] state: &CliState, expected: String) {
+fn the_socket_path_is(#[from(cli_state)] state: &CliState, expected: PathBuf) {
     let binding = state.result.borrow();
     let args = match binding.as_ref() {
         Some(Ok(a)) => a,
         other => panic!("expected parsed args, got {other:?}"),
     };
-    assert_eq!(args.socket, PathBuf::from(expected));
+    let expected = fs::canonicalize(&expected).unwrap_or(expected);
+    let actual = fs::canonicalize(&args.socket).unwrap_or_else(|_| args.socket.clone());
+    assert_eq!(actual, expected);
 }

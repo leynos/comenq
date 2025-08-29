@@ -199,9 +199,9 @@ so design them assuming the `Given–When–Then` order.
 
 ### 7. Write idiomatic, reusable step functions
 
-Let fixture injection handle context so steps focus on behaviour. Use
-meaningful fixture names and combine `#[scenario]` with other `rstest`
-features, such as parameterization, to keep tests concise and expressive.
+ Let fixture injection handle context, so steps focus on behaviour. Use
+ meaningful fixture names and combine `#[scenario]` with other `rstest`
+ features, such as parameterization, to keep tests concise and expressive.
 
 ## Binding tests to scenarios
 
