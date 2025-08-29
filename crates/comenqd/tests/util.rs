@@ -1,5 +1,6 @@
 //! Shared test utilities for adaptive timeouts and task join diagnostics.
 
+use rstest::rstest;
 use std::time::Duration;
 use tokio::task::JoinError;
 
@@ -11,7 +12,10 @@ pub const CI_MULTIPLIER: u64 = 2;
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Variants are exercised selectively by tests
+#[expect(
+    dead_code,
+    reason = "Test-only enum; variants are exercised selectively across modules"
+)]
 pub enum TestComplexity {
     Simple,
     Moderate,
@@ -109,16 +113,39 @@ pub(crate) fn join_err(name: &str, e: JoinError) -> String {
     }
 }
 
-#[tokio::test]
-async fn join_err_maps_panic_and_cancel() {
-    let cancelled = tokio::spawn(async {
-        tokio::task::yield_now().await;
-    });
-    cancelled.abort();
-    let err = cancelled.await.unwrap_err();
-    assert_eq!(join_err("worker", err), "worker task cancelled");
+#[derive(Debug, Clone, Copy)]
+enum JoinScenario {
+    Cancelled,
+    Panicked,
+}
 
-    let panic = tokio::spawn(async { panic!("boom") });
-    let err = panic.await.unwrap_err();
-    assert_eq!(join_err("worker", err), "worker task panicked");
+#[rstest]
+#[case::cancelled(
+    JoinScenario::Cancelled,
+    "failed to join cancelled task",
+    "worker task cancelled"
+)]
+#[case::panicked(
+    JoinScenario::Panicked,
+    "failed to join panicked task",
+    "worker task panicked"
+)]
+#[tokio::test]
+async fn join_err_maps_panic_and_cancel(
+    #[case] scenario: JoinScenario,
+    #[case] join_msg: &str,
+    #[case] expected: &str,
+) {
+    let handle = match scenario {
+        JoinScenario::Cancelled => {
+            let h = tokio::spawn(async {
+                tokio::task::yield_now().await;
+            });
+            h.abort();
+            h
+        }
+        JoinScenario::Panicked => tokio::spawn(async { panic!("boom") }),
+    };
+    let err = handle.await.expect_err(join_msg);
+    assert_eq!(join_err("worker", err), expected);
 }
