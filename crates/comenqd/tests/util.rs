@@ -12,10 +12,6 @@ pub const CI_MULTIPLIER: u64 = 2;
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
 #[derive(Debug, Clone, Copy)]
-#[expect(
-    dead_code,
-    reason = "Test-only enum; variants are exercised selectively across modules"
-)]
 pub enum TestComplexity {
     Simple,
     Moderate,
