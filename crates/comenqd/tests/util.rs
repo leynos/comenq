@@ -108,3 +108,17 @@ pub(crate) fn join_err(name: &str, e: JoinError) -> String {
         format!("{name} task failed: {e}")
     }
 }
+
+#[tokio::test]
+async fn join_err_maps_panic_and_cancel() {
+    let cancelled = tokio::spawn(async {
+        tokio::task::yield_now().await;
+    });
+    cancelled.abort();
+    let err = cancelled.await.unwrap_err();
+    assert_eq!(join_err("worker", err), "worker task cancelled");
+
+    let panic = tokio::spawn(async { panic!("boom") });
+    let err = panic.await.unwrap_err();
+    assert_eq!(join_err("worker", err), "worker task panicked");
+}
