@@ -1,6 +1,8 @@
-//! Shared test utilities for adaptive timeouts.
+//! Shared test utilities for adaptive timeouts and task join diagnostics.
 
+use rstest::rstest;
 use std::time::Duration;
+use tokio::task::JoinError;
 
 pub const MIN_TIMEOUT_SECS: u64 = 10;
 pub const MAX_TIMEOUT_SECS: u64 = 600;
@@ -10,8 +12,8 @@ pub const CI_MULTIPLIER: u64 = 2;
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Variants are exercised selectively by tests
 pub enum TestComplexity {
+    #[expect(dead_code, reason = "Constructed in integration tests but unused here")]
     Simple,
     Moderate,
     Complex,
@@ -88,4 +90,59 @@ where
         }
     }
     Err(format!("{operation_name} exhausted all retry attempts"))
+}
+
+/// Map a task [`JoinError`] into a concise diagnostic message.
+///
+/// ```ignore
+/// let handle = tokio::spawn(async {});
+/// handle.abort();
+/// let err = handle.await.unwrap_err();
+/// assert_eq!(join_err("worker", err), "worker task cancelled");
+/// ```
+pub(crate) fn join_err(name: &str, e: JoinError) -> String {
+    if e.is_panic() {
+        format!("{name} task panicked")
+    } else if e.is_cancelled() {
+        format!("{name} task cancelled")
+    } else {
+        format!("{name} task failed: {e}")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JoinScenario {
+    Cancelled,
+    Panicked,
+}
+
+#[rstest]
+#[case::cancelled(
+    JoinScenario::Cancelled,
+    "failed to join cancelled task",
+    "worker task cancelled"
+)]
+#[case::panicked(
+    JoinScenario::Panicked,
+    "failed to join panicked task",
+    "worker task panicked"
+)]
+#[tokio::test]
+async fn join_err_maps_panic_and_cancel(
+    #[case] scenario: JoinScenario,
+    #[case] join_msg: &str,
+    #[case] expected: &str,
+) {
+    let handle = match scenario {
+        JoinScenario::Cancelled => {
+            let h = tokio::spawn(async {
+                tokio::task::yield_now().await;
+            });
+            h.abort();
+            h
+        }
+        JoinScenario::Panicked => tokio::spawn(async { panic!("boom") }),
+    };
+    let err = handle.await.expect_err(join_msg);
+    assert_eq!(join_err("worker", err), expected);
 }

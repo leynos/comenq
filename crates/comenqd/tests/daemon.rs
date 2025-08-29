@@ -25,7 +25,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 use yaque::{Receiver, channel};
 
-use util::{TestComplexity, TimeoutConfig, timeout_with_retries};
+use util::{TestComplexity, TimeoutConfig, join_err, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 1;
 
@@ -170,25 +170,11 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
                 return Err(format!("listener task failed: {e}"));
             }
         }
-        Err(e) => {
-            return Err(if e.is_panic() {
-                "listener task panicked".to_string()
-            } else {
-                format!("listener task failed: {e}")
-            });
-        }
+        Err(e) => return Err(join_err("listener", e)),
     }
     match writer_handle.await {
-        Ok(_receiver) => {
-            // Writer task completed successfully, returned the receiver
-        }
-        Err(e) => {
-            return Err(if e.is_panic() {
-                "writer task panicked".to_string()
-            } else {
-                format!("writer task failed: {e}")
-            });
-        }
+        Ok(_) => {}
+        Err(e) => return Err(join_err("writer", e)),
     }
     Ok(())
 }
@@ -333,13 +319,7 @@ mod worker_tests {
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),
-                    Err(e) => {
-                        if e.is_panic() {
-                            Err("worker task panicked".to_string())
-                        } else {
-                            Err(format!("worker task failed: {e}"))
-                        }
-                    }
+                    Err(e) => Err(join_err("worker", e)),
                 }
             }
         })
@@ -407,13 +387,7 @@ mod worker_tests {
                 match handle.await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(e.to_string()),
-                    Err(e) => {
-                        if e.is_panic() {
-                            Err("worker task panicked".to_string())
-                        } else {
-                            Err(format!("worker task failed: {e}"))
-                        }
-                    }
+                    Err(e) => Err(join_err("worker", e)),
                 }
             }
         })
