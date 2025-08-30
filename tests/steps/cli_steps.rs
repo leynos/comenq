@@ -1,8 +1,6 @@
 //! Behavioural test steps for the CLI argument parser.
 //!
-//! These steps drive scenarios that verify valid and invalid
-//! command line inputs, including the optional `--socket` flag.
-//! They ensure the parser surface behaves as documented.
+//! Verify valid and invalid command-line inputs, including the optional `--socket` flag.
 
 use clap::Parser;
 use rstest::fixture;
@@ -73,8 +71,7 @@ fn they_are_parsed(#[from(cli_state)] state: &CliState) {
     let Some(args) = state.args.borrow_mut().take() else {
         panic!("args should be set by a given step");
     };
-    *state.result.borrow_mut() = Some(Args::try_parse_from(&args));
-    *state.args.borrow_mut() = Some(args);
+    *state.result.borrow_mut() = Some(Args::try_parse_from(args));
 }
 
 #[then("parsing succeeds")]
@@ -102,5 +99,11 @@ fn the_socket_path_is(#[from(cli_state)] state: &CliState, expected: PathBuf) {
     };
     let expected = fs::canonicalize(&expected).unwrap_or(expected);
     let actual = fs::canonicalize(&args.socket).unwrap_or_else(|_| args.socket.clone());
-    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        expected,
+        "socket path mismatch: actual={} expected={}",
+        actual.display(),
+        expected.display(),
+    );
 }
