@@ -135,6 +135,15 @@ verbatim. The `#[scenario]` macro binds the test function to the first scenario
 in the specified feature file and runs all registered steps before executing
 the body of `test_add_to_basket`.
 
+## Encapsulating BDD State with `rstest-bdd` Fixtures
+
+Use `rstest` fixtures for per-scenario data instead of a thread-local world,
+for example `#[fixture] fn cli_state() -> CliState { … }`. Inject the fixture
+into steps with `#[from]`, marking it `&mut` when mutation is required. Bind
+the fixture to scenarios using `#[with(cli_state)]` so each test receives a
+fresh instance. Fixtures can implement `Drop` for automatic cleanup, and the
+`inventory` registry keeps step functions reusable across modules.
+
 ## Binding tests to scenarios
 
 The `#[scenario]` macro is the entry point that ties a Rust test function to a

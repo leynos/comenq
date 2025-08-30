@@ -1,26 +1,39 @@
 //! Behavioural test steps for the CLI argument parser.
 //!
-//! These steps drive the Cucumber scenarios that verify valid and
-//! invalid command line inputs, including the optional `--socket`
-//! flag. They ensure the parser surface behaves as documented.
-#![expect(clippy::expect_used, reason = "simplify test failure output")]
+//! Verify valid and invalid command-line inputs, including the optional `--socket` flag.
 
 use clap::Parser;
-use cucumber::{World, given, then, when};
+use rstest::fixture;
+use rstest_bdd_macros::{given, then, when};
+use std::cell::RefCell;
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 
 use comenq::Args;
 
-#[derive(Debug, Default, World)]
-pub struct CliWorld {
-    args: Option<Vec<OsString>>,
-    result: Option<Result<Args, clap::Error>>,
+/// Per-scenario state for CLI parsing tests.
+///
+/// The fixture returned by [`cli_state`] owns the argument vector and parser
+/// result, ensuring each scenario starts with a clean slate and any resources
+/// are dropped at scope exit.
+#[derive(Default)]
+pub struct CliState {
+    // `rstest-bdd` fixtures are injected as shared references, so interior
+    // mutability allows steps to update the arguments and parse result.
+    args: RefCell<Option<Vec<OsString>>>,
+    result: RefCell<Option<Result<Args, clap::Error>>>,
+}
+
+/// Provide a fresh [`CliState`] for each scenario.
+#[fixture]
+pub fn cli_state() -> CliState {
+    CliState::default()
 }
 
 #[given("valid CLI arguments")]
-fn valid_cli_arguments(world: &mut CliWorld) {
-    world.args = Some(vec![
+fn valid_cli_arguments(#[from(cli_state)] state: &CliState) {
+    *state.args.borrow_mut() = Some(vec![
         OsString::from("comenq"),
         OsString::from("octocat/hello-world"),
         OsString::from("1"),
@@ -28,9 +41,9 @@ fn valid_cli_arguments(world: &mut CliWorld) {
     ]);
 }
 
-#[given(regex = r#"^CLI arguments with repo slug \"(.+)\"$"#)]
-fn cli_args_with_repo_slug(world: &mut CliWorld, slug: String) {
-    world.args = Some(vec![
+#[given("CLI arguments with repo slug \"{slug}\"")]
+fn cli_args_with_repo_slug(#[from(cli_state)] state: &CliState, slug: String) {
+    *state.args.borrow_mut() = Some(vec![
         OsString::from("comenq"),
         OsString::from(slug),
         OsString::from("1"),
@@ -39,49 +52,58 @@ fn cli_args_with_repo_slug(world: &mut CliWorld, slug: String) {
 }
 
 #[given("no CLI arguments")]
-fn no_cli_arguments(world: &mut CliWorld) {
-    world.args = Some(vec![OsString::from("comenq")]);
+fn no_cli_arguments(#[from(cli_state)] state: &CliState) {
+    *state.args.borrow_mut() = Some(vec![OsString::from("comenq")]);
 }
 
-#[given(regex = r#"^socket path \"(.+)\"$"#)]
-fn socket_path(world: &mut CliWorld, path: String) {
-    if let Some(mut args) = world.args.take() {
-        args.push(OsString::from("--socket"));
-        args.push(OsString::from(path));
-        world.args = Some(args);
-    }
+#[given("socket path \"{path}\"")]
+fn socket_path(#[from(cli_state)] state: &CliState, path: String) {
+    let mut args_ref = state.args.borrow_mut();
+    let Some(args) = args_ref.as_mut() else {
+        panic!("args must be initialized by a Given step before setting socket path");
+    };
+    args.push(OsString::from("--socket"));
+    args.push(OsString::from(path));
 }
 
 #[when("they are parsed")]
-fn they_are_parsed(world: &mut CliWorld) {
-    let args = world
-        .args
-        .clone()
-        .expect("world.args should be set by a given step");
-    world.result = Some(Args::try_parse_from(args));
+fn they_are_parsed(#[from(cli_state)] state: &CliState) {
+    let Some(args) = state.args.borrow_mut().take() else {
+        panic!("args should be set by a given step");
+    };
+    *state.result.borrow_mut() = Some(Args::try_parse_from(args));
 }
 
 #[then("parsing succeeds")]
-fn parsing_succeeds(world: &mut CliWorld) {
-    match world.result.as_ref() {
+fn parsing_succeeds(#[from(cli_state)] state: &CliState) {
+    match state.result.borrow().as_ref() {
         Some(Ok(_)) => {}
         other => panic!("expected success, got {other:?}"),
     }
 }
 
 #[then("an error is returned")]
-fn an_error_is_returned(world: &mut CliWorld) {
-    match world.result.take() {
+fn an_error_is_returned(#[from(cli_state)] state: &CliState) {
+    match state.result.borrow().as_ref() {
         Some(Err(_)) => {}
         other => panic!("expected error, got {other:?}"),
     }
 }
 
-#[then(regex = r#"^the socket path is \"(.+)\"$"#)]
-fn the_socket_path_is(world: &mut CliWorld, expected: String) {
-    let args = match world.result.take() {
+#[then("the socket path is \"{expected}\"")]
+fn the_socket_path_is(#[from(cli_state)] state: &CliState, expected: PathBuf) {
+    let binding = state.result.borrow();
+    let args = match binding.as_ref() {
         Some(Ok(a)) => a,
         other => panic!("expected parsed args, got {other:?}"),
     };
-    assert_eq!(args.socket, PathBuf::from(expected));
+    let expected = fs::canonicalize(&expected).unwrap_or(expected);
+    let actual = fs::canonicalize(&args.socket).unwrap_or_else(|_| args.socket.clone());
+    assert_eq!(
+        actual,
+        expected,
+        "socket path mismatch: actual={} expected={}",
+        actual.display(),
+        expected.display(),
+    );
 }
