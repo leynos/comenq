@@ -167,6 +167,14 @@ impl Config {
 
     /// Load the configuration using command-line overrides and environment
     /// variables.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use comenqd::config::Config;
+    /// let cfg = Config::load().expect("load config");
+    /// println!("{}", cfg.socket_path.display());
+    /// ```
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn load() -> Result<Self, ortho_config::OrthoError> {
         let args = CliArgs::parse();
@@ -176,6 +184,16 @@ impl Config {
     /// Test-only helper that loads the configuration from the specified path,
     /// merging `COMENQD_*` environment variables and CLI arguments over file
     /// values.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use comenqd::config::Config;
+    /// use std::env;
+    /// let config_path = env::temp_dir().join("comenqd_config.toml");
+    /// let cfg = Config::from_file(&config_path)
+    ///     .expect("load config");
+    /// ```
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
     #[cfg_attr(

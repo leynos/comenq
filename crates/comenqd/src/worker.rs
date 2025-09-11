@@ -115,6 +115,17 @@ pub struct WorkerControl {
 
 impl WorkerControl {
     /// Create a new [`WorkerControl`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use comenqd::worker::{WorkerControl, WorkerHooks};
+    /// use tokio::sync::watch;
+    ///
+    /// let (_tx, rx) = watch::channel(());
+    /// let hooks = WorkerHooks::default();
+    /// let control = WorkerControl::new(rx, hooks);
+    /// ```
     pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
         Self { shutdown, hooks }
     }
