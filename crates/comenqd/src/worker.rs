@@ -94,6 +94,34 @@ impl WorkerHooks {
         Ok(())
     }
 
+    /// Waits for the specified number of seconds or until a shutdown is signalled.
+    ///
+    /// # Arguments
+    ///
+    /// - `secs` - Number of seconds to wait before continuing.
+    /// - `shutdown` - Watch channel signalled when the worker should cease waiting.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use tokio::sync::watch;
+    /// use comenqd::worker::WorkerHooks;
+    ///
+    /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
+    /// let (tx, mut rx) = watch::channel(());
+    ///
+    /// // Wait for the full second when no shutdown signal is sent.
+    /// WorkerHooks::wait_or_shutdown(1, &mut rx).await;
+    ///
+    /// // Sending a shutdown signal returns immediately.
+    /// let mut rx = tx.subscribe();
+    /// tx.send(()).expect("notify shutdown");
+    /// WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+    /// # });
+    /// ```
+    ///
+    /// The function returns after either the timeout or a shutdown signal,
+    /// without indicating which occurred. Passing `secs = 0` returns immediately.
     pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
