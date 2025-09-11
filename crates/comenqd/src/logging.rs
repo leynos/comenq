@@ -8,11 +8,26 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::{EnvFilter, fmt};
 
 /// Initialize the global tracing subscriber.
+///
+/// # Examples
+///
+/// ```rust
+/// use comenqd::logging::init;
+/// init();
+/// ```
 pub fn init() {
     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
 }
 
 /// Initialize logging with a custom writer.
+///
+/// # Examples
+///
+/// ```rust
+/// use comenqd::logging::init_with_writer;
+/// use tracing_subscriber::fmt;
+/// init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::sink));
+/// ```
 pub fn init_with_writer<W>(writer: W)
 where
     W: for<'a> MakeWriter<'a> + Send + Sync + 'static,

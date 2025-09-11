@@ -19,11 +19,27 @@ pub struct RepoSlug {
 
 impl RepoSlug {
     /// Repository owner.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use comenq::RepoSlug;
+    /// let slug: RepoSlug = "octocat/hello-world".parse().expect("slug parses");
+    /// assert_eq!(slug.owner(), "octocat");
+    /// ```
     pub fn owner(&self) -> &str {
         &self.owner
     }
 
     /// Repository name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use comenq::RepoSlug;
+    /// let slug: RepoSlug = "octocat/hello-world".parse().expect("slug parses");
+    /// assert_eq!(slug.repo(), "hello-world");
+    /// ```
     pub fn repo(&self) -> &str {
         &self.repo
     }

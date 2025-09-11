@@ -21,6 +21,16 @@ use crate::supervisor::backoff;
 ///
 /// Removes any stale file at `path` before binding and sets its permissions to
 /// `0o660`.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use comenqd::listener::prepare_listener;
+/// use tempfile::tempdir;
+/// let dir = tempdir().expect("create tempdir");
+/// let sock = dir.path().join("sock");
+/// let listener = prepare_listener(&sock).expect("prepare socket");
+/// ```
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     // Remove any stale socket without a race-prone existence check.
     match stdfs::remove_file(path) {
