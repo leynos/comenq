@@ -173,7 +173,7 @@ impl Config {
     /// ```rust,no_run
     /// use comenqd::config::Config;
     /// let cfg = Config::load().expect("load config");
-    /// println!("{}", cfg.github_token);
+    /// println!("{}", cfg.socket_path.display());
     /// ```
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     pub fn load() -> Result<Self, ortho_config::OrthoError> {
@@ -189,8 +189,9 @@ impl Config {
     ///
     /// ```rust,no_run
     /// use comenqd::config::Config;
-    /// use std::path::Path;
-    /// let cfg = Config::from_file(Path::new("/etc/comenqd/config.toml"))
+    /// use std::env;
+    /// let config_path = env::temp_dir().join("comenqd_config.toml");
+    /// let cfg = Config::from_file(&config_path)
     ///     .expect("load config");
     /// ```
     #[cfg(any(test, feature = "test-support"))]

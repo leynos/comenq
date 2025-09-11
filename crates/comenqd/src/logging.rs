@@ -9,11 +9,18 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 /// Initialize the global tracing subscriber.
 ///
+/// Call `init` before any logging statements to avoid missing logs.
+///
 /// # Examples
 ///
-/// ```rust
-/// use comenqd::logging::init;
-/// init();
+/// ```rust,no_run
+/// use crate::logging::init;
+///
+/// fn main() {
+///     // Initialize logging as early as possible.
+///     init();
+///     tracing::info!("Logging is initialized!");
+/// }
 /// ```
 pub fn init() {
     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
@@ -23,10 +30,13 @@ pub fn init() {
 ///
 /// # Examples
 ///
-/// ```rust
-/// use comenqd::logging::init_with_writer;
+/// ```rust,no_run
+/// use crate::logging::init_with_writer;
 /// use tracing_subscriber::fmt;
-/// init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::sink));
+///
+/// fn main() {
+///     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
+/// }
 /// ```
 pub fn init_with_writer<W>(writer: W)
 where
