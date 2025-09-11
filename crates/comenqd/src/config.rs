@@ -67,7 +67,24 @@ pub struct Config {
 #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
 impl From<test_support::daemon::TestConfig> for Config {
     fn from(value: test_support::daemon::TestConfig) -> Self {
-        Self::from(&value)
+        let test_support::daemon::TestConfig {
+            github_token,
+            socket_path,
+            queue_path,
+            cooldown_period_seconds,
+            restart_min_delay_ms,
+            github_api_timeout_secs,
+            client_channel_capacity,
+        } = value;
+        Self {
+            github_token,
+            socket_path,
+            queue_path,
+            cooldown_period_seconds,
+            restart_min_delay_ms,
+            github_api_timeout_secs,
+            client_channel_capacity,
+        }
     }
 }
 
