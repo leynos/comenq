@@ -31,8 +31,8 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     remove_env_var("COMENQD_SOCKET_PATH");
 }
 
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[given("an invalid configuration file")]
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
 fn invalid_configuration_file(world: &mut ConfigWorld) {
     let dir = TempDir::new().expect("create temp dir");
     let path = dir.path().join("config.toml");
@@ -41,8 +41,8 @@ fn invalid_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(path);
 }
 
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[given("a configuration file without github_token")]
+#[expect(clippy::expect_used, reason = "test setup uses expect")]
 fn config_file_without_token(world: &mut ConfigWorld) {
     let dir = TempDir::new().expect("create temp dir");
     let path = dir.path().join("config.toml");
@@ -68,6 +68,11 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) {
     world.dir = Some(dir);
     world.path = Some(path);
     remove_env_var("COMENQD_SOCKET_PATH");
+}
+
+#[given(regex = r#"^a configuration file with token \"(.+)\" and no cooldown_period_seconds$"#)]
+fn config_without_cooldown(world: &mut ConfigWorld, token: String) {
+    config_file_with_token(world, token);
 }
 
 #[given("a missing configuration file")]
@@ -115,6 +120,14 @@ fn config_loading_fails(world: &mut ConfigWorld) {
 fn socket_path_is(world: &mut ConfigWorld, expected: String) {
     match world.result.take() {
         Some(Ok(cfg)) => assert_eq!(cfg.socket_path, PathBuf::from(expected)),
+        other => panic!("expected success, got {other:?}"),
+    }
+}
+
+#[then(regex = r"^cooldown_period_seconds is ([0-9]+)$")]
+fn cooldown_period_seconds_is(world: &mut ConfigWorld, expected: u64) {
+    match world.result.take() {
+        Some(Ok(cfg)) => assert_eq!(cfg.cooldown_period_seconds, expected),
         other => panic!("expected success, got {other:?}"),
     }
 }
