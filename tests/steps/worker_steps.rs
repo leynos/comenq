@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::{WorkerControl, WorkerHooks, run_worker};
+use comenqd::daemon::{WorkerControl, WorkerHooks, is_metadata_file, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -31,9 +31,6 @@ fn coverage_timeout_multiplier() -> u32 {
     }
 }
 
-fn is_metadata_file(name: &str) -> bool {
-    matches!(name, "version" | "recv.lock")
-}
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,

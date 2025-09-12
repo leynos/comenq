@@ -4,7 +4,7 @@ mod util;
 
 use comenqd::config::Config;
 use comenqd::daemon::{
-    WorkerControl, WorkerHooks,
+    WorkerControl, WorkerHooks, is_metadata_file,
     listener::{handle_client, prepare_listener, run_listener},
     queue_writer, run, run_worker,
 };
@@ -337,7 +337,7 @@ mod worker_tests {
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                name != "version" && name != "recv.lock"
+                !is_metadata_file(&name)
             })
             .count();
         assert_eq!(

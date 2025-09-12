@@ -62,6 +62,20 @@ pub struct WorkerHooks {
     pub drained: Option<Arc<Notify>>,
 }
 
+/// Checks whether a file name represents queue metadata.
+///
+/// # Examples
+///
+/// ```
+/// use comenqd::daemon::is_metadata_file;
+/// assert!(is_metadata_file("version"));
+/// assert!(!is_metadata_file("0001"));
+/// ```
+#[cfg_attr(not(test), allow(dead_code, reason = "test helper"))]
+pub fn is_metadata_file(name: &str) -> bool {
+    matches!(name, "version" | "recv.lock")
+}
+
 impl WorkerHooks {
     fn notify_enqueued(&self) {
         if let Some(n) = &self.enqueued {
@@ -85,7 +99,7 @@ impl WorkerHooks {
                 .any(|e| {
                     let name = e.file_name();
                     let name = name.to_string_lossy();
-                    name != "version" && name != "recv.lock"
+                    !is_metadata_file(&name)
                 });
             if empty {
                 n.notify_waiters();

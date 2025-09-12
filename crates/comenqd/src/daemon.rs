@@ -16,7 +16,7 @@ pub use crate::supervisor::run;
 /// Run the worker that drains the queue and talks to the GitHub API.
 pub use crate::worker::run_worker;
 /// Control handle and lifecycle hooks for the worker task.
-pub use crate::worker::{WorkerControl, WorkerHooks};
+pub use crate::worker::{WorkerControl, WorkerHooks, is_metadata_file};
 
 /// Listener utilities for accepting client connections.
 ///
