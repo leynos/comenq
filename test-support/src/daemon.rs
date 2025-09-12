@@ -3,8 +3,6 @@
 //! Provides constructors for temporary daemon configurations and simplified
 //! creation of [`Octocrab`] clients targeting a [`MockServer`].
 
-#![expect(clippy::expect_used, reason = "simplify test setup")]
-
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use octocrab::Octocrab;
@@ -112,6 +110,10 @@ impl TestConfig {
 ///
 /// The client is initialised with a placeholder token and its base URL
 /// configured to the mock server's URI.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper prefers descriptive panics over unwrap"
+)]
 pub fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
     Arc::new(
         Octocrab::builder()
