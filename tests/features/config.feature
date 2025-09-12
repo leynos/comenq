@@ -31,3 +31,8 @@ Feature: Daemon configuration
     Given a configuration file with token "abc" and no socket_path
     When the config is loaded
     Then socket path is "/run/comenq/comenq.sock"
+
+  Scenario: uses default cooldown period
+    Given a configuration file with token "abc" and no cooldown_period_seconds
+    When the config is loaded
+    Then cooldown_period_seconds is 960
