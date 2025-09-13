@@ -334,11 +334,7 @@ mod worker_tests {
         let data_files = stdfs::read_dir(&ctx.cfg.queue_path)
             .expect("read queue directory")
             .filter_map(Result::ok)
-            .filter(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                !is_metadata_file(&name)
-            })
+            .filter(|e| !is_metadata_file(e.file_name()))
             .count();
         assert_eq!(
             data_files, 0,

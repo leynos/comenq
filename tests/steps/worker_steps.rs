@@ -187,11 +187,7 @@ async fn queue_retains(world: &mut WorkerWorld) {
     let job_count = std::fs::read_dir(&cfg.queue_path)
         .expect("queue directory should be readable")
         .filter_map(Result::ok)
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            !is_metadata_file(&name)
-        })
+        .filter(|e| !is_metadata_file(e.file_name()))
         .count();
     assert!(job_count > 0, "queue should retain at least one job file");
     world.shutdown_and_join().await;

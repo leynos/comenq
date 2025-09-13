@@ -14,6 +14,8 @@ use tokio::sync::{Notify, watch};
 use yaque::Receiver;
 
 #[cfg(test)]
+use crate::util::is_metadata_file;
+#[cfg(test)]
 use std::fs as stdfs;
 #[cfg(test)]
 use std::path::Path;
@@ -62,20 +64,6 @@ pub struct WorkerHooks {
     pub drained: Option<Arc<Notify>>,
 }
 
-/// Checks whether a file name represents queue metadata.
-///
-/// # Examples
-///
-/// ```
-/// use comenqd::daemon::is_metadata_file;
-/// assert!(is_metadata_file("version"));
-/// assert!(!is_metadata_file("0001"));
-/// ```
-#[cfg_attr(not(test), allow(dead_code, reason = "test helper"))]
-pub fn is_metadata_file(name: &str) -> bool {
-    matches!(name, "version" | "recv.lock")
-}
-
 impl WorkerHooks {
     fn notify_enqueued(&self) {
         if let Some(n) = &self.enqueued {
@@ -96,11 +84,7 @@ impl WorkerHooks {
             // consider the directory empty when no other files remain.
             let empty = !stdfs::read_dir(queue_path)?
                 .filter_map(Result::ok)
-                .any(|e| {
-                    let name = e.file_name();
-                    let name = name.to_string_lossy();
-                    !is_metadata_file(&name)
-                });
+                .any(|e| !is_metadata_file(e.file_name()));
             if empty {
                 n.notify_waiters();
             }
