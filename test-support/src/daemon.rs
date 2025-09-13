@@ -117,10 +117,10 @@ impl TestConfig {
 pub fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
     Arc::new(
         Octocrab::builder()
-            .personal_token("t".to_string())
+            .personal_token("t".to_owned())
             .base_uri(server.uri())
-            .expect("base_uri")
+            .expect("failed to parse MockServer URI for Octocrab base_uri")
             .build()
-            .expect("build octocrab"),
+            .expect("failed to build Octocrab client"),
     )
 }

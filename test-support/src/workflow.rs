@@ -37,10 +37,10 @@ pub fn uses_goreleaser(yaml: &str) -> Result<bool, serde_yaml::Error> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used, reason = "simplify test output")]
     use super::uses_goreleaser;
 
     #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_goreleaser() {
         let yaml = r"
         jobs:
@@ -52,6 +52,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
     fn missing_goreleaser() {
         let yaml = "jobs: {}";
         assert!(!uses_goreleaser(yaml).expect("parse"));
