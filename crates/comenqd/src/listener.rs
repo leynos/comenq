@@ -19,8 +19,8 @@ use crate::supervisor::backoff;
 
 /// Prepare a Unix domain socket for the listener.
 ///
-/// Removes any stale file at `path` before binding and sets its permissions to
-/// `0o660`.
+/// Atomically replaces any file at `path` by binding to a temporary socket and
+/// renaming it into place with permissions `0o660`.
 ///
 /// # Examples
 ///
@@ -32,14 +32,23 @@ use crate::supervisor::backoff;
 /// let listener = prepare_listener(&sock).expect("prepare socket");
 /// ```
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
-    // Remove any stale socket without a race-prone existence check.
-    match stdfs::remove_file(path) {
-        Ok(_) => {}
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-        Err(_) => {}
-    }
-    let listener = UnixListener::bind(path)?;
-    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("socket path missing parent"))?;
+    let unique = format!(
+        ".{}.{}.{}",
+        path.file_name().unwrap().to_string_lossy(),
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
+    let tmp = parent.join(unique);
+    let listener = UnixListener::bind(&tmp)?;
+    stdfs::set_permissions(&tmp, stdfs::Permissions::from_mode(0o660))?;
+    stdfs::rename(&tmp, path).inspect_err(|_| {
+        let _ = stdfs::remove_file(&tmp);
+    })?;
     Ok(listener)
 }
 
@@ -133,4 +142,37 @@ pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Res
         .await
         .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use tempfile::tempdir;
+
+    #[test]
+    fn prepare_listener_prevents_pre_bind_race() {
+        let dir = tempdir().expect("create tempdir");
+        let sock = dir.path().join("sock");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let sock_clone = sock.clone();
+        let attacker = thread::spawn(move || {
+            while !stop_clone.load(Ordering::SeqCst) {
+                let _ = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&sock_clone);
+            }
+        });
+        let listener = prepare_listener(&sock).expect("prepare listener");
+        stop.store(true, Ordering::SeqCst);
+        attacker.join().expect("attacker thread");
+        let meta = std::fs::metadata(&sock).expect("metadata");
+        assert!(meta.file_type().is_socket());
+        drop(listener);
+    }
 }
