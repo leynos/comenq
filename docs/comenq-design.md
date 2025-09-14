@@ -488,10 +488,13 @@ Its workflow is as follows:
    accepting a new connection, it immediately spawns a new, short-lived `tokio`
    task to handle that specific client.
 
-5. **Handle Client:** This per-client task will read all data from the
-   `UnixStream`, deserialize the received JSON into a `CommentRequest` struct,
-   and then use the sender half of the `yaque` channel to enqueue the request.
-   After enqueuing, the task terminates.
+5. **Handle Client:** This per-client task reads at most 1 MiB within
+   `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
+   rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
+   `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
+   adjusted. It deserialises the received JSON into a `CommentRequest` and uses
+   the sender half of the `yaque` channel to enqueue the request. After
+   enqueuing, the task terminates.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting

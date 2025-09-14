@@ -111,19 +111,20 @@ pub async fn run_listener(
 /// # Errors
 /// Fails if reading from the socket or parsing JSON fails, or if the queue
 /// writer has shut down.
-const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
-const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
+pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 
 pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
     let mut buffer = Vec::with_capacity(8 * 1024);
-    let mut limited = stream.take(MAX_REQUEST_BYTES as u64);
+    // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
+    let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
     tokio::time::timeout(
         Duration::from_secs(CLIENT_READ_TIMEOUT_SECS),
         limited.read_to_end(&mut buffer),
     )
     .await
     .map_err(|_| anyhow::anyhow!("client read timed out"))??;
-    if buffer.len() >= MAX_REQUEST_BYTES {
+    if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {} bytes", MAX_REQUEST_BYTES);
     }
     let request: CommentRequest = serde_json::from_slice(&buffer)?;
