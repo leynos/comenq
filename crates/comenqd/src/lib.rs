@@ -19,6 +19,7 @@ pub mod config;
 
 mod listener;
 mod supervisor;
+mod util;
 mod worker;
 
 pub mod daemon;

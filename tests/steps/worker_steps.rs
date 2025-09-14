@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
-use comenqd::daemon::{WorkerControl, WorkerHooks, run_worker};
+use comenqd::daemon::{WorkerControl, WorkerHooks, is_metadata_file, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -31,9 +31,6 @@ fn coverage_timeout_multiplier() -> u32 {
     }
 }
 
-fn is_metadata_file(name: &str) -> bool {
-    matches!(name, "version" | "recv.lock")
-}
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,
@@ -190,11 +187,7 @@ async fn queue_retains(world: &mut WorkerWorld) {
     let job_count = std::fs::read_dir(&cfg.queue_path)
         .expect("queue directory should be readable")
         .filter_map(Result::ok)
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            !is_metadata_file(&name)
-        })
+        .filter(|e| !is_metadata_file(e.file_name()))
         .count();
     assert!(job_count > 0, "queue should retain at least one job file");
     world.shutdown_and_join().await;

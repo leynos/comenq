@@ -18,6 +18,10 @@ pub use crate::worker::run_worker;
 /// Control handle and lifecycle hooks for the worker task.
 pub use crate::worker::{WorkerControl, WorkerHooks};
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use crate::util::is_metadata_file;
+
 /// Listener utilities for accepting client connections.
 ///
 /// Re-exports functions from the internal `listener` module so integration tests

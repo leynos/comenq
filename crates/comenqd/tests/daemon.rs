@@ -4,7 +4,7 @@ mod util;
 
 use comenqd::config::Config;
 use comenqd::daemon::{
-    WorkerControl, WorkerHooks,
+    WorkerControl, WorkerHooks, is_metadata_file,
     listener::{handle_client, prepare_listener, run_listener},
     queue_writer, run, run_worker,
 };
@@ -334,11 +334,7 @@ mod worker_tests {
         let data_files = stdfs::read_dir(&ctx.cfg.queue_path)
             .expect("read queue directory")
             .filter_map(Result::ok)
-            .filter(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                name != "version" && name != "recv.lock"
-            })
+            .filter(|e| !is_metadata_file(e.file_name()))
             .count();
         assert_eq!(
             data_files, 0,

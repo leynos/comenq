@@ -14,6 +14,8 @@ use tokio::sync::{Notify, watch};
 use yaque::Receiver;
 
 #[cfg(test)]
+use crate::util::is_metadata_file;
+#[cfg(test)]
 use std::fs as stdfs;
 #[cfg(test)]
 use std::path::Path;
@@ -82,11 +84,7 @@ impl WorkerHooks {
             // consider the directory empty when no other files remain.
             let empty = !stdfs::read_dir(queue_path)?
                 .filter_map(Result::ok)
-                .any(|e| {
-                    let name = e.file_name();
-                    let name = name.to_string_lossy();
-                    name != "version" && name != "recv.lock"
-                });
+                .any(|e| !is_metadata_file(e.file_name()));
             if empty {
                 n.notify_waiters();
             }
