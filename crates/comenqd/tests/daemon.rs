@@ -283,7 +283,7 @@ mod worker_tests {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
-        let mut drained_notified = drained.notified();
+        let drained_notified = drained.notified();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let control = WorkerControl {
             shutdown: shutdown_rx,
@@ -299,7 +299,7 @@ mod worker_tests {
             DRAINED_NOTIFICATION,
             "worker drained notification",
             || async {
-                (&mut drained_notified).await;
+                drained_notified.await;
                 Ok(())
             },
         )
@@ -354,7 +354,7 @@ mod worker_tests {
         let server = Arc::new(ctx.server);
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
-        let mut enqueued_notified = enqueued.notified();
+        let enqueued_notified = enqueued.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
@@ -366,7 +366,7 @@ mod worker_tests {
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
         timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || async {
-            (&mut enqueued_notified).await;
+            enqueued_notified.await;
             Ok(())
         })
         .await
