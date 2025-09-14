@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, reason = "simplify test failure output")]
+//! Behavioural test steps for comment request serialisation and parsing.
 
 use comenq_lib::CommentRequest;
 use cucumber::{World, given, then, when};
@@ -21,6 +21,7 @@ fn a_default_comment_request(world: &mut CommentWorld) {
 }
 
 #[when("it is serialised")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 fn it_is_serialised(world: &mut CommentWorld) {
     if let Some(req) = world.request.take() {
         world.json =
@@ -29,6 +30,7 @@ fn it_is_serialised(world: &mut CommentWorld) {
 }
 
 #[then("the JSON is correct")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 fn the_json_is(world: &mut CommentWorld) {
     match world.json.take() {
         Some(actual) => {

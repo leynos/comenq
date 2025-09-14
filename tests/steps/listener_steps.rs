@@ -1,6 +1,4 @@
 //! Behavioural test steps for the listener task.
-#![expect(clippy::expect_used, reason = "simplify test failure output")]
-#![expect(clippy::unwrap_used, reason = "simplify test failure output")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +33,11 @@ impl std::fmt::Debug for ListenerWorld {
 }
 
 #[given("a running listener task")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "simplify test failure output"
+)]
 async fn running_listener(world: &mut ListenerWorld) {
     let dir = TempDir::new().expect("tempdir");
     let cfg = Arc::new(Config::from(temp_config(&dir)));
@@ -72,6 +75,11 @@ async fn running_listener(world: &mut ListenerWorld) {
 }
 
 #[when("a client sends a valid request")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "simplify test failure output"
+)]
 async fn client_sends_valid(world: &mut ListenerWorld) {
     let cfg = world.cfg.as_ref().unwrap();
     let mut stream = UnixStream::connect(&cfg.socket_path)
@@ -89,6 +97,11 @@ async fn client_sends_valid(world: &mut ListenerWorld) {
 }
 
 #[when("a client sends invalid JSON")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "simplify test failure output"
+)]
 async fn client_sends_invalid(world: &mut ListenerWorld) {
     let cfg = world.cfg.as_ref().unwrap();
     let mut stream = UnixStream::connect(&cfg.socket_path)
@@ -99,6 +112,11 @@ async fn client_sends_invalid(world: &mut ListenerWorld) {
 }
 
 #[then("the request is enqueued")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "simplify test failure output"
+)]
 async fn request_enqueued(world: &mut ListenerWorld) {
     let receiver = world.receiver.as_mut().unwrap();
     let guard = receiver.recv().await.expect("recv");
@@ -107,6 +125,7 @@ async fn request_enqueued(world: &mut ListenerWorld) {
 }
 
 #[then("the request is rejected")]
+#[expect(clippy::unwrap_used, reason = "simplify test failure output")]
 async fn request_rejected(world: &mut ListenerWorld) {
     let receiver = world.receiver.as_mut().unwrap();
     let res = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await;

@@ -1,8 +1,4 @@
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
+//! Behavioural test steps for the client binary's interaction with the daemon.
 
 use comenq::{Args, ClientError, run};
 use comenq_lib::CommentRequest;
@@ -20,6 +16,7 @@ pub struct ClientWorld {
 }
 
 #[given("a dummy daemon listening on a socket")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 fn dummy_daemon(world: &mut ClientWorld) {
     let dir = TempDir::new().expect("tempdir");
     let socket = dir.path().join("sock");
@@ -43,6 +40,7 @@ fn dummy_daemon(world: &mut ClientWorld) {
 }
 
 #[given("no daemon is listening on a socket")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 fn no_daemon(world: &mut ClientWorld) {
     let dir = TempDir::new().expect("tempdir");
     let socket = dir.path().join("sock");
@@ -56,12 +54,18 @@ fn no_daemon(world: &mut ClientWorld) {
 }
 
 #[when("the client sends the request")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 async fn send_request(world: &mut ClientWorld) {
     let args = world.args.clone().expect("args");
     world.result = Some(run(args).await);
 }
 
 #[then("the daemon receives the request")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "simplify test failure output"
+)]
 async fn daemon_receives(world: &mut ClientWorld) {
     let handle = world.server.take().expect("server handle");
     let data = handle.await.expect("join");

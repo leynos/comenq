@@ -3,7 +3,6 @@
 //! These steps drive the Cucumber scenarios that verify valid and
 //! invalid command line inputs, including the optional `--socket`
 //! flag. They ensure the parser surface behaves as documented.
-#![expect(clippy::expect_used, reason = "simplify test failure output")]
 
 use clap::Parser;
 use cucumber::{World, given, then, when};
@@ -53,6 +52,7 @@ fn socket_path(world: &mut CliWorld, path: String) {
 }
 
 #[when("they are parsed")]
+#[expect(clippy::expect_used, reason = "simplify test failure output")]
 fn they_are_parsed(world: &mut CliWorld) {
     let args = world
         .args
