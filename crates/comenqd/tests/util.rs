@@ -91,6 +91,13 @@ where
     Err(format!("{operation_name} exhausted all retry attempts"))
 }
 
+#[test]
+fn uses_all_test_complexity_variants() {
+    let _ = TimeoutConfig::new(1, TestComplexity::Simple);
+    let _ = TimeoutConfig::new(1, TestComplexity::Moderate);
+    let _ = TimeoutConfig::new(1, TestComplexity::Complex);
+}
+
 /// Map a task [`JoinError`] into a concise diagnostic message.
 ///
 /// ```ignore
