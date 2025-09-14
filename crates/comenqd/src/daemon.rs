@@ -28,5 +28,7 @@ pub use crate::util::is_metadata_file;
 /// can exercise socket preparation and client handling without exposing the
 /// entire module as part of the public API.
 pub mod listener {
-    pub use crate::listener::{handle_client, prepare_listener, run_listener};
+    pub use crate::listener::{
+        CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES, handle_client, prepare_listener, run_listener,
+    };
 }
