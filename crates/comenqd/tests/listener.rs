@@ -1,4 +1,5 @@
-//! Tests for listener behaviour. Freezes Tokio time, advances beyond the client read timeout, and asserts idle connections time out.
+//! Tests for listener behaviour. Freezes Tokio time, advances beyond the client
+//! read timeout, and asserts idle connections time out.
 
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
