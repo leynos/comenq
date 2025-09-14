@@ -71,16 +71,8 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) {
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\" and no cooldown_period_seconds$"#)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "cucumber requires owned values"
-)]
-#[expect(
-    clippy::redundant_clone,
-    reason = "cucumber framework passes tokens by value"
-)]
 fn config_without_cooldown(world: &mut ConfigWorld, token: String) {
-    config_file_with_token(world, token.clone());
+    config_file_with_token(world, token);
 }
 
 #[given("a missing configuration file")]
