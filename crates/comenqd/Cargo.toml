@@ -21,6 +21,7 @@ ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
 test-support = { workspace = true, optional = true }
 backon = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 rstest = { workspace = true }

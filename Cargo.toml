@@ -58,6 +58,7 @@ rstest = "0.18.0"
 wiremock = "0.6"
 test-support = { path = "test-support" }
 backon = "1.5.2"
+uuid = { version = "1", features = ["v4"] }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
