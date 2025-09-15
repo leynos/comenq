@@ -34,9 +34,12 @@ use crate::supervisor::backoff;
 /// ```
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     let parent = path.parent().context("socket path missing parent")?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("socket path missing file name"))?;
     let tmp = parent.join(format!(
         ".{}.{}",
-        path.file_name().unwrap().to_string_lossy(),
+        file_name.to_string_lossy(),
         Uuid::new_v4()
     ));
     let listener = UnixListener::bind(&tmp)
