@@ -24,9 +24,11 @@ pub use crate::util::is_metadata_file;
 
 /// Listener utilities for accepting client connections.
 ///
-/// Re-exports functions from the internal `listener` module so integration tests
-/// can exercise socket preparation and client handling without exposing the
-/// entire module as part of the public API.
+/// Re-exports selected listener APIs (functions and constants) so integration
+/// tests can exercise socket preparation, client handling, and read limits
+/// without exposing the entire `listener` module publicly.
 pub mod listener {
-    pub use crate::listener::{handle_client, prepare_listener, run_listener};
+    pub use crate::listener::{
+        CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES, handle_client, prepare_listener, run_listener,
+    };
 }

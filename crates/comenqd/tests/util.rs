@@ -11,15 +11,14 @@ pub const COVERAGE_MULTIPLIER: u64 = 5;
 pub const CI_MULTIPLIER: u64 = 2;
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TestComplexity {
-    #[expect(dead_code, reason = "Constructed in integration tests but unused here")]
     Simple,
     Moderate,
     Complex,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TimeoutConfig {
     base_seconds: u64,
     complexity: TestComplexity,
@@ -92,6 +91,14 @@ where
     Err(format!("{operation_name} exhausted all retry attempts"))
 }
 
+#[rstest]
+#[case(TestComplexity::Simple)]
+#[case(TestComplexity::Moderate)]
+#[case(TestComplexity::Complex)]
+fn uses_all_test_complexity_variants(#[case] complexity: TestComplexity) {
+    drop(TimeoutConfig::new(1, complexity));
+}
+
 /// Map a task [`JoinError`] into a concise diagnostic message.
 ///
 /// ```ignore
@@ -110,7 +117,7 @@ pub(crate) fn join_err(name: &str, e: JoinError) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum JoinScenario {
     Cancelled,
     Panicked,

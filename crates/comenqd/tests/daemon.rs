@@ -283,27 +283,26 @@ mod worker_tests {
         let ctx = ctx.await;
         let server = Arc::new(ctx.server);
         let drained = Arc::new(Notify::new());
-        let mut drained_notified = drained.notified();
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
                 enqueued: None,
                 idle: None,
-                drained: Some(drained),
+                drained: Some(drained.clone()),
             },
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        if let Err(e) = timeout_with_retries(
-            DRAINED_NOTIFICATION,
-            "worker drained notification",
-            || async {
-                (&mut drained_notified).await;
-                Ok(())
-            },
-        )
-        .await
+        if let Err(e) =
+            timeout_with_retries(DRAINED_NOTIFICATION, "worker drained notification", || {
+                let drained = drained.clone();
+                async move {
+                    drained.notified().await;
+                    Ok(())
+                }
+            })
+            .await
         {
             let diagnostics = diagnose_queue_state(&ctx.cfg, &server, 0).await;
             tracing::error!("Timeout waiting for worker drained notification: {e}");
@@ -354,20 +353,22 @@ mod worker_tests {
         let server = Arc::new(ctx.server);
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let enqueued = Arc::new(Notify::new());
-        let mut enqueued_notified = enqueued.notified();
         let control = WorkerControl {
             shutdown: shutdown_rx,
             hooks: WorkerHooks {
-                enqueued: Some(enqueued),
+                enqueued: Some(enqueued.clone()),
                 idle: None,
                 drained: None,
             },
         };
         let h = tokio::spawn(run_worker(ctx.cfg.clone(), ctx.rx, ctx.octo, control));
 
-        timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || async {
-            (&mut enqueued_notified).await;
-            Ok(())
+        timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || {
+            let enqueued = enqueued.clone();
+            async move {
+                enqueued.notified().await;
+                Ok(())
+            }
         })
         .await
         .expect("worker picked up job");
