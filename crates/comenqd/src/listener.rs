@@ -20,8 +20,10 @@ use crate::supervisor::backoff;
 
 /// Prepare a Unix domain socket for the listener.
 ///
-/// Atomically replaces any file at `path` by binding to a temporary socket and
-/// renaming it into place with permissions `0o660`.
+/// Atomically replaces any file at `path` by binding to a temporary socket in
+/// the same parent directory (so `rename(2)` is atomic on the same filesystem),
+/// setting its permissions to `0o660`, and then renaming it into place. The
+/// final permissions are enforced again after the rename.
 ///
 /// # Examples
 ///
@@ -44,17 +46,24 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     ));
     let listener = UnixListener::bind(&tmp)
         .with_context(|| format!("binding to temp socket {}", tmp.display()))?;
+    // Ensure correct permissions before the temp socket becomes visible at the final path.
+    stdfs::set_permissions(&tmp, stdfs::Permissions::from_mode(0o660))
+        .with_context(|| format!("setting permissions on {}", tmp.display()))?;
 
-    stdfs::rename(&tmp, path).inspect_err(|_| {
-        if let Err(e) = stdfs::remove_file(&tmp) {
-            tracing::error!(
-                "failed to remove orphaned socket file {}: {}",
-                tmp.display(),
-                e
-            );
-        }
-    })?;
-    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))?;
+    stdfs::rename(&tmp, path)
+        .inspect_err(|_| {
+            if let Err(e) = stdfs::remove_file(&tmp) {
+                tracing::error!(
+                    "failed to remove orphaned socket file {}: {}",
+                    tmp.display(),
+                    e
+                );
+            }
+        })
+        .with_context(|| format!("renaming socket {} -> {}", tmp.display(), path.display()))?;
+    // Belt-and-braces: enforce final permissions in case of ACL quirkiness.
+    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))
+        .with_context(|| format!("setting permissions on {}", path.display()))?;
     Ok(listener)
 }
 
