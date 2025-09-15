@@ -11,14 +11,14 @@ pub const COVERAGE_MULTIPLIER: u64 = 5;
 pub const CI_MULTIPLIER: u64 = 2;
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TestComplexity {
     Simple,
     Moderate,
     Complex,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TimeoutConfig {
     base_seconds: u64,
     complexity: TestComplexity,
@@ -96,7 +96,7 @@ where
 #[case(TestComplexity::Moderate)]
 #[case(TestComplexity::Complex)]
 fn uses_all_test_complexity_variants(#[case] complexity: TestComplexity) {
-    let _ = TimeoutConfig::new(1, complexity);
+    drop(TimeoutConfig::new(1, complexity));
 }
 
 /// Map a task [`JoinError`] into a concise diagnostic message.
@@ -117,7 +117,7 @@ pub(crate) fn join_err(name: &str, e: JoinError) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum JoinScenario {
     Cancelled,
     Panicked,
