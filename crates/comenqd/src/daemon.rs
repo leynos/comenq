@@ -28,7 +28,10 @@ pub use crate::util::is_metadata_file;
 /// tests can exercise socket preparation, client handling, and read limits
 /// without exposing the entire `listener` module publicly.
 pub mod listener {
+    // Keep manual ordering so integration tests import the public API consistently.
+    #[rustfmt::skip]
     pub use crate::listener::{
-        CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES, handle_client, prepare_listener, run_listener,
+        handle_client, prepare_listener, run_listener,
+        CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES,
     };
 }

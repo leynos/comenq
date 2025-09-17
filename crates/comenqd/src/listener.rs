@@ -4,7 +4,7 @@
 //! persistent queue for processing by the worker.
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use comenq_lib::CommentRequest;
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
@@ -14,13 +14,16 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
 
 use crate::supervisor::backoff;
 
 /// Prepare a Unix domain socket for the listener.
 ///
-/// Removes any stale file at `path` before binding and sets its permissions to
-/// `0o660`.
+/// Atomically replaces any file at `path` by binding to a temporary socket in
+/// the same parent directory (so `rename(2)` is atomic on the same filesystem),
+/// setting its permissions to `0o660`, and then renaming it into place. The
+/// final permissions are enforced again after the rename.
 ///
 /// # Examples
 ///
@@ -32,14 +35,35 @@ use crate::supervisor::backoff;
 /// let listener = prepare_listener(&sock).expect("prepare socket");
 /// ```
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
-    // Remove any stale socket without a race-prone existence check.
-    match stdfs::remove_file(path) {
-        Ok(_) => {}
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-        Err(_) => {}
-    }
-    let listener = UnixListener::bind(path)?;
-    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))?;
+    let parent = path.parent().context("socket path missing parent")?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("socket path missing file name"))?;
+    let tmp = parent.join(format!(
+        ".{}.{}",
+        file_name.to_string_lossy(),
+        Uuid::new_v4()
+    ));
+    let listener = UnixListener::bind(&tmp)
+        .with_context(|| format!("binding to temp socket {}", tmp.display()))?;
+    // Ensure correct permissions before the temp socket becomes visible at the final path.
+    stdfs::set_permissions(&tmp, stdfs::Permissions::from_mode(0o660))
+        .with_context(|| format!("setting permissions on {}", tmp.display()))?;
+
+    stdfs::rename(&tmp, path)
+        .inspect_err(|_| {
+            if let Err(e) = stdfs::remove_file(&tmp) {
+                tracing::error!(
+                    "failed to remove orphaned socket file {}: {}",
+                    tmp.display(),
+                    e
+                );
+            }
+        })
+        .with_context(|| format!("renaming socket {} -> {}", tmp.display(), path.display()))?;
+    // Belt-and-braces: enforce final permissions in case of ACL quirkiness.
+    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))
+        .with_context(|| format!("setting permissions on {}", path.display()))?;
     Ok(listener)
 }
 
@@ -133,4 +157,40 @@ pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Res
         .await
         .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::FileTypeExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use tempfile::tempdir;
+
+    #[test]
+    fn prepare_listener_prevents_pre_bind_race() {
+        let dir = tempdir().expect("create tempdir");
+        let sock = dir.path().join("sock");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let sock_clone = sock.clone();
+        let attacker = thread::spawn(move || {
+            while !stop_clone.load(Ordering::SeqCst) {
+                let _ = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&sock_clone);
+                std::thread::yield_now();
+            }
+        });
+        let listener = prepare_listener(&sock).expect("prepare listener");
+        stop.store(true, Ordering::SeqCst);
+        attacker.join().expect("attacker thread");
+        // Avoid following symlinks when asserting the final on-disk type.
+        let meta = std::fs::symlink_metadata(&sock).expect("metadata");
+        assert!(meta.file_type().is_socket());
+        drop(listener);
+    }
 }
