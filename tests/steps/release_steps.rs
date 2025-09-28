@@ -4,7 +4,7 @@ use cucumber::{World, given, then, when};
 use regex::Regex;
 use serde_yaml::Value;
 use std::fs;
-use test_support::uses_goreleaser as workflow_uses_goreleaser;
+use test_support::uses_shared_release_actions as workflow_uses_shared_actions;
 
 #[derive(Debug, Default, World)]
 pub struct ReleaseWorld {
@@ -26,11 +26,11 @@ fn parse_yaml(world: &mut ReleaseWorld) {
     world.yaml = Some(serde_yaml::from_str(text).expect("parse yaml"));
 }
 
-#[then("the workflow uses goreleaser")]
+#[then("the workflow uses the shared release actions")]
 #[expect(clippy::expect_used, reason = "simplify test failure output")]
-fn assert_uses_goreleaser(world: &mut ReleaseWorld) {
+fn assert_uses_shared_actions(world: &mut ReleaseWorld) {
     let content = world.content.as_ref().expect("file still loaded");
-    assert!(workflow_uses_goreleaser(content).expect("parse"));
+    assert!(workflow_uses_shared_actions(content).expect("parse"));
 }
 
 #[then("the workflow triggers on tags")]

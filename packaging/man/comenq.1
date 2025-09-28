@@ -1,0 +1,37 @@
+.TH COMENQ 1 "May 2024" "comenq" "User Commands"
+.SH NAME
+comenq \- enqueue a GitHub pull request comment for the comenqd daemon
+.SH SYNOPSIS
+.B comenq
+.I owner/repo
+.I pr-number
+.I comment
+[
+.B --socket
+.I path
+]
+.SH DESCRIPTION
+The
+.B comenq
+command enqueues a comment request for the
+.BR comenqd (8)
+daemon.  It takes the target repository in
+.I owner/repo
+format, the pull request number, and the comment body to submit.
+.PP
+Use
+.B --socket
+to override the Unix Domain Socket path used to contact the daemon.  The
+socket defaults to
+.I /run/comenq/comenq.sock
+which matches the packaged systemd service configuration.
+.SH EXAMPLES
+Send a comment to pull request 42 of example/repo:
+.PP
+.RS
+.nf
+comenq example/repo 42 "Queued for review"
+.fi
+.RE
+.SH SEE ALSO
+.BR comenqd (8)

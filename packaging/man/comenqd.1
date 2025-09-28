@@ -1,0 +1,44 @@
+.TH COMENQD 8 "May 2024" "comenqd" "System Administration"
+.SH NAME
+comenqd \- daemon that posts queued GitHub pull request comments
+.SH SYNOPSIS
+.B comenqd
+[
+.B --config
+.I file
+]
+[
+.B --github-token
+.I token
+]
+[
+.B --socket-path
+.I path
+]
+[
+.B --queue-path
+.I path
+]
+.SH DESCRIPTION
+The
+.B comenqd
+daemon consumes comment requests queued by the
+.BR comenq (1)
+CLI and posts them to GitHub.  Configuration is loaded from
+.I /etc/comenqd/config.toml
+and may be overridden through command line options or
+environment variables prefixed with
+.BR COMENQD_.
+.PP
+The daemon is designed to run as a system service using the packaged
+systemd unit.  When launched manually it logs its effective socket and
+queue locations to the terminal.
+.SH FILES
+.TP
+.I /etc/comenqd/config.toml
+Default configuration file.
+.TP
+.I /var/lib/comenq/queue
+On-disk queue storage used for persistence across restarts.
+.SH SEE ALSO
+.BR comenq (1)
