@@ -1,3 +1,4 @@
+//! Stages the packaged client man page for installation.
 use std::{env, fs, path::PathBuf};
 
 fn main() {
@@ -10,7 +11,6 @@ fn copy_man_page() -> std::io::Result<()> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let source = manifest_dir.join("../../packaging/man/comenq.1");
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    fs::create_dir_all(&out_dir)?;
     let dest = out_dir.join("comenq.1");
     fs::copy(&source, &dest)?;
     println!("cargo:rerun-if-changed={}", source.display());
