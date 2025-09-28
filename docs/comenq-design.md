@@ -800,15 +800,18 @@ service.
 
 ### 4.4. Packaging and Release Workflow
 
-To simplify installation, the project uses GoReleaser. The declarative
-`.goreleaser.yaml` builds both binaries via the `goreleaser-rust` plugin,
-eliminating manual pre-build hooks. The `nfpms` section produces signed `.deb`
-and `.rpm` packages for Fedora and Ubuntu, embedding the hardened `systemd`
-service unit and lifecycle scripts that create the `comenq` user. This keeps
-packaging logic version controlled and repeatable. A GitHub Actions workflow
-triggers on version tags to run GoReleaser. It builds Linux packages and
-uploads them to a draft release. Mac support is currently deferred, so the
-workflow targets Linux only.
+To simplify installation, the project now relies on the composite actions
+published in `leynos/shared-actions`. The release workflow iterates over the
+`comenq` client and `comenqd` daemon for both the x86_64 and aarch64 GNU/Linux
+targets. `rust-build-release` provisions the correct Rust toolchain, compiles
+the workspace in release mode, and stages the man pages that each crate's build
+script copies from `packaging/man`. Packaging responsibility sits entirely with
+the shared `linux-packages` helper invoked by `rust-build-release`; it
+generates the transient `nfpm` manifest and emits `.deb` and `.rpm` artefacts
+for every matrix entry. The workflow uploads those artefacts to a draft GitHub
+Release via `softprops/action-gh-release`, preserving the manual review gate
+that existed in the GoReleaser-based flow. macOS support remains deferred, so
+the workflow targets Linux only.
 
 ## Section 5: Complete Source Code and Project Manifest
 
