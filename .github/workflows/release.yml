@@ -3,33 +3,72 @@ name: Release
 on:
   push:
     tags:
-      # Match semantic version tags (e.g. v1.2.3, v10.11.12, v12.3.7-beta7)
       - 'v*.*.*'
 
 jobs:
-  goreleaser:
+  build-packages:
+    name: Build ${{ matrix.bin }} for ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - bin: comenq
+            target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - bin: comenqd
+            target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - bin: comenq
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+          - bin: comenqd
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare release version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+      - name: Clean dist directory
+        run: rm -rf dist
+      - name: Build and package ${{ matrix.bin }}
+        uses: leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3
         with:
-          toolchain: stable
-          targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
-          cache: cargo
-      - name: Set up Go
-        uses: actions/setup-go@v6
+          target: ${{ matrix.target }}
+          bin-name: ${{ matrix.bin }}
+          version: ${{ env.RELEASE_VERSION }}
+          formats: deb,rpm
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
         with:
-          go-version: '1.21'
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+          name: ${{ matrix.bin }}-${{ matrix.arch }}
+          path: |
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/nfpm.yaml
+            dist/.man/**
+          if-no-files-found: error
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build-packages
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@v4
         with:
-          distribution: goreleaser
-          # Use a fixed version to ensure reproducibility
-          version: v1.24.0
-          args: release --clean
+          path: release-artifacts
+      - name: Create draft release
+        uses: softprops/action-gh-release@6cbd405e2c4e67a21c47fa9e383d020e4e28b836
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: |
+            release-artifacts/**/*.deb
+            release-artifacts/**/*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
