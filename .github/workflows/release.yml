@@ -59,7 +59,7 @@ jobs:
     needs: build-packages
     steps:
       - name: Download artefacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-artifacts
       - name: Create draft release
