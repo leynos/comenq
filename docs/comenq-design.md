@@ -805,10 +805,10 @@ published in `leynos/shared-actions`. The release workflow iterates over the
 `comenq` client and `comenqd` daemon for both the x86_64 and aarch64 GNU/Linux
 targets. `rust-build-release` provisions the correct Rust toolchain, compiles
 the workspace in release mode, and stages the man pages that each crate's build
-script copies from `packaging/man`. Packaging responsibility sits entirely with
-the shared `linux-packages` helper invoked by `rust-build-release`; it
-generates the transient `nfpm` manifest and emits `.deb` and `.rpm` artefacts
-for every matrix entry. The workflow uploads those artefacts to a draft GitHub
+script copies from `packaging/man`. Packaging responsibility sits with the
+shared `linux-packages` helper, which the workflow now invokes directly to
+generate the transient `nfpm` manifest and emit `.deb` and `.rpm` artefacts for
+every matrix entry. The workflow uploads those artefacts to a draft GitHub
 Release via `softprops/action-gh-release`, preserving the manual review gate
 that existed in the GoReleaser-based flow. macOS support remains deferred, so
 the workflow targets Linux only.

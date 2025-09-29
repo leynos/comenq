@@ -29,7 +29,7 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
         for step in arr {
             if let Some(uses) = step.get("uses").and_then(Value::as_str) {
                 if uses
-                    == "leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3"
+                    == "leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed"
                 {
                     saw_rust_builder = true;
                 }
@@ -54,7 +54,7 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3
+              - uses: leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed
               - uses: softprops/action-gh-release@v2
         ";
         assert!(uses_shared_release_actions(yaml).expect("parse"));
@@ -79,7 +79,7 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3
+              - uses: leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed
         ";
         assert!(!uses_shared_release_actions(yaml).expect("parse"));
     }
