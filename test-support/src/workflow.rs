@@ -2,8 +2,20 @@
 
 use serde_yaml::Value;
 
+macro_rules! shared_actions_commit {
+    () => {
+        "1479e2ffbbf1053bb0205357dfe965299b7493ed"
+    };
+}
+
+#[cfg(test)]
 /// The expected commit hash for the shared-actions repository.
-const EXPECTED_SHARED_ACTIONS_COMMIT: &str = "1479e2ffbbf1053bb0205357dfe965299b7493ed";
+const EXPECTED_SHARED_ACTIONS_COMMIT: &str = shared_actions_commit!();
+/// The expected identifier for the shared release build composite action.
+const EXPECTED_RUST_BUILDER: &str = concat!(
+    "leynos/shared-actions/.github/actions/rust-build-release@",
+    shared_actions_commit!(),
+);
 
 /// Return `true` when the release workflow uses the shared composite actions to
 /// build binaries and publish packages.
@@ -22,9 +34,6 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 
     let mut saw_rust_builder = false;
     let mut saw_release_publisher = false;
-    let expected_rust_builder = format!(
-        "leynos/shared-actions/.github/actions/rust-build-release@{EXPECTED_SHARED_ACTIONS_COMMIT}",
-    );
     for job in map.values() {
         let Some(steps) = job.get("steps") else {
             continue;
@@ -34,7 +43,7 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
         };
         for step in arr {
             if let Some(uses) = step.get("uses").and_then(Value::as_str) {
-                if uses == expected_rust_builder {
+                if uses == EXPECTED_RUST_BUILDER {
                     saw_rust_builder = true;
                 }
                 if uses.starts_with("softprops/action-gh-release@") {
