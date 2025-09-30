@@ -88,7 +88,7 @@ mod tests {
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn malformed_yaml_errors() {
         let yaml = "jobs: [";
-        assert!(uses_shared_release_actions(yaml).is_err());
+        _ = uses_shared_release_actions(yaml).expect_err("expected parse failure");
     }
 
     #[test]
