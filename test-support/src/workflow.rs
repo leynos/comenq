@@ -83,4 +83,43 @@ mod tests {
         ";
         assert!(!uses_shared_release_actions(yaml).expect("parse"));
     }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn malformed_yaml_errors() {
+        let yaml = "jobs: [";
+        _ = uses_shared_release_actions(yaml).expect_err("expected parse failure");
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn missing_jobs_returns_false() {
+        let yaml = r"
+        name: release
+        ";
+        assert!(!uses_shared_release_actions(yaml).expect("parse"));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn missing_steps_returns_false() {
+        let yaml = r"
+        jobs:
+          release:
+            name: publish
+        ";
+        assert!(!uses_shared_release_actions(yaml).expect("parse"));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn non_sequence_steps_returns_false() {
+        let yaml = r"
+        jobs:
+          release:
+            steps:
+              uses: leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3
+        ";
+        assert!(!uses_shared_release_actions(yaml).expect("parse"));
+    }
 }
