@@ -2,20 +2,14 @@
 
 use serde_yaml::Value;
 
-macro_rules! shared_actions_commit {
-    () => {
-        "1479e2ffbbf1053bb0205357dfe965299b7493ed"
-    };
-}
+/// The commit hash for the shared-actions repository that the workflow must be pinned to.
+const SHARED_ACTIONS_COMMIT: &str = "1479e2ffbbf1053bb0205357dfe965299b7493ed";
 
 #[cfg(test)]
 /// The expected commit hash for the shared-actions repository.
-const EXPECTED_SHARED_ACTIONS_COMMIT: &str = shared_actions_commit!();
-/// The expected identifier for the shared release build composite action.
-const EXPECTED_RUST_BUILDER: &str = concat!(
-    "leynos/shared-actions/.github/actions/rust-build-release@",
-    shared_actions_commit!(),
-);
+const EXPECTED_SHARED_ACTIONS_COMMIT: &str = SHARED_ACTIONS_COMMIT;
+/// The prefix for the shared release build composite action identifier.
+const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/rust-build-release@";
 
 /// Return `true` when the release workflow uses the shared composite actions to
 /// build binaries and publish packages.
@@ -43,7 +37,10 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
         };
         for step in arr {
             if let Some(uses) = step.get("uses").and_then(Value::as_str) {
-                if uses == EXPECTED_RUST_BUILDER {
+                if uses
+                    .strip_prefix(RUST_BUILD_RELEASE_PREFIX)
+                    .is_some_and(|commit| commit == SHARED_ACTIONS_COMMIT)
+                {
                     saw_rust_builder = true;
                 }
                 if uses.starts_with("softprops/action-gh-release@") {
@@ -60,18 +57,26 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 mod tests {
     use super::{EXPECTED_SHARED_ACTIONS_COMMIT, uses_shared_release_actions};
 
+    fn builder_action() -> String {
+        format!(
+            "leynos/shared-actions/.github/actions/rust-build-release@{}",
+            EXPECTED_SHARED_ACTIONS_COMMIT,
+        )
+    }
+
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_shared_actions() {
+        let builder = builder_action();
         let yaml = format!(
             r#"
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@{}
+              - uses: {}
               - uses: softprops/action-gh-release@v2
         "#,
-            EXPECTED_SHARED_ACTIONS_COMMIT,
+            builder,
         );
         assert!(uses_shared_release_actions(&yaml).expect("parse"));
     }
@@ -96,9 +101,9 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@{}
+              - uses: {}
         "#,
-            EXPECTED_SHARED_ACTIONS_COMMIT,
+            builder_action(),
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
