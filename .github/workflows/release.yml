@@ -9,6 +9,9 @@ jobs:
   build-packages:
     name: Build ${{ matrix.bin }} for ${{ matrix.target }}
     runs-on: ubuntu-latest
+    env:
+      PACKAGE_DEB_DEPENDS: ${{ matrix.bin == 'comenqd' && 'bash, systemd' || '' }}
+      PACKAGE_RPM_DEPENDS: ${{ matrix.bin == 'comenqd' && 'bash, shadow-utils, systemd' || '' }}
     strategy:
       matrix:
         include:
@@ -36,13 +39,24 @@ jobs:
           echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
       - name: Clean dist directory
         run: rm -rf dist
-      - name: Build and package ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/rust-build-release@7bc9b6c15964ef98733aa647b76d402146284ba3
+      - name: Build ${{ matrix.bin }}
+        uses: leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
           version: ${{ env.RELEASE_VERSION }}
           formats: deb,rpm
+      - name: Package ${{ matrix.bin }}
+        uses: leynos/shared-actions/.github/actions/linux-packages@1479e2ffbbf1053bb0205357dfe965299b7493ed
+        with:
+          bin-name: ${{ matrix.bin }}
+          package-name: ${{ matrix.bin }}
+          target: ${{ matrix.target }}
+          version: ${{ env.RELEASE_VERSION }}
+          formats: deb,rpm
+          man-paths: dist/${{ matrix.bin }}_linux_${{ matrix.arch }}/${{ matrix.bin }}.1
+          deb-depends: ${{ env.PACKAGE_DEB_DEPENDS }}
+          rpm-depends: ${{ env.PACKAGE_RPM_DEPENDS }}
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
