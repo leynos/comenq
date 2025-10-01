@@ -2,20 +2,27 @@
 
 use serde_yaml::Value;
 
-/// The commit hash for the shared-actions repository that the workflow must be pinned to.
-const SHARED_ACTIONS_COMMIT: &str = "1479e2ffbbf1053bb0205357dfe965299b7493ed";
+// Provide the shared-actions commit hash as a literal so concat! can build constants without runtime formatting.
+macro_rules! shared_actions_commit_literal {
+    () => {
+        "1479e2ffbbf1053bb0205357dfe965299b7493ed"
+    };
+}
 
-#[cfg(test)]
+/// The commit hash for the shared-actions repository that the workflow must be pinned to.
+const SHARED_ACTIONS_COMMIT: &str = shared_actions_commit_literal!();
+
 /// The expected commit hash for the shared-actions repository.
-const EXPECTED_SHARED_ACTIONS_COMMIT: &str = SHARED_ACTIONS_COMMIT;
+#[cfg(test)]
+const EXPECTED_SHARED_ACTIONS_COMMIT: &str = shared_actions_commit_literal!();
 /// The prefix for the shared release build composite action identifier.
 const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/rust-build-release@";
 
-#[cfg(test)]
 /// The release builder action reference expected by tests, built at compile time to avoid allocations.
+#[cfg(test)]
 const EXPECTED_RUST_BUILDER: &str = concat!(
     "leynos/shared-actions/.github/actions/rust-build-release@",
-    EXPECTED_SHARED_ACTIONS_COMMIT,
+    shared_actions_commit_literal!(),
 );
 
 /// Return `true` when the release workflow uses the shared composite actions to
@@ -62,11 +69,15 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 
 #[cfg(test)]
 mod tests {
-    use super::{EXPECTED_RUST_BUILDER, uses_shared_release_actions};
+    use super::{
+        EXPECTED_RUST_BUILDER, EXPECTED_SHARED_ACTIONS_COMMIT, uses_shared_release_actions,
+    };
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_shared_actions() {
+        assert!(EXPECTED_RUST_BUILDER.ends_with(EXPECTED_SHARED_ACTIONS_COMMIT));
+
         let yaml = format!(
             r#"
         jobs:
