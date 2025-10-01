@@ -11,6 +11,13 @@ const EXPECTED_SHARED_ACTIONS_COMMIT: &str = SHARED_ACTIONS_COMMIT;
 /// The prefix for the shared release build composite action identifier.
 const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/rust-build-release@";
 
+#[cfg(test)]
+/// The release builder action reference expected by tests, built at compile time to avoid allocations.
+const EXPECTED_RUST_BUILDER: &str = concat!(
+    "leynos/shared-actions/.github/actions/rust-build-release@",
+    EXPECTED_SHARED_ACTIONS_COMMIT,
+);
+
 /// Return `true` when the release workflow uses the shared composite actions to
 /// build binaries and publish packages.
 ///
@@ -55,19 +62,11 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 
 #[cfg(test)]
 mod tests {
-    use super::{EXPECTED_SHARED_ACTIONS_COMMIT, uses_shared_release_actions};
-
-    fn builder_action() -> String {
-        format!(
-            "leynos/shared-actions/.github/actions/rust-build-release@{}",
-            EXPECTED_SHARED_ACTIONS_COMMIT,
-        )
-    }
+    use super::{EXPECTED_RUST_BUILDER, uses_shared_release_actions};
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_shared_actions() {
-        let builder = builder_action();
         let yaml = format!(
             r#"
         jobs:
@@ -76,7 +75,7 @@ mod tests {
               - uses: {}
               - uses: softprops/action-gh-release@v2
         "#,
-            builder,
+            EXPECTED_RUST_BUILDER,
         );
         assert!(uses_shared_release_actions(&yaml).expect("parse"));
     }
@@ -103,7 +102,7 @@ mod tests {
             steps:
               - uses: {}
         "#,
-            builder_action(),
+            EXPECTED_RUST_BUILDER,
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
