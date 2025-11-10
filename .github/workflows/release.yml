@@ -40,14 +40,14 @@ jobs:
       - name: Clean dist directory
         run: rm -rf dist
       - name: Build ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed
+        uses: leynos/shared-actions/.github/actions/rust-build-release@a455a06f519e8eedf22695232f72da420d19879b
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
           version: ${{ env.RELEASE_VERSION }}
           formats: deb,rpm
       - name: Package ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/linux-packages@1479e2ffbbf1053bb0205357dfe965299b7493ed
+        uses: leynos/shared-actions/.github/actions/linux-packages@a455a06f519e8eedf22695232f72da420d19879b
         with:
           bin-name: ${{ matrix.bin }}
           package-name: ${{ matrix.bin }}
