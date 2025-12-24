@@ -4,7 +4,7 @@ APP ?= comenq
 CARGO ?= cargo
 BUILD_JOBS ?=
 CLIPPY_FLAGS ?= --workspace --all-targets --all-features -- -D warnings
-MDLINT ?= markdownlint
+MDLINT ?= markdownlint-cli2
 NIXIE ?= nixie
 COV_MIN ?= 0 # Minimum line coverage percentage for coverage targets
 
@@ -62,10 +62,10 @@ check-fmt: ## Verify formatting
 	$(CARGO) fmt --all -- --check
 
 markdownlint: ## Lint Markdown files
-	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(MDLINT)
+	$(MDLINT) "**/*.md"
 
 nixie: ## Validate Mermaid diagrams
-	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(NIXIE)
+	$(NIXIE) --no-sandbox
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
