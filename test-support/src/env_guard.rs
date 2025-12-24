@@ -19,6 +19,18 @@ impl EnvVarGuard {
             original,
         }
     }
+
+    /// Remove an environment variable for the lifetime of the returned guard.
+    ///
+    /// On drop the original value is restored if it was previously set.
+    pub fn remove(key: &str) -> Self {
+        let original = std::env::var(key).ok();
+        remove_env_var(key);
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
 }
 
 impl Drop for EnvVarGuard {
@@ -30,18 +42,19 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Set an environment variable for tests.
+/// Set an environment variable for internal guard use.
 ///
-/// The nightly compiler marks `std::env::set_var` as `unsafe`.
-/// Tests run serially so using it is acceptable here.
-pub fn set_env_var(key: &str, value: &str) {
+/// SAFETY: Must only be called from serial test contexts.
+/// External callers should use `EnvVarGuard::set()` instead.
+pub(crate) fn set_env_var(key: &str, value: &str) {
     unsafe { std::env::set_var(key, value) };
 }
 
-/// Remove an environment variable for tests.
+/// Remove an environment variable for internal guard use.
 ///
-/// `std::env::remove_var` is also `unsafe` on nightly.
-pub fn remove_env_var(key: &str) {
+/// SAFETY: Must only be called from serial test contexts.
+/// External callers should use `EnvVarGuard::remove()` instead.
+pub(crate) fn remove_env_var(key: &str) {
     unsafe { std::env::remove_var(key) };
 }
 
@@ -76,6 +89,37 @@ mod tests {
     fn remove_env_var_when_unset_is_noop() {
         let key = "ENV_GUARD_REMOVE_UNSET";
         super::remove_env_var(key);
+        assert!(std::env::var(key).is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_var_guard_remove_restores_value() {
+        let key = "ENV_GUARD_REMOVE_GUARD";
+        super::set_env_var(key, "original");
+        assert_eq!(std::env::var(key).expect("set"), "original");
+
+        {
+            let _guard = super::EnvVarGuard::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+
+        assert_eq!(std::env::var(key).expect("restored"), "original");
+        super::remove_env_var(key);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_var_guard_remove_keeps_unset_when_originally_unset() {
+        let key = "ENV_GUARD_REMOVE_UNSET_GUARD";
+        super::remove_env_var(key);
+        assert!(std::env::var(key).is_err());
+
+        {
+            let _guard = super::EnvVarGuard::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+
         assert!(std::env::var(key).is_err());
     }
 

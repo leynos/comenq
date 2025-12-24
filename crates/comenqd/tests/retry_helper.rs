@@ -2,8 +2,9 @@
 
 mod util;
 
-use std::env;
 use std::time::Duration;
+
+use test_support::EnvVarGuard;
 use tokio::time::sleep;
 
 use util::{
@@ -12,42 +13,39 @@ use util::{
 };
 
 #[test]
+#[serial_test::serial]
 fn calculate_timeout_caps_bounds() {
-    unsafe {
-        env::remove_var("CI");
+    // Test without CI environment
+    {
+        let _guard = EnvVarGuard::remove("CI");
+        let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
+        assert_eq!(
+            cfg.calculate_timeout(),
+            Duration::from_secs(MIN_TIMEOUT_SECS)
+        );
     }
-    let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
-    assert_eq!(
-        cfg.calculate_timeout(),
-        Duration::from_secs(MIN_TIMEOUT_SECS)
-    );
-    unsafe {
-        env::set_var("CI", "1");
-    }
-    let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
-    assert_eq!(
-        cfg.calculate_timeout(),
-        Duration::from_secs(MAX_TIMEOUT_SECS)
-    );
-    unsafe {
-        env::remove_var("CI");
+
+    // Test with CI environment
+    {
+        let _guard = EnvVarGuard::set("CI", "1");
+        let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
+        assert_eq!(
+            cfg.calculate_timeout(),
+            Duration::from_secs(MAX_TIMEOUT_SECS)
+        );
     }
 }
 
 #[test]
+#[serial_test::serial]
 fn calculate_timeout_scales_with_ci_env() {
-    unsafe {
-        env::set_var("CI", "1");
-    }
+    let _guard = EnvVarGuard::set("CI", "1");
     let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
     let mut expected = 10 * DEBUG_MULTIPLIER * CI_MULTIPLIER;
     if std::env::var("LLVM_PROFILE_FILE").is_ok() {
         expected *= COVERAGE_MULTIPLIER;
     }
     assert_eq!(cfg.calculate_timeout(), Duration::from_secs(expected));
-    unsafe {
-        env::remove_var("CI");
-    }
 }
 
 #[test]
