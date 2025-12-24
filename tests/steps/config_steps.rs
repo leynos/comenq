@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use comenqd::config::Config;
-use test_support::env_guard::{EnvVarGuard, remove_env_var};
+use test_support::EnvVarGuard;
 
 #[derive(Debug, Default, World)]
 pub struct ConfigWorld {
@@ -14,6 +14,7 @@ pub struct ConfigWorld {
     path: Option<PathBuf>,
     result: Option<Result<Config, ortho_config::OrthoError>>,
     env_guard: Option<EnvVarGuard>,
+    socket_guard: Option<EnvVarGuard>,
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
@@ -28,7 +29,7 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) {
     fs::write(&path, format!("github_token='{token}'")).expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    remove_env_var("COMENQD_SOCKET_PATH");
+    world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
 }
 
 #[given("an invalid configuration file")]
@@ -67,7 +68,7 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) {
     .expect("write file");
     world.dir = Some(dir);
     world.path = Some(path);
-    remove_env_var("COMENQD_SOCKET_PATH");
+    world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\" and no cooldown_period_seconds$"#)]
@@ -135,6 +136,9 @@ fn cooldown_period_seconds_is(world: &mut ConfigWorld, expected: u64) {
 impl Drop for ConfigWorld {
     fn drop(&mut self) {
         if let Some(_guard) = self.env_guard.take() {
+            // dropping the guard restores the previous state
+        }
+        if let Some(_guard) = self.socket_guard.take() {
             // dropping the guard restores the previous state
         }
     }

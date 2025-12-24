@@ -27,6 +27,7 @@ uuid = { workspace = true, features = ["v4"] }
 rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 serial_test = "2"
+test-support = { workspace = true }
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }

@@ -8,7 +8,7 @@ pub use workflow::uses_shared_release_actions;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{TestConfig, octocrab_for, temp_config};
-pub use env_guard::{EnvVarGuard, remove_env_var, set_env_var};
+pub use env_guard::EnvVarGuard;
 
 // Re-exports from util module with documentation (from your branch)
 /// Maximum number of times to poll for an expected file.

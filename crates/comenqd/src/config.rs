@@ -252,7 +252,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    use test_support::env_guard::{EnvVarGuard, remove_env_var};
+    use test_support::EnvVarGuard;
 
     #[rstest]
     #[serial_test::serial]
@@ -264,7 +264,7 @@ mod tests {
             "github_token='abc'\nsocket_path='/tmp/s.sock'\nqueue_path='/tmp/q'",
         )
         .expect("write config fixture");
-        remove_env_var("COMENQD_SOCKET_PATH");
+        let _guard = EnvVarGuard::remove("COMENQD_SOCKET_PATH");
         let cfg = Config::from_file(&path).expect("load config");
         assert_eq!(cfg.github_token, "abc");
         assert_eq!(cfg.socket_path, PathBuf::from("/tmp/s.sock"));
