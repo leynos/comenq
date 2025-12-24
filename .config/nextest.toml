@@ -1,0 +1,11 @@
+# .config/nextest.toml
+[profile.default]
+# Kill any test once it crosses 60s.
+slow-timeout = { period = "60s", terminate-after = 1, grace-period = "5s" }
+
+# Put a hard ceiling on the whole run.
+global-timeout = "10m"
+
+# Exclude cucumber BDD tests (they don't support nextest's --list command).
+# Run cucumber tests separately with `cargo test`.
+default-filter = "not binary(cucumber)"

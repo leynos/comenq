@@ -216,7 +216,7 @@ mod worker_tests {
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
             .respond_with(
-                ResponseTemplate::new(status).set_body_json(&serde_json::json!({
+                ResponseTemplate::new(status).set_body_json(serde_json::json!({
                     "id": 1,
                     "body": "b",
                 })),
@@ -243,28 +243,24 @@ mod worker_tests {
             .unwrap_or(0);
         let server_requests = server.received_requests().await.unwrap_or_default().len();
         let mut output = format!(
-            "Queue directory contains {} files (expected {})\n",
-            queue_files, expected_files
+            "Queue directory contains {queue_files} files (expected {expected_files})\n"
         );
-        output.push_str(&format!(
-            "Mock server received {} requests\n",
-            server_requests
-        ));
+        output.push_str(&format!("Mock server received {server_requests} requests\n"));
         if let Ok(entries) = stdfs::read_dir(&cfg.queue_path) {
             output.push_str("Remaining queue files:\n");
             for (i, entry) in entries.enumerate() {
                 if let Ok(entry) = entry {
                     let name = entry.file_name();
-                    output.push_str(&format!("  {}. {}\n", i + 1, name.to_string_lossy()));
+                    let file_num = i + 1;
+                    output.push_str(&format!("  {file_num}. {}\n", name.to_string_lossy()));
                     if let Ok(metadata) = entry.metadata() {
-                        output.push_str(&format!("     Size: {} bytes\n", metadata.len()));
-                        if let Ok(modified) = metadata.modified() {
-                            if let Ok(elapsed) = modified.elapsed() {
-                                output.push_str(&format!(
-                                    "     Age: {:.1}s ago\n",
-                                    elapsed.as_secs_f32()
-                                ));
-                            }
+                        let size = metadata.len();
+                        output.push_str(&format!("     Size: {size} bytes\n"));
+                        if let Ok(modified) = metadata.modified()
+                            && let Ok(elapsed) = modified.elapsed()
+                        {
+                            let age = elapsed.as_secs_f32();
+                            output.push_str(&format!("     Age: {age:.1}s ago\n"));
                         }
                     }
                 }

@@ -3,7 +3,7 @@
 APP ?= comenq
 CARGO ?= cargo
 BUILD_JOBS ?=
-CLIPPY_FLAGS ?= --all-targets --all-features -- -D warnings
+CLIPPY_FLAGS ?= --workspace --all-targets --all-features -- -D warnings
 MDLINT ?= markdownlint
 NIXIE ?= nixie
 COV_MIN ?= 0 # Minimum line coverage percentage for coverage targets
@@ -34,16 +34,19 @@ clean: ## Remove build artefacts
 	rm -rf coverage
 
 test: ## Run tests with warnings treated as errors
-	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets --all-features $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace --all-targets --all-features $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) test --workspace --all-features --test cucumber $(BUILD_JOBS)
 
 test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
 	$(CHECK_CARGO_LLVM_COV)
-	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --doctests --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov nextest --workspace --all-features --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --no-clean --workspace --all-features --test cucumber --summary-only --text --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to coverage/lcov.info
 	$(CHECK_CARGO_LLVM_COV)
 	mkdir -p coverage
-	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --workspace --all-features --doctests --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov nextest --workspace --all-features --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --no-clean --workspace --all-features --test cucumber --lcov --output-path coverage/lcov-cucumber.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)

@@ -169,8 +169,8 @@ mod tests {
     use std::thread;
     use tempfile::tempdir;
 
-    #[test]
-    fn prepare_listener_prevents_pre_bind_race() {
+    #[tokio::test]
+    async fn prepare_listener_prevents_pre_bind_race() {
         let dir = tempdir().expect("create tempdir");
         let sock = dir.path().join("sock");
         let stop = Arc::new(AtomicBool::new(false));

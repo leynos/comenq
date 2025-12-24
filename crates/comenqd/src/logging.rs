@@ -14,13 +14,11 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// # Examples
 ///
 /// ```rust,no_run
-/// use crate::logging::init;
+/// use comenqd::logging::init;
 ///
-/// fn main() {
-///     // Initialize logging as early as possible.
-///     init();
-///     tracing::info!("Logging is initialized!");
-/// }
+/// // Initialize logging as early as possible.
+/// init();
+/// tracing::info!("Logging is initialized!");
 /// ```
 pub fn init() {
     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
@@ -31,12 +29,10 @@ pub fn init() {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use crate::logging::init_with_writer;
+/// use comenqd::logging::init_with_writer;
 /// use tracing_subscriber::fmt;
 ///
-/// fn main() {
-///     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
-/// }
+/// init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
 /// ```
 pub fn init_with_writer<W>(writer: W)
 where

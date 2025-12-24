@@ -96,7 +96,7 @@ where
 #[case(TestComplexity::Moderate)]
 #[case(TestComplexity::Complex)]
 fn uses_all_test_complexity_variants(#[case] complexity: TestComplexity) {
-    drop(TimeoutConfig::new(1, complexity));
+    let _ = TimeoutConfig::new(1, complexity);
 }
 
 /// Map a task [`JoinError`] into a concise diagnostic message.
