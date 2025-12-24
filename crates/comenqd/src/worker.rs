@@ -122,8 +122,9 @@ impl WorkerHooks {
     /// without indicating which occurred. Passing `secs = 0` returns immediately.
     pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) {
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
+            biased;
             _ = shutdown.changed() => {},
+            _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
         }
     }
 }
