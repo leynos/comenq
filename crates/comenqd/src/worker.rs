@@ -13,11 +13,11 @@ use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use yaque::Receiver;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::util::is_metadata_file;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::fs as stdfs;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::path::Path;
 
 /// Errors returned when posting a comment to GitHub.
@@ -60,24 +60,27 @@ pub struct WorkerHooks {
     /// Signalled after the worker completes processing of a request.
     pub idle: Option<Arc<Notify>>,
     /// Signalled when the queue is empty and the worker is idle.
-    #[cfg_attr(not(test), allow(dead_code, reason = "test hook"))]
+    #[cfg_attr(
+        not(any(test, feature = "test-support")),
+        allow(dead_code, reason = "test hook")
+    )]
     pub drained: Option<Arc<Notify>>,
 }
 
 impl WorkerHooks {
     fn notify_enqueued(&self) {
         if let Some(n) = &self.enqueued {
-            n.notify_waiters();
+            n.notify_one();
         }
     }
 
     fn notify_idle(&self) {
         if let Some(n) = &self.idle {
-            n.notify_waiters();
+            n.notify_one();
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
         if let Some(n) = &self.drained {
             // Ignore sentinel files left by the queue implementation and
@@ -86,13 +89,15 @@ impl WorkerHooks {
                 .filter_map(Result::ok)
                 .any(|e| !is_metadata_file(e.file_name()));
             if empty {
-                n.notify_waiters();
+                n.notify_one();
             }
         }
         Ok(())
     }
 
     /// Waits for the specified number of seconds or until a shutdown is signalled.
+    ///
+    /// Returns `true` if shutdown was signalled, `false` if the timeout expired.
     ///
     /// # Arguments
     ///
@@ -103,28 +108,28 @@ impl WorkerHooks {
     ///
     /// ```rust,no_run
     /// use tokio::sync::watch;
-    /// use comenqd::worker::WorkerHooks;
+    /// use comenqd::daemon::WorkerHooks;
     ///
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
     /// let (tx, mut rx) = watch::channel(());
     ///
     /// // Wait for the full second when no shutdown signal is sent.
-    /// WorkerHooks::wait_or_shutdown(1, &mut rx).await;
+    /// assert!(!WorkerHooks::wait_or_shutdown(1, &mut rx).await);
     ///
     /// // Sending a shutdown signal returns immediately.
     /// let mut rx = tx.subscribe();
     /// tx.send(()).expect("notify shutdown");
-    /// WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+    /// assert!(WorkerHooks::wait_or_shutdown(60, &mut rx).await);
     /// # });
     /// ```
     ///
-    /// The function returns after either the timeout or a shutdown signal,
-    /// without indicating which occurred. Passing `secs = 0` returns immediately.
-    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) {
+    /// Passing `secs = 0` returns immediately with `false` unless shutdown was
+    /// already signalled.
+    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
         tokio::select! {
             biased;
-            _ = shutdown.changed() => {},
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
+            _ = shutdown.changed() => true,
+            _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
         }
     }
 }
@@ -146,7 +151,7 @@ impl WorkerControl {
     /// # Examples
     ///
     /// ```rust
-    /// use comenqd::worker::{WorkerControl, WorkerHooks};
+    /// use comenqd::daemon::{WorkerControl, WorkerHooks};
     /// use tokio::sync::watch;
     ///
     /// let (_tx, rx) = watch::channel(());
@@ -169,11 +174,16 @@ pub async fn run_worker(
     let shutdown = &mut control.shutdown;
     loop {
         let guard = tokio::select! {
-            res = rx.recv() => res?,
-            _ = shutdown.changed() => break,
+            biased;
+            _ = shutdown.changed() => {
+                break;
+            }
+            res = rx.recv() => {
+                res?
+            }
         };
         hooks.notify_enqueued();
-        let request: CommentRequest = match serde_json::from_slice(&guard) {
+        let request: CommentRequest = match serde_json::from_slice::<CommentRequest>(&guard) {
             Ok(req) => req,
             Err(e) => {
                 tracing::error!(error = %e, "Failed to deserialise queued request; dropping");
@@ -181,11 +191,13 @@ pub async fn run_worker(
                     tracing::error!(error = %commit_err, "Failed to commit malformed queue entry");
                 }
                 hooks.notify_idle();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
+                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+                    break;
+                }
                 continue;
             }
         };
@@ -214,11 +226,13 @@ pub async fn run_worker(
         }
 
         hooks.notify_idle();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
+        if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+            break;
+        }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }

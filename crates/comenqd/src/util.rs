@@ -7,7 +7,7 @@ use std::ffi::OsStr;
 /// Names of files storing queue metadata.
 ///
 /// Extend this list when new metadata files are introduced.
-pub(crate) const METADATA_FILE_NAMES: [&str; 2] = ["version", "recv.lock"];
+pub(crate) const METADATA_FILE_NAMES: [&str; 3] = ["version", "recv.lock", "send.lock"];
 
 /// Returns whether a file name represents queue metadata.
 ///

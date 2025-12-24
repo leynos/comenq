@@ -28,7 +28,7 @@ use crate::supervisor::backoff;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use comenqd::listener::prepare_listener;
+/// use comenqd::daemon::listener::prepare_listener;
 /// use tempfile::tempdir;
 /// let dir = tempdir().expect("create tempdir");
 /// let sock = dir.path().join("sock");
