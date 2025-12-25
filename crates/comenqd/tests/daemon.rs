@@ -412,4 +412,177 @@ mod worker_tests {
             "Queue should retain job after API failure",
         );
     }
+
+    /// Tests that the worker loop terminates promptly when shutdown is signalled
+    /// while the worker is idle (waiting on an empty queue).
+    #[tokio::test]
+    async fn worker_terminates_on_shutdown_while_idle() {
+        let dir = tempdir().expect("tempdir");
+        let cfg = Arc::new(cfg_from(temp_config(&dir).with_cooldown(60)));
+        // Create empty queue - worker will block on recv()
+        let (_sender, rx) = channel(&cfg.queue_path).expect("channel");
+        let server = MockServer::start().await;
+        let octo = octocrab_for(&server);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let control = WorkerControl {
+            shutdown: shutdown_rx,
+            hooks: WorkerHooks::default(),
+        };
+
+        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo, control));
+
+        // Give worker time to enter recv() wait
+        sleep(Duration::from_millis(50)).await;
+
+        // Signal shutdown
+        shutdown_tx.send(()).expect("send shutdown");
+
+        // Worker should terminate promptly (not wait for cooldown)
+        let timeout = Duration::from_secs(2);
+        match tokio::time::timeout(timeout, h).await {
+            Ok(Ok(Ok(()))) => {} // Success
+            Ok(Ok(Err(e))) => panic!("worker returned error: {e}"),
+            Ok(Err(e)) => panic!("worker task panicked: {e}"),
+            Err(_) => panic!("worker did not terminate within {timeout:?} after shutdown signal"),
+        }
+    }
+
+    /// Tests that shutdown during cooldown (between processing iterations)
+    /// causes immediate termination.
+    #[tokio::test]
+    async fn worker_terminates_on_shutdown_during_cooldown() {
+        let dir = tempdir().expect("tempdir");
+        // Long cooldown to ensure we're testing shutdown during wait
+        let cfg = Arc::new(cfg_from(temp_config(&dir).with_cooldown(60)));
+        let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
+
+        // Enqueue a valid request
+        let req = comenq_lib::CommentRequest {
+            owner: "o".into(),
+            repo: "r".into(),
+            pr_number: 1,
+            body: "b".into(),
+        };
+        sender
+            .send(serde_json::to_vec(&req).expect("serialize"))
+            .await
+            .expect("send");
+
+        let server = MockServer::start().await;
+        let response_body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/github_comment_response.json"))
+                .expect("parse fixture");
+        Mock::given(method("POST"))
+            .and(path("/repos/o/r/issues/1/comments"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(response_body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let octo = octocrab_for(&server);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let idle = Arc::new(Notify::new());
+        let control = WorkerControl {
+            shutdown: shutdown_rx,
+            hooks: WorkerHooks {
+                enqueued: None,
+                idle: Some(idle.clone()),
+                drained: None,
+            },
+        };
+
+        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo, control));
+
+        // Wait for idle notification (worker finished processing, now in cooldown)
+        let wait_timeout = Duration::from_secs(10);
+        if tokio::time::timeout(wait_timeout, idle.notified())
+            .await
+            .is_err()
+        {
+            panic!("worker did not reach idle state within {wait_timeout:?}");
+        }
+
+        // Worker is now in cooldown (sleeping for 60 seconds)
+        // Signal shutdown - it should terminate immediately
+        shutdown_tx.send(()).expect("send shutdown");
+
+        let shutdown_timeout = Duration::from_secs(2);
+        match tokio::time::timeout(shutdown_timeout, h).await {
+            Ok(Ok(Ok(()))) => {} // Success
+            Ok(Ok(Err(e))) => panic!("worker returned error: {e}"),
+            Ok(Err(e)) => panic!("worker task panicked: {e}"),
+            Err(_) => {
+                panic!("worker did not terminate within {shutdown_timeout:?} during cooldown")
+            }
+        }
+    }
+
+    /// Tests that shutdown during cooldown after a malformed message
+    /// causes immediate termination.
+    #[tokio::test]
+    async fn worker_terminates_on_shutdown_during_cooldown_after_malformed() {
+        let dir = tempdir().expect("tempdir");
+        // Long cooldown to ensure we're testing shutdown during wait
+        let cfg = Arc::new(cfg_from(temp_config(&dir).with_cooldown(60)));
+        let (mut sender, rx) = channel(&cfg.queue_path).expect("channel");
+
+        // Enqueue malformed data (not valid JSON)
+        sender
+            .send(b"this is not valid json".to_vec())
+            .await
+            .expect("send");
+
+        let server = MockServer::start().await;
+        // No mock needed - malformed message won't reach GitHub API
+        let octo = octocrab_for(&server);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let idle = Arc::new(Notify::new());
+        let control = WorkerControl {
+            shutdown: shutdown_rx,
+            hooks: WorkerHooks {
+                enqueued: None,
+                idle: Some(idle.clone()),
+                drained: None,
+            },
+        };
+
+        let h = tokio::spawn(run_worker(cfg.clone(), rx, octo, control));
+
+        // Wait for idle notification (worker dropped malformed message, now in cooldown)
+        let wait_timeout = Duration::from_secs(10);
+        if tokio::time::timeout(wait_timeout, idle.notified())
+            .await
+            .is_err()
+        {
+            panic!(
+                "worker did not reach idle state after malformed message within {wait_timeout:?}"
+            );
+        }
+
+        // Worker is now in cooldown after dropping the malformed message
+        // Signal shutdown - it should terminate immediately
+        shutdown_tx.send(()).expect("send shutdown");
+
+        let shutdown_timeout = Duration::from_secs(2);
+        match tokio::time::timeout(shutdown_timeout, h).await {
+            Ok(Ok(Ok(()))) => {} // Success
+            Ok(Ok(Err(e))) => panic!("worker returned error: {e}"),
+            Ok(Err(e)) => panic!("worker task panicked: {e}"),
+            Err(_) => panic!(
+                "worker did not terminate within {shutdown_timeout:?} during cooldown after malformed message"
+            ),
+        }
+
+        // Verify no requests were made to GitHub (malformed message was dropped)
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty(),
+            "no GitHub API requests should be made for malformed messages"
+        );
+    }
 }
