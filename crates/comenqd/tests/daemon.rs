@@ -255,7 +255,7 @@ mod worker_tests {
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
             .respond_with(ResponseTemplate::new(status).set_body_json(response_body))
-            .expect(1..)  // Expect at least one request
+            .expect(1..) // Expect at least one request
             .mount(&server)
             .await;
         let octo = octocrab_for(&server);
