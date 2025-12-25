@@ -23,3 +23,37 @@ pub fn is_metadata_file(name: impl AsRef<OsStr>) -> bool {
     let name = name.as_ref();
     METADATA_FILE_NAMES.iter().any(|m| OsStr::new(m) == name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_metadata_file_recognises_version() {
+        assert!(is_metadata_file("version"));
+    }
+
+    #[test]
+    fn is_metadata_file_recognises_recv_lock() {
+        assert!(is_metadata_file("recv.lock"));
+    }
+
+    #[test]
+    fn is_metadata_file_recognises_send_lock() {
+        assert!(is_metadata_file("send.lock"));
+    }
+
+    #[test]
+    fn is_metadata_file_rejects_queue_segments() {
+        assert!(!is_metadata_file("0000"));
+        assert!(!is_metadata_file("0001"));
+        assert!(!is_metadata_file("9999"));
+    }
+
+    #[test]
+    fn is_metadata_file_rejects_arbitrary_names() {
+        assert!(!is_metadata_file("data.json"));
+        assert!(!is_metadata_file("lock"));
+        assert!(!is_metadata_file(""));
+    }
+}

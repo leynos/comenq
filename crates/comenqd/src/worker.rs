@@ -53,13 +53,23 @@ async fn post_comment(
 }
 
 /// Hooks used to observe worker progress during tests.
+///
+/// Each hook uses [`Notify::notify_one`] which buffers a single permit for
+/// one waiting task. This design supports exactly one waiter per hook; if
+/// multiple tasks await the same hook, only one will be woken per notification.
 #[derive(Default)]
 pub struct WorkerHooks {
     /// Signalled when a request is retrieved from the queue.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
     pub enqueued: Option<Arc<Notify>>,
     /// Signalled after the worker completes processing of a request.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
     pub idle: Option<Arc<Notify>>,
     /// Signalled when the queue is empty and the worker is idle.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
     #[cfg_attr(
         not(any(test, feature = "test-support")),
         expect(dead_code, reason = "test hook only used in test/test-support builds")
@@ -235,4 +245,42 @@ pub async fn run_worker(
     #[cfg(any(test, feature = "test-support"))]
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+    use tokio::sync::watch;
+
+    #[tokio::test]
+    async fn wait_or_shutdown_returns_false_on_timeout() {
+        let (_tx, mut rx) = watch::channel(());
+        let start = Instant::now();
+        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+        assert!(!result, "should return false when timeout expires");
+        assert!(
+            start.elapsed().as_millis() < 100,
+            "zero-second wait should return immediately"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_or_shutdown_returns_true_on_shutdown() {
+        let (tx, mut rx) = watch::channel(());
+        // Signal shutdown before waiting
+        tx.send(()).expect("send shutdown signal");
+        let result = WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+        assert!(result, "should return true when shutdown is signalled");
+    }
+
+    #[tokio::test]
+    async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
+        let (tx, mut rx) = watch::channel(());
+        // Send shutdown signal
+        tx.send(()).expect("send shutdown signal");
+        // Even with zero timeout, shutdown should be detected due to biased select
+        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+        assert!(result, "biased select should prioritise shutdown signal");
+    }
 }

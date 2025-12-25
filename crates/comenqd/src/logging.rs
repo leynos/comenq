@@ -1,13 +1,13 @@
 //! Logging utilities for the daemon.
 //!
-//! Initializes structured logging using `tracing` and
+//! Initialises structured logging using `tracing` and
 //! `tracing-subscriber`, reading filter settings from the `RUST_LOG`
 //! environment variable.
 
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// Initialize the global tracing subscriber.
+/// Initialise the global tracing subscriber.
 ///
 /// Call `init` before any logging statements to avoid missing logs.
 ///
@@ -16,15 +16,15 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// ```rust,no_run
 /// use comenqd::logging::init;
 ///
-/// // Initialize logging as early as possible.
+/// // Initialise logging as early as possible.
 /// init();
-/// tracing::info!("Logging is initialized!");
+/// tracing::info!("Logging is initialised!");
 /// ```
 pub fn init() {
     init_with_writer(fmt::writer::BoxMakeWriter::new(std::io::stdout));
 }
 
-/// Initialize logging with a custom writer.
+/// Initialise logging with a custom writer.
 ///
 /// # Examples
 ///

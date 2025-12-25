@@ -65,7 +65,7 @@ markdownlint: ## Lint Markdown files
 	$(MDLINT) "**/*.md"
 
 nixie: ## Validate Mermaid diagrams
-	$(NIXIE) --no-sandbox
+	$(NIXIE) --no-sandbox "**/*.md"
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
