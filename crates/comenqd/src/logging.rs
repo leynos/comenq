@@ -44,7 +44,7 @@ where
         .init();
 }
 
-/// Initialize logging with a custom writer and explicit filter.
+/// Initialise logging with a custom writer and explicit filter.
 ///
 /// This avoids reading from the environment, making it suitable for tests
 /// where environment mutation is forbidden.
@@ -57,9 +57,13 @@ where
 ///
 /// init_with_writer_and_filter(fmt::writer::BoxMakeWriter::new(std::io::stdout), "info");
 /// ```
+#[cfg(feature = "test-support")]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "used only in tests to avoid environment mutation")
+    expect(
+        dead_code,
+        reason = "feature-gated test helper; used only when #[cfg(test)] is also set"
+    )
 )]
 pub fn init_with_writer_and_filter<W>(writer: W, filter: &str)
 where
@@ -71,7 +75,7 @@ where
         .init();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};

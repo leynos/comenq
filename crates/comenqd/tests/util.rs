@@ -123,6 +123,81 @@ fn uses_all_test_complexity_variants(#[case] complexity: TestComplexity) {
     let _ = TimeoutConfig::new(1, complexity);
 }
 
+/// Tests that explicit `with_ci(true)` applies the CI multiplier.
+#[test]
+fn with_ci_true_applies_multiplier() {
+    // Use explicit flags to avoid environment dependency
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_ci = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(true)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_ci, base * CI_MULTIPLIER);
+}
+
+/// Tests that explicit `with_coverage(true)` applies the coverage multiplier.
+#[test]
+fn with_coverage_true_applies_multiplier() {
+    // Use explicit flags to avoid environment dependency
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_cov = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(true)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_cov, base * COVERAGE_MULTIPLIER);
+}
+
+/// Tests that explicit flags override environment variables.
+#[test]
+fn explicit_flags_override_environment() {
+    // Even if environment variables are set, explicit false should disable multipliers
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    // Calculate expected value without any environment-based multipliers
+    #[cfg(debug_assertions)]
+    let expected = 10 * DEBUG_MULTIPLIER;
+    #[cfg(not(debug_assertions))]
+    let expected = 10u64;
+
+    assert_eq!(base, expected.max(MIN_TIMEOUT_SECS));
+}
+
+/// Tests that both CI and coverage multipliers stack when both are enabled.
+#[test]
+fn ci_and_coverage_multipliers_stack() {
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_both = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(true)
+        .with_coverage(true)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_both, base * CI_MULTIPLIER * COVERAGE_MULTIPLIER);
+}
+
 /// Map a task [`JoinError`] into a concise diagnostic message.
 ///
 /// ```ignore

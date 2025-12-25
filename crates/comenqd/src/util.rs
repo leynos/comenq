@@ -27,33 +27,24 @@ pub fn is_metadata_file(name: impl AsRef<OsStr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn is_metadata_file_recognises_version() {
-        assert!(is_metadata_file("version"));
+    #[rstest]
+    #[case::version("version")]
+    #[case::recv_lock("recv.lock")]
+    #[case::send_lock("send.lock")]
+    fn is_metadata_file_recognises_metadata(#[case] name: &str) {
+        assert!(is_metadata_file(name));
     }
 
-    #[test]
-    fn is_metadata_file_recognises_recv_lock() {
-        assert!(is_metadata_file("recv.lock"));
-    }
-
-    #[test]
-    fn is_metadata_file_recognises_send_lock() {
-        assert!(is_metadata_file("send.lock"));
-    }
-
-    #[test]
-    fn is_metadata_file_rejects_queue_segments() {
-        assert!(!is_metadata_file("0000"));
-        assert!(!is_metadata_file("0001"));
-        assert!(!is_metadata_file("9999"));
-    }
-
-    #[test]
-    fn is_metadata_file_rejects_arbitrary_names() {
-        assert!(!is_metadata_file("data.json"));
-        assert!(!is_metadata_file("lock"));
-        assert!(!is_metadata_file(""));
+    #[rstest]
+    #[case::segment_0000("0000")]
+    #[case::segment_0001("0001")]
+    #[case::segment_9999("9999")]
+    #[case::data_json("data.json")]
+    #[case::lock("lock")]
+    #[case::empty("")]
+    fn is_metadata_file_rejects_non_metadata(#[case] name: &str) {
+        assert!(!is_metadata_file(name));
     }
 }

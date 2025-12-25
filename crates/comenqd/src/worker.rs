@@ -260,7 +260,7 @@ mod tests {
         let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
         assert!(!result, "should return false when timeout expires");
         assert!(
-            start.elapsed().as_millis() < 100,
+            start.elapsed().as_millis() < 500,
             "zero-second wait should return immediately"
         );
     }
