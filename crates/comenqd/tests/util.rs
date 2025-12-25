@@ -40,7 +40,6 @@ impl TimeoutConfig {
 
     /// Set explicit CI flag, avoiding environment reads.
     #[must_use]
-    #[allow(dead_code)] // Used in retry_helper.rs, not daemon.rs
     pub const fn with_ci(mut self, ci: bool) -> Self {
         self.ci = Some(ci);
         self
@@ -48,7 +47,6 @@ impl TimeoutConfig {
 
     /// Set explicit coverage flag, avoiding environment reads.
     #[must_use]
-    #[allow(dead_code)] // Used in retry_helper.rs, not daemon.rs
     pub const fn with_coverage(mut self, coverage: bool) -> Self {
         self.coverage = Some(coverage);
         self

@@ -57,7 +57,10 @@ where
 ///
 /// init_with_writer_and_filter(fmt::writer::BoxMakeWriter::new(std::io::stdout), "info");
 /// ```
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used only in tests to avoid environment mutation")
+)]
 pub fn init_with_writer_and_filter<W>(writer: W, filter: &str)
 where
     W: for<'a> MakeWriter<'a> + Send + Sync + 'static,

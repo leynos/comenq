@@ -20,7 +20,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@db22c42b5af88356329b9a8056bb2c2f026d5a10
         with:
-          tool: nextest@0.9.108
+          tool: nextest@0.9.114
       - name: Format
         run: make check-fmt
       - name: Lint

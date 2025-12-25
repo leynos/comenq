@@ -146,7 +146,10 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
     let stored: comenq_lib::CommentRequest = serde_json::from_slice(&guard).expect("parse");
     assert_eq!(stored, req);
     let _ = shutdown_tx.send(());
-    let timeout = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
+    let timeout = TimeoutConfig::new(10, TestComplexity::Moderate)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout();
     let mut listener_handle = Some(listener_task);
     let listener_res = match tokio::time::timeout(timeout, async {
         listener_handle
@@ -214,43 +217,12 @@ mod worker_tests {
             .expect("send");
         let server = MockServer::start().await;
         // Build response body based on status - success returns Comment, error returns GitHub error
-        let response_body = if (200..300).contains(&status) {
-            serde_json::json!({
-                "id": 1,
-                "node_id": "IC_test",
-                "url": "https://api.github.com/repos/o/r/issues/comments/1",
-                "html_url": "https://github.com/o/r/issues/1#issuecomment-1",
-                "body": "b",
-                "user": {
-                    "login": "test-user",
-                    "id": 1,
-                    "node_id": "U_test",
-                    "avatar_url": "https://example.com/avatar",
-                    "gravatar_id": "",
-                    "url": "https://api.github.com/users/test-user",
-                    "html_url": "https://github.com/test-user",
-                    "followers_url": "https://api.github.com/users/test-user/followers",
-                    "following_url": "https://api.github.com/users/test-user/following{/other_user}",
-                    "gists_url": "https://api.github.com/users/test-user/gists{/gist_id}",
-                    "starred_url": "https://api.github.com/users/test-user/starred{/owner}{/repo}",
-                    "subscriptions_url": "https://api.github.com/users/test-user/subscriptions",
-                    "organizations_url": "https://api.github.com/users/test-user/orgs",
-                    "repos_url": "https://api.github.com/users/test-user/repos",
-                    "events_url": "https://api.github.com/users/test-user/events{/privacy}",
-                    "received_events_url": "https://api.github.com/users/test-user/received_events",
-                    "type": "User",
-                    "site_admin": false
-                },
-                "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-01T00:00:00Z",
-                "author_association": "NONE"
-            })
+        let response_body: serde_json::Value = if (200..300).contains(&status) {
+            serde_json::from_str(include_str!("fixtures/github_comment_response.json"))
+                .expect("parse comment fixture")
         } else {
-            // GitHub API error format for non-2xx responses
-            serde_json::json!({
-                "message": "Internal Server Error",
-                "documentation_url": "https://docs.github.com/rest"
-            })
+            serde_json::from_str(include_str!("fixtures/github_error_response.json"))
+                .expect("parse error fixture")
         };
         Mock::given(method("POST"))
             .and(path("/repos/o/r/issues/1/comments"))
