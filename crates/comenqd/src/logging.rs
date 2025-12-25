@@ -44,6 +44,30 @@ where
         .init();
 }
 
+/// Initialize logging with a custom writer and explicit filter.
+///
+/// This avoids reading from the environment, making it suitable for tests
+/// where environment mutation is forbidden.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use comenqd::logging::init_with_writer_and_filter;
+/// use tracing_subscriber::fmt;
+///
+/// init_with_writer_and_filter(fmt::writer::BoxMakeWriter::new(std::io::stdout), "info");
+/// ```
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn init_with_writer_and_filter<W>(writer: W, filter: &str)
+where
+    W: for<'a> MakeWriter<'a> + Send + Sync + 'static,
+{
+    fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .with_writer(writer)
+        .init();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,8 +110,8 @@ mod tests {
     #[test]
     fn init_logging() {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        unsafe { std::env::set_var("RUST_LOG", "info") };
-        init_with_writer(BufMakeWriter { buf: buf.clone() });
+        // Use explicit filter to avoid environment mutation (forbidden per coding guidelines)
+        init_with_writer_and_filter(BufMakeWriter { buf: buf.clone() }, "info");
         info!("captured");
         let output = String::from_utf8(buf.lock().expect("Failed to lock log buffer").clone())
             .expect("Captured output is not valid UTF-8");

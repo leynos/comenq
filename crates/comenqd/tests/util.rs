@@ -22,6 +22,10 @@ pub enum TestComplexity {
 pub struct TimeoutConfig {
     base_seconds: u64,
     complexity: TestComplexity,
+    /// Explicit CI flag; if None, reads from environment.
+    ci: Option<bool>,
+    /// Explicit coverage flag; if None, reads from environment.
+    coverage: Option<bool>,
 }
 
 impl TimeoutConfig {
@@ -29,7 +33,25 @@ impl TimeoutConfig {
         Self {
             base_seconds,
             complexity,
+            ci: None,
+            coverage: None,
         }
+    }
+
+    /// Set explicit CI flag, avoiding environment reads.
+    #[must_use]
+    #[allow(dead_code)] // Used in retry_helper.rs, not daemon.rs
+    pub const fn with_ci(mut self, ci: bool) -> Self {
+        self.ci = Some(ci);
+        self
+    }
+
+    /// Set explicit coverage flag, avoiding environment reads.
+    #[must_use]
+    #[allow(dead_code)] // Used in retry_helper.rs, not daemon.rs
+    pub const fn with_coverage(mut self, coverage: bool) -> Self {
+        self.coverage = Some(coverage);
+        self
     }
 
     pub fn calculate_timeout(&self) -> Duration {
@@ -43,10 +65,14 @@ impl TimeoutConfig {
         {
             timeout = timeout.saturating_mul(DEBUG_MULTIPLIER);
         }
-        if std::env::var("LLVM_PROFILE_FILE").is_ok() {
+        let coverage = self
+            .coverage
+            .unwrap_or_else(|| std::env::var("LLVM_PROFILE_FILE").is_ok());
+        if coverage {
             timeout = timeout.saturating_mul(COVERAGE_MULTIPLIER);
         }
-        if std::env::var("CI").is_ok() {
+        let ci = self.ci.unwrap_or_else(|| std::env::var("CI").is_ok());
+        if ci {
             timeout = timeout.saturating_mul(CI_MULTIPLIER);
         }
         timeout = timeout.max(MIN_TIMEOUT_SECS);

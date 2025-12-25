@@ -3,8 +3,6 @@
 mod util;
 
 use std::time::Duration;
-
-use test_support::EnvVarGuard;
 use tokio::time::sleep;
 
 use util::{
@@ -13,51 +11,62 @@ use util::{
 };
 
 #[test]
-#[serial_test::serial]
 fn calculate_timeout_caps_bounds() {
-    // Test without CI environment
-    {
-        let _guard = EnvVarGuard::remove("CI");
-        let cfg = TimeoutConfig::new(1, TestComplexity::Simple);
-        assert_eq!(
-            cfg.calculate_timeout(),
-            Duration::from_secs(MIN_TIMEOUT_SECS)
-        );
-    }
-
-    // Test with CI environment
-    {
-        let _guard = EnvVarGuard::set("CI", "1");
-        let cfg = TimeoutConfig::new(400, TestComplexity::Complex);
-        assert_eq!(
-            cfg.calculate_timeout(),
-            Duration::from_secs(MAX_TIMEOUT_SECS)
-        );
-    }
+    // Use explicit flags to avoid environment mutation (forbidden per coding guidelines)
+    let cfg = TimeoutConfig::new(1, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false);
+    assert_eq!(
+        cfg.calculate_timeout(),
+        Duration::from_secs(MIN_TIMEOUT_SECS)
+    );
+    let cfg = TimeoutConfig::new(400, TestComplexity::Complex)
+        .with_ci(true)
+        .with_coverage(false);
+    assert_eq!(
+        cfg.calculate_timeout(),
+        Duration::from_secs(MAX_TIMEOUT_SECS)
+    );
 }
 
 #[test]
-#[serial_test::serial]
 fn calculate_timeout_scales_with_ci_env() {
-    let _guard = EnvVarGuard::set("CI", "1");
-    let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
-    let mut expected = 10 * DEBUG_MULTIPLIER * CI_MULTIPLIER;
-    if std::env::var("LLVM_PROFILE_FILE").is_ok() {
-        expected *= COVERAGE_MULTIPLIER;
-    }
+    // Use explicit flags to avoid environment mutation (forbidden per coding guidelines)
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(true)
+        .with_coverage(false);
+    let expected = 10 * DEBUG_MULTIPLIER * CI_MULTIPLIER;
+    assert_eq!(cfg.calculate_timeout(), Duration::from_secs(expected));
+}
+
+#[test]
+fn calculate_timeout_scales_with_coverage() {
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(true);
+    let expected = 10 * DEBUG_MULTIPLIER * COVERAGE_MULTIPLIER;
     assert_eq!(cfg.calculate_timeout(), Duration::from_secs(expected));
 }
 
 #[test]
 fn calculate_timeout_respects_complexity() {
-    let simple = TimeoutConfig::new(10, TestComplexity::Simple).calculate_timeout();
-    let moderate = TimeoutConfig::new(10, TestComplexity::Moderate).calculate_timeout();
+    // Use explicit flags to ensure consistent environment (forbidden per coding guidelines)
+    let simple = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout();
+    let moderate = TimeoutConfig::new(10, TestComplexity::Moderate)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout();
     assert_eq!(moderate, Duration::from_secs(simple.as_secs() * 2));
 }
 
 #[test]
 fn with_progressive_retry_scales_base() {
-    let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false);
     let base = cfg.calculate_timeout().as_secs();
     let expected = vec![
         Duration::from_secs(base * 50 / 100),
@@ -69,7 +78,9 @@ fn with_progressive_retry_scales_base() {
 
 #[tokio::test(start_paused = true)]
 async fn retries_after_timeout_then_succeeds() {
-    let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false);
     let first_timeout = cfg.with_progressive_retry()[0];
     use std::sync::{
         Arc,
@@ -100,7 +111,9 @@ async fn retries_after_timeout_then_succeeds() {
 
 #[tokio::test(start_paused = true)]
 async fn fails_after_all_retries() {
-    let cfg = TimeoutConfig::new(10, TestComplexity::Simple);
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false);
     let timeouts = cfg.with_progressive_retry();
     let final_timeout = *timeouts.last().expect("timeouts");
     let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || async move {
