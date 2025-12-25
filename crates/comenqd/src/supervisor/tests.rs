@@ -28,7 +28,10 @@ fn create_cancelled_join_error() -> JoinError {
     tokio::runtime::Runtime::new()
         .expect("create runtime")
         .block_on(async {
-            let handle = tokio::spawn(async {});
+            // Use yield_now to ensure task doesn't complete before abort() is called
+            let handle = tokio::spawn(async {
+                tokio::task::yield_now().await;
+            });
             handle.abort();
             handle.await.unwrap_err()
         })
