@@ -1,9 +1,19 @@
+---
 name: Release
 
-on:
+'on':
   push:
     tags:
       - 'v*.*.*'
+  workflow_call:
+    inputs:
+      dry-run:
+        description: >-
+          When true, build and package without uploading artefacts or creating
+          a release.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-packages:
@@ -35,19 +45,23 @@ jobs:
       - name: Prepare release version
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dev"
+          fi
           echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
       - name: Clean dist directory
         run: rm -rf dist
       - name: Build ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/rust-build-release@1479e2ffbbf1053bb0205357dfe965299b7493ed
+        uses: leynos/shared-actions/.github/actions/rust-build-release@b3b75715b965ec6c09984a3cea6a725a17bd4107
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
           version: ${{ env.RELEASE_VERSION }}
           formats: deb,rpm
       - name: Package ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/linux-packages@1479e2ffbbf1053bb0205357dfe965299b7493ed
+        uses: leynos/shared-actions/.github/actions/linux-packages@b3b75715b965ec6c09984a3cea6a725a17bd4107
         with:
           bin-name: ${{ matrix.bin }}
           package-name: ${{ matrix.bin }}
@@ -58,6 +72,7 @@ jobs:
           deb-depends: ${{ env.PACKAGE_DEB_DEPENDS }}
           rpm-depends: ${{ env.PACKAGE_RPM_DEPENDS }}
       - name: Upload artefacts
+        if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.bin }}-${{ matrix.arch }}
@@ -68,6 +83,7 @@ jobs:
             dist/.man/**
           if-no-files-found: error
   release:
+    if: ${{ !inputs.dry-run }}
     name: Publish GitHub release
     runs-on: ubuntu-latest
     needs: build-packages
