@@ -17,6 +17,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Setup Rust
         uses: leynos/shared-actions/.github/actions/setup-rust@f9f1c863c8a5bef64aa6779caa746e1a4a6c1ad4
+      - name: Install nextest
+        uses: taiki-e/install-action@db22c42b5af88356329b9a8056bb2c2f026d5a10
+        with:
+          tool: nextest@0.9.114
       - name: Format
         run: make check-fmt
       - name: Lint

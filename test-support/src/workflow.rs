@@ -83,10 +83,9 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: {}
+              - uses: {EXPECTED_RUST_BUILDER}
               - uses: softprops/action-gh-release@v2
-        "#,
-            EXPECTED_RUST_BUILDER,
+        "#
         );
         assert!(uses_shared_release_actions(&yaml).expect("parse"));
     }
@@ -111,9 +110,8 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: {}
-        "#,
-            EXPECTED_RUST_BUILDER,
+              - uses: {EXPECTED_RUST_BUILDER}
+        "#
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }

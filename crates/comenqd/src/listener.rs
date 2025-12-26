@@ -28,7 +28,7 @@ use crate::supervisor::backoff;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use comenqd::listener::prepare_listener;
+/// use comenqd::daemon::listener::prepare_listener;
 /// use tempfile::tempdir;
 /// let dir = tempdir().expect("create tempdir");
 /// let sock = dir.path().join("sock");
@@ -169,8 +169,8 @@ mod tests {
     use std::thread;
     use tempfile::tempdir;
 
-    #[test]
-    fn prepare_listener_prevents_pre_bind_race() {
+    #[tokio::test]
+    async fn prepare_listener_prevents_pre_bind_race() {
         let dir = tempdir().expect("create tempdir");
         let sock = dir.path().join("sock");
         let stop = Arc::new(AtomicBool::new(false));

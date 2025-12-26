@@ -13,11 +13,11 @@ use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use yaque::Receiver;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::util::is_metadata_file;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::fs as stdfs;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::path::Path;
 
 /// Errors returned when posting a comment to GitHub.
@@ -53,31 +53,44 @@ async fn post_comment(
 }
 
 /// Hooks used to observe worker progress during tests.
+///
+/// Each hook uses [`Notify::notify_one`] which buffers a single permit for
+/// one waiting task. This design supports exactly one waiter per hook; if
+/// multiple tasks await the same hook, only one will be woken per notification.
 #[derive(Default)]
 pub struct WorkerHooks {
     /// Signalled when a request is retrieved from the queue.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
     pub enqueued: Option<Arc<Notify>>,
     /// Signalled after the worker completes processing of a request.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
     pub idle: Option<Arc<Notify>>,
     /// Signalled when the queue is empty and the worker is idle.
-    #[cfg_attr(not(test), allow(dead_code, reason = "test hook"))]
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
+    #[cfg_attr(
+        not(any(test, feature = "test-support")),
+        expect(dead_code, reason = "test hook only used in test/test-support builds")
+    )]
     pub drained: Option<Arc<Notify>>,
 }
 
 impl WorkerHooks {
     fn notify_enqueued(&self) {
         if let Some(n) = &self.enqueued {
-            n.notify_waiters();
+            n.notify_one();
         }
     }
 
     fn notify_idle(&self) {
         if let Some(n) = &self.idle {
-            n.notify_waiters();
+            n.notify_one();
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
         if let Some(n) = &self.drained {
             // Ignore sentinel files left by the queue implementation and
@@ -86,13 +99,15 @@ impl WorkerHooks {
                 .filter_map(Result::ok)
                 .any(|e| !is_metadata_file(e.file_name()));
             if empty {
-                n.notify_waiters();
+                n.notify_one();
             }
         }
         Ok(())
     }
 
     /// Waits for the specified number of seconds or until a shutdown is signalled.
+    ///
+    /// Returns `true` if shutdown was signalled, `false` if the timeout expired.
     ///
     /// # Arguments
     ///
@@ -103,28 +118,28 @@ impl WorkerHooks {
     ///
     /// ```rust,no_run
     /// use tokio::sync::watch;
-    /// use comenqd::worker::WorkerHooks;
+    /// use comenqd::daemon::WorkerHooks;
     ///
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
     /// let (tx, mut rx) = watch::channel(());
     ///
     /// // Wait for the full second when no shutdown signal is sent.
-    /// WorkerHooks::wait_or_shutdown(1, &mut rx).await;
+    /// assert!(!WorkerHooks::wait_or_shutdown(1, &mut rx).await);
     ///
     /// // Sending a shutdown signal returns immediately.
     /// let mut rx = tx.subscribe();
     /// tx.send(()).expect("notify shutdown");
-    /// WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+    /// assert!(WorkerHooks::wait_or_shutdown(60, &mut rx).await);
     /// # });
     /// ```
     ///
-    /// The function returns after either the timeout or a shutdown signal,
-    /// without indicating which occurred. Passing `secs = 0` returns immediately.
-    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) {
+    /// Passing `secs = 0` returns immediately with `false` unless shutdown was
+    /// already signalled.
+    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
         tokio::select! {
             biased;
-            _ = shutdown.changed() => {},
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
+            _ = shutdown.changed() => true,
+            _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
         }
     }
 }
@@ -146,7 +161,7 @@ impl WorkerControl {
     /// # Examples
     ///
     /// ```rust
-    /// use comenqd::worker::{WorkerControl, WorkerHooks};
+    /// use comenqd::daemon::{WorkerControl, WorkerHooks};
     /// use tokio::sync::watch;
     ///
     /// let (_tx, rx) = watch::channel(());
@@ -169,11 +184,16 @@ pub async fn run_worker(
     let shutdown = &mut control.shutdown;
     loop {
         let guard = tokio::select! {
-            res = rx.recv() => res?,
-            _ = shutdown.changed() => break,
+            biased;
+            _ = shutdown.changed() => {
+                break;
+            }
+            res = rx.recv() => {
+                res?
+            }
         };
         hooks.notify_enqueued();
-        let request: CommentRequest = match serde_json::from_slice(&guard) {
+        let request: CommentRequest = match serde_json::from_slice::<CommentRequest>(&guard) {
             Ok(req) => req,
             Err(e) => {
                 tracing::error!(error = %e, "Failed to deserialise queued request; dropping");
@@ -181,11 +201,13 @@ pub async fn run_worker(
                     tracing::error!(error = %commit_err, "Failed to commit malformed queue entry");
                 }
                 hooks.notify_idle();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
+                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+                    break;
+                }
                 continue;
             }
         };
@@ -214,11 +236,122 @@ pub async fn run_worker(
         }
 
         hooks.notify_idle();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await;
+        if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+            break;
+        }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+    use tokio::sync::watch;
+
+    #[tokio::test]
+    async fn wait_or_shutdown_returns_false_on_timeout() {
+        let (_tx, mut rx) = watch::channel(());
+        let start = Instant::now();
+        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+        assert!(!result, "should return false when timeout expires");
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "zero-second wait should return immediately"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_or_shutdown_returns_true_on_shutdown() {
+        let (tx, mut rx) = watch::channel(());
+        // Signal shutdown before waiting
+        tx.send(()).expect("send shutdown signal");
+        let result = WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+        assert!(result, "should return true when shutdown is signalled");
+    }
+
+    #[tokio::test]
+    async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
+        let (tx, mut rx) = watch::channel(());
+        // Send shutdown signal
+        tx.send(()).expect("send shutdown signal");
+        // Even with zero timeout, shutdown should be detected due to biased select
+        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+        assert!(result, "biased select should prioritise shutdown signal");
+    }
+
+    /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
+    ///
+    /// This validates the single-waiter semantics documented on WorkerHooks.
+    #[tokio::test]
+    async fn notify_one_wakes_exactly_one_waiter() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let notify = Arc::new(Notify::new());
+        let wake_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn three waiters
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let n = notify.clone();
+            let count = wake_count.clone();
+            handles.push(tokio::spawn(async move {
+                // Wait with a timeout to avoid hanging the test
+                if tokio::time::timeout(Duration::from_millis(100), n.notified())
+                    .await
+                    .is_ok()
+                {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        }
+
+        // Give waiters time to register
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Send exactly one notification
+        notify.notify_one();
+
+        // Wait for all tasks to complete (they'll timeout after 100ms)
+        for h in handles {
+            let _ = h.await;
+        }
+
+        // Only one waiter should have been woken
+        assert_eq!(
+            wake_count.load(Ordering::SeqCst),
+            1,
+            "notify_one should wake exactly one waiter"
+        );
+    }
+
+    /// Tests that notify_one buffers a permit when no waiters exist.
+    ///
+    /// This validates that the notification is not lost if sent before waiting.
+    #[tokio::test]
+    async fn notify_one_buffers_permit_when_no_waiters() {
+        let notify = Arc::new(Notify::new());
+
+        // Send notification before anyone is waiting
+        notify.notify_one();
+
+        // The first waiter should receive the buffered permit immediately
+        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
+        assert!(
+            result.is_ok(),
+            "buffered permit should wake first waiter immediately"
+        );
+
+        // Second waiter should NOT receive a permit (it was consumed)
+        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
+        assert!(
+            result.is_err(),
+            "second waiter should timeout with no remaining permit"
+        );
+    }
 }

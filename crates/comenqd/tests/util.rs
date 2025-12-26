@@ -22,6 +22,10 @@ pub enum TestComplexity {
 pub struct TimeoutConfig {
     base_seconds: u64,
     complexity: TestComplexity,
+    /// Explicit CI flag; if None, reads from environment.
+    ci: Option<bool>,
+    /// Explicit coverage flag; if None, reads from environment.
+    coverage: Option<bool>,
 }
 
 impl TimeoutConfig {
@@ -29,7 +33,23 @@ impl TimeoutConfig {
         Self {
             base_seconds,
             complexity,
+            ci: None,
+            coverage: None,
         }
+    }
+
+    /// Set explicit CI flag, avoiding environment reads.
+    #[must_use]
+    pub const fn with_ci(mut self, ci: bool) -> Self {
+        self.ci = Some(ci);
+        self
+    }
+
+    /// Set explicit coverage flag, avoiding environment reads.
+    #[must_use]
+    pub const fn with_coverage(mut self, coverage: bool) -> Self {
+        self.coverage = Some(coverage);
+        self
     }
 
     pub fn calculate_timeout(&self) -> Duration {
@@ -43,10 +63,14 @@ impl TimeoutConfig {
         {
             timeout = timeout.saturating_mul(DEBUG_MULTIPLIER);
         }
-        if std::env::var("LLVM_PROFILE_FILE").is_ok() {
+        let coverage = self
+            .coverage
+            .unwrap_or_else(|| std::env::var("LLVM_PROFILE_FILE").is_ok());
+        if coverage {
             timeout = timeout.saturating_mul(COVERAGE_MULTIPLIER);
         }
-        if std::env::var("CI").is_ok() {
+        let ci = self.ci.unwrap_or_else(|| std::env::var("CI").is_ok());
+        if ci {
             timeout = timeout.saturating_mul(CI_MULTIPLIER);
         }
         timeout = timeout.max(MIN_TIMEOUT_SECS);
@@ -96,7 +120,82 @@ where
 #[case(TestComplexity::Moderate)]
 #[case(TestComplexity::Complex)]
 fn uses_all_test_complexity_variants(#[case] complexity: TestComplexity) {
-    drop(TimeoutConfig::new(1, complexity));
+    let _ = TimeoutConfig::new(1, complexity);
+}
+
+/// Tests that explicit `with_ci(true)` applies the CI multiplier.
+#[test]
+fn with_ci_true_applies_multiplier() {
+    // Use explicit flags to avoid environment dependency
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_ci = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(true)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_ci, base * CI_MULTIPLIER);
+}
+
+/// Tests that explicit `with_coverage(true)` applies the coverage multiplier.
+#[test]
+fn with_coverage_true_applies_multiplier() {
+    // Use explicit flags to avoid environment dependency
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_cov = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(true)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_cov, base * COVERAGE_MULTIPLIER);
+}
+
+/// Tests that explicit flags override environment variables.
+#[test]
+fn explicit_flags_override_environment() {
+    // Even if environment variables are set, explicit false should disable multipliers
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    // Calculate expected value without any environment-based multipliers
+    #[cfg(debug_assertions)]
+    let expected = 10 * DEBUG_MULTIPLIER;
+    #[cfg(not(debug_assertions))]
+    let expected = 10u64;
+
+    assert_eq!(base, expected.max(MIN_TIMEOUT_SECS));
+}
+
+/// Tests that both CI and coverage multipliers stack when both are enabled.
+#[test]
+fn ci_and_coverage_multipliers_stack() {
+    let base = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false)
+        .calculate_timeout()
+        .as_secs();
+
+    let with_both = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(true)
+        .with_coverage(true)
+        .calculate_timeout()
+        .as_secs();
+
+    assert_eq!(with_both, base * CI_MULTIPLIER * COVERAGE_MULTIPLIER);
 }
 
 /// Map a task [`JoinError`] into a concise diagnostic message.

@@ -2,6 +2,7 @@
 
 pub mod daemon;
 pub mod env_guard;
+pub mod logging;
 pub mod util;
 mod workflow;
 pub use workflow::uses_shared_release_actions;

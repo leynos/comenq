@@ -67,7 +67,7 @@ async fn supervise_until_restarts<F1, F2>(
     {
         t1.abort();
         t2.abort();
-        panic!("Supervisor timeout after {:?}", timeout_duration);
+        panic!("Supervisor timeout after {timeout_duration:?}");
     }
 }
 
@@ -86,7 +86,7 @@ async fn restarts_failed_task(#[case] failing: FailingTask) {
     let attempts_clone = Arc::clone(&attempts);
 
     type Maker = Box<dyn FnMut() -> JoinHandle<anyhow::Result<()>> + Send>;
-    let (mut listener_maker, mut worker_maker): (Maker, Maker) = match failing {
+    let (listener_maker, worker_maker): (Maker, Maker) = match failing {
         FailingTask::Listener => {
             let listener_maker: Maker = Box::new({
                 let attempts = Arc::clone(&attempts_clone);
@@ -148,8 +148,8 @@ async fn restarts_failed_task(#[case] failing: FailingTask) {
     };
 
     let supervisor = tokio::spawn(supervise_until_restarts(
-        move || listener_maker(),
-        move || worker_maker(),
+        listener_maker,
+        worker_maker,
         shutdown_rx,
     ));
     while attempts.load(Ordering::Relaxed) < 2 {
