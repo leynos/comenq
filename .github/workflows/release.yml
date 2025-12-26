@@ -58,7 +58,7 @@ jobs:
           deb-depends: ${{ env.PACKAGE_DEB_DEPENDS }}
           rpm-depends: ${{ env.PACKAGE_RPM_DEPENDS }}
       - name: Upload artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.bin }}-${{ matrix.arch }}
           path: |
