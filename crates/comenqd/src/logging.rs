@@ -44,42 +44,12 @@ where
         .init();
 }
 
-/// Initialise logging with a custom writer and explicit filter.
-///
-/// This avoids reading from the environment, making it suitable for tests
-/// where environment mutation is forbidden.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use comenqd::logging::init_with_writer_and_filter;
-/// use tracing_subscriber::fmt;
-///
-/// init_with_writer_and_filter(fmt::writer::BoxMakeWriter::new(std::io::stdout), "info");
-/// ```
-#[cfg(feature = "test-support")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "feature-gated test helper; used only when #[cfg(test)] is also set"
-    )
-)]
-pub fn init_with_writer_and_filter<W>(writer: W, filter: &str)
-where
-    W: for<'a> MakeWriter<'a> + Send + Sync + 'static,
-{
-    fmt()
-        .with_env_filter(EnvFilter::new(filter))
-        .with_writer(writer)
-        .init();
-}
-
-#[cfg(all(test, feature = "test-support"))]
+#[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Arc, Mutex};
+    use test_support::logging::init_with_writer_and_filter;
     use tracing::info;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Clone)]
     struct BufMakeWriter {
