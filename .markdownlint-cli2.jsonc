@@ -14,8 +14,8 @@
     "**/.venv/**",
     "**/node_modules/**",
     "**/target/**",
-    ".terraform/**",
-    ".uv-cache/**",
+    "**/.terraform/**",
+    "**/.uv-cache/**",
     "CRUSH.md"
   ]
 }
