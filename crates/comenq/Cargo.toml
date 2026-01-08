@@ -6,6 +6,10 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "comenq"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { workspace = true }
 clap = { workspace = true }
