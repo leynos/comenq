@@ -5,7 +5,7 @@ use serde_yaml::Value;
 // Provide the shared-actions commit hash as a literal so concat! can build constants without runtime formatting.
 macro_rules! shared_actions_commit_literal {
     () => {
-        "df81280dcc1d6e66134114dbc924313328b15f05"
+        "cb06757ebba47bb018ac0ade84fa5dc9ffb95020"
     };
 }
 
