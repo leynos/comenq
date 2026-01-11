@@ -94,6 +94,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
+          project-dir: crates/${{ matrix.bin }}
       - name: Package ${{ matrix.bin }}
         uses: leynos/shared-actions/.github/actions/linux-packages@df81280dcc1d6e66134114dbc924313328b15f05
         with:
