@@ -3,6 +3,12 @@ name = "comenqd"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "comenqd"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { workspace = true }
