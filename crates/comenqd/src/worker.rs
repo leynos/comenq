@@ -70,10 +70,6 @@ pub struct WorkerHooks {
     /// Signalled when the queue is empty and the worker is idle.
     ///
     /// Only one waiter is supported; additional waiters will not be notified.
-    #[cfg_attr(
-        not(any(test, feature = "test-support")),
-        expect(dead_code, reason = "test hook only used in test/test-support builds")
-    )]
     pub drained: Option<Arc<Notify>>,
 }
 
