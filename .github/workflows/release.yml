@@ -54,6 +54,9 @@ jobs:
       - name: Determine release modes
         id: release_modes
         uses: leynos/shared-actions/.github/actions/determine-release-modes@cb06757ebba47bb018ac0ade84fa5dc9ffb95020
+        with:
+          dry-run: ${{ inputs.dry-run }}
+          publish: ${{ inputs.publish }}
       - name: Read package version
         id: ensure_version
         uses: leynos/shared-actions/.github/actions/ensure-cargo-version@cb06757ebba47bb018ac0ade84fa5dc9ffb95020
