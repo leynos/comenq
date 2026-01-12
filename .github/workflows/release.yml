@@ -110,7 +110,7 @@ jobs:
           deb-depends: ${{ env.PACKAGE_DEB_DEPENDS }}
           rpm-depends: ${{ env.PACKAGE_RPM_DEPENDS }}
       - name: Upload artefacts
-        if: fromJSON(needs.metadata.outputs.should_upload_workflow_artifacts) || needs.metadata.outputs.should_publish == 'true'
+        if: fromJSON(needs.metadata.outputs.should_upload_workflow_artifacts) || fromJSON(needs.metadata.outputs.should_publish)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.bin }}-${{ matrix.arch }}
@@ -123,7 +123,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: needs.metadata.outputs.should_publish == 'true'
+    if: fromJSON(needs.metadata.outputs.should_publish)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -167,15 +167,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check comenq upload errors
-        if: steps.upload_comenq.outputs.upload-error == 'true'
+      - name: Check upload errors
+        if: steps.upload_comenq.outputs.upload-error == 'true' || steps.upload_comenqd.outputs.upload-error == 'true'
         run: |
-          echo "Error uploading comenq release assets:"
-          printf '%s\n' "${{ steps.upload_comenq.outputs.error-message }}"
-          exit 1
-      - name: Check comenqd upload errors
-        if: steps.upload_comenqd.outputs.upload-error == 'true'
-        run: |
-          echo "Error uploading comenqd release assets:"
-          printf '%s\n' "${{ steps.upload_comenqd.outputs.error-message }}"
-          exit 1
+          has_error=false
+          if [ "${{ steps.upload_comenq.outputs.upload-error }}" = "true" ]; then
+            echo "Error uploading comenq release assets:"
+            printf '%s\n' "${{ steps.upload_comenq.outputs.error-message }}"
+            has_error=true
+          fi
+          if [ "${{ steps.upload_comenqd.outputs.upload-error }}" = "true" ]; then
+            echo "Error uploading comenqd release assets:"
+            printf '%s\n' "${{ steps.upload_comenqd.outputs.error-message }}"
+            has_error=true
+          fi
+          if [ "$has_error" = "true" ]; then
+            exit 1
+          fi
