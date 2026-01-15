@@ -37,7 +37,7 @@ name: Release
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   metadata:
@@ -169,16 +169,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check upload errors
         if: steps.upload_comenq.outputs.upload-error == 'true' || steps.upload_comenqd.outputs.upload-error == 'true'
+        env:
+          UPLOAD_ERROR_COMENQ: ${{ steps.upload_comenq.outputs.upload-error }}
+          UPLOAD_ERROR_COMENQD: ${{ steps.upload_comenqd.outputs.upload-error }}
+          ERROR_MSG_COMENQ: ${{ steps.upload_comenq.outputs.error-message }}
+          ERROR_MSG_COMENQD: ${{ steps.upload_comenqd.outputs.error-message }}
         run: |
           has_error=false
-          if [ "${{ steps.upload_comenq.outputs.upload-error }}" = "true" ]; then
+          if [ "$UPLOAD_ERROR_COMENQ" = "true" ]; then
             echo "Error uploading comenq release assets:"
-            printf '%s\n' "${{ steps.upload_comenq.outputs.error-message }}"
+            printf '%s\n' "$ERROR_MSG_COMENQ"
             has_error=true
           fi
-          if [ "${{ steps.upload_comenqd.outputs.upload-error }}" = "true" ]; then
+          if [ "$UPLOAD_ERROR_COMENQD" = "true" ]; then
             echo "Error uploading comenqd release assets:"
-            printf '%s\n' "${{ steps.upload_comenqd.outputs.error-message }}"
+            printf '%s\n' "$ERROR_MSG_COMENQD"
             has_error=true
           fi
           if [ "$has_error" = "true" ]; then
