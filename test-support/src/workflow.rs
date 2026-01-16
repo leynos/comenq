@@ -166,6 +166,36 @@ mod tests {
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn mismatched_publisher_commit_fails() {
+        let yaml = format!(
+            r#"
+        jobs:
+          release:
+            steps:
+              - uses: {EXPECTED_RUST_BUILDER}
+              - uses: leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+        "#
+        );
+        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn unpinned_publisher_fails() {
+        let yaml = format!(
+            r#"
+        jobs:
+          release:
+            steps:
+              - uses: {EXPECTED_RUST_BUILDER}
+              - uses: leynos/shared-actions/.github/actions/upload-release-assets@v1
+        "#
+        );
+        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
     fn malformed_yaml_errors() {
         let yaml = "jobs: [";
         _ = uses_shared_release_actions(yaml).expect_err("expected parse failure");
