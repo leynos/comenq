@@ -87,6 +87,7 @@ mod tests {
         EXPECTED_RUST_BUILDER, EXPECTED_SHARED_ACTIONS_COMMIT, EXPECTED_UPLOAD_RELEASE_ASSETS,
         uses_shared_release_actions,
     };
+    use rstest::rstest;
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
@@ -134,61 +135,31 @@ mod tests {
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
 
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn mismatched_builder_commit_fails() {
+    #[rstest]
+    #[case::mismatched_builder_commit(
+        "leynos/shared-actions/.github/actions/rust-build-release@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        EXPECTED_UPLOAD_RELEASE_ASSETS
+    )]
+    #[case::unpinned_builder(
+        "leynos/shared-actions/.github/actions/rust-build-release@v1",
+        EXPECTED_UPLOAD_RELEASE_ASSETS
+    )]
+    #[case::mismatched_publisher_commit(
+        EXPECTED_RUST_BUILDER,
+        "leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    )]
+    #[case::unpinned_publisher(
+        EXPECTED_RUST_BUILDER,
+        "leynos/shared-actions/.github/actions/upload-release-assets@v1"
+    )]
+    fn invalid_action_pinning_fails(#[case] builder: &str, #[case] publisher: &str) {
         let yaml = format!(
             r#"
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
-        "#
-        );
-        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn unpinned_builder_fails() {
-        let yaml = format!(
-            r#"
-        jobs:
-          release:
-            steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@v1
-              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
-        "#
-        );
-        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn mismatched_publisher_commit_fails() {
-        let yaml = format!(
-            r#"
-        jobs:
-          release:
-            steps:
-              - uses: {EXPECTED_RUST_BUILDER}
-              - uses: leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-        "#
-        );
-        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn unpinned_publisher_fails() {
-        let yaml = format!(
-            r#"
-        jobs:
-          release:
-            steps:
-              - uses: {EXPECTED_RUST_BUILDER}
-              - uses: leynos/shared-actions/.github/actions/upload-release-assets@v1
+              - uses: {builder}
+              - uses: {publisher}
         "#
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
