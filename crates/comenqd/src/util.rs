@@ -2,11 +2,13 @@
 //!
 //! Provides helpers used across production code and tests.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::ffi::OsStr;
 
 /// Names of files storing queue metadata.
 ///
 /// Extend this list when new metadata files are introduced.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const METADATA_FILE_NAMES: [&str; 3] = ["version", "recv.lock", "send.lock"];
 
 /// Returns whether a file name represents queue metadata.
@@ -19,6 +21,7 @@ pub(crate) const METADATA_FILE_NAMES: [&str; 3] = ["version", "recv.lock", "send
 /// assert!(is_metadata_file(OsStr::new("version")));
 /// assert!(!is_metadata_file(OsStr::new("0001")));
 /// ```
+#[cfg(any(test, feature = "test-support"))]
 pub fn is_metadata_file(name: impl AsRef<OsStr>) -> bool {
     let name = name.as_ref();
     METADATA_FILE_NAMES.iter().any(|m| OsStr::new(m) == name)

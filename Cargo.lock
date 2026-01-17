@@ -2526,6 +2526,7 @@ name = "test-support"
 version = "0.1.0"
 dependencies = [
  "octocrab",
+ "rstest",
  "serde",
  "serde_yaml",
  "serial_test",

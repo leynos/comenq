@@ -5,7 +5,7 @@ use serde_yaml::Value;
 // Provide the shared-actions commit hash as a literal so concat! can build constants without runtime formatting.
 macro_rules! shared_actions_commit_literal {
     () => {
-        "1479e2ffbbf1053bb0205357dfe965299b7493ed"
+        "cb06757ebba47bb018ac0ade84fa5dc9ffb95020"
     };
 }
 
@@ -18,10 +18,21 @@ const EXPECTED_SHARED_ACTIONS_COMMIT: &str = shared_actions_commit_literal!();
 /// The prefix for the shared release build composite action identifier.
 const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/rust-build-release@";
 
+/// The prefix for the shared release asset upload composite action identifier.
+const UPLOAD_RELEASE_ASSETS_PREFIX: &str =
+    "leynos/shared-actions/.github/actions/upload-release-assets@";
+
 /// The release builder action reference expected by tests, built at compile time to avoid allocations.
 #[cfg(test)]
 const EXPECTED_RUST_BUILDER: &str = concat!(
     "leynos/shared-actions/.github/actions/rust-build-release@",
+    shared_actions_commit_literal!(),
+);
+
+/// The release publisher action reference expected by tests, built at compile time to avoid allocations.
+#[cfg(test)]
+const EXPECTED_UPLOAD_RELEASE_ASSETS: &str = concat!(
+    "leynos/shared-actions/.github/actions/upload-release-assets@",
     shared_actions_commit_literal!(),
 );
 
@@ -57,7 +68,10 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
                 {
                     saw_rust_builder = true;
                 }
-                if uses.starts_with("softprops/action-gh-release@") {
+                if uses
+                    .strip_prefix(UPLOAD_RELEASE_ASSETS_PREFIX)
+                    .is_some_and(|commit| commit == SHARED_ACTIONS_COMMIT)
+                {
                     saw_release_publisher = true;
                 }
             }
@@ -70,13 +84,16 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 #[cfg(test)]
 mod tests {
     use super::{
-        EXPECTED_RUST_BUILDER, EXPECTED_SHARED_ACTIONS_COMMIT, uses_shared_release_actions,
+        EXPECTED_RUST_BUILDER, EXPECTED_SHARED_ACTIONS_COMMIT, EXPECTED_UPLOAD_RELEASE_ASSETS,
+        uses_shared_release_actions,
     };
+    use rstest::rstest;
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_shared_actions() {
         assert!(EXPECTED_RUST_BUILDER.ends_with(EXPECTED_SHARED_ACTIONS_COMMIT));
+        assert!(EXPECTED_UPLOAD_RELEASE_ASSETS.ends_with(EXPECTED_SHARED_ACTIONS_COMMIT));
 
         let yaml = format!(
             r#"
@@ -84,7 +101,7 @@ mod tests {
           release:
             steps:
               - uses: {EXPECTED_RUST_BUILDER}
-              - uses: softprops/action-gh-release@v2
+              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
         "#
         );
         assert!(uses_shared_release_actions(&yaml).expect("parse"));
@@ -93,13 +110,15 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn missing_builder_fails() {
-        let yaml = r"
+        let yaml = format!(
+            r#"
         jobs:
           release:
             steps:
-              - uses: softprops/action-gh-release@v2
-        ";
-        assert!(!uses_shared_release_actions(yaml).expect("parse"));
+              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
+        "#
+        );
+        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
 
     #[test]
@@ -116,30 +135,34 @@ mod tests {
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
 
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn mismatched_builder_commit_fails() {
-        let yaml = r#"
+    #[rstest]
+    #[case::mismatched_builder_commit(
+        "leynos/shared-actions/.github/actions/rust-build-release@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        EXPECTED_UPLOAD_RELEASE_ASSETS
+    )]
+    #[case::unpinned_builder(
+        "leynos/shared-actions/.github/actions/rust-build-release@v1",
+        EXPECTED_UPLOAD_RELEASE_ASSETS
+    )]
+    #[case::mismatched_publisher_commit(
+        EXPECTED_RUST_BUILDER,
+        "leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    )]
+    #[case::unpinned_publisher(
+        EXPECTED_RUST_BUILDER,
+        "leynos/shared-actions/.github/actions/upload-release-assets@v1"
+    )]
+    fn invalid_action_pinning_fails(#[case] builder: &str, #[case] publisher: &str) {
+        let yaml = format!(
+            r#"
         jobs:
           release:
             steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-              - uses: softprops/action-gh-release@v2
-        "#;
-        assert!(!uses_shared_release_actions(yaml).expect("parse"));
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "simplify test output")]
-    fn unpinned_builder_fails() {
-        let yaml = r#"
-        jobs:
-          release:
-            steps:
-              - uses: leynos/shared-actions/.github/actions/rust-build-release@v1
-              - uses: softprops/action-gh-release@v2
-        "#;
-        assert!(!uses_shared_release_actions(yaml).expect("parse"));
+              - uses: {builder}
+              - uses: {publisher}
+        "#
+        );
+        assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
 
     #[test]
