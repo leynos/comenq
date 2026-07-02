@@ -1,6 +1,8 @@
 # Implementation Roadmap
 
-## Milestone 1: Project Scaffolding and Shared Library
+## 1. Project Scaffolding and Shared Library
+
+### 1.1. Project scaffolding and shared library tasks
 
 - [x] Set up the Rust workspace with two binary crates (`comenq`, `comenqd`)
   and a shared library crate (`comenq-lib`), as outlined in the project
@@ -12,7 +14,9 @@
 - [x] Populate the root `Cargo.toml` with the specified workspace dependencies
   (`tokio`, `clap`, `serde`, `octocrab`, `yaque`, etc.).
 
-## Milestone 2: `comenq` CLI Client
+## 2. `comenq` CLI Client
+
+### 2.1. CLI client tasks
 
 - [x] Implement the CLI argument parsing using `clap`'s derive macro to define
   the `Args` struct (`repo_slug`, `pr_number`, `comment_body`, `socket`).
@@ -28,7 +32,9 @@
 - [x] Implement robust error handling and user feedback for connection
   failures or serialization errors.
 
-## Milestone 3: `comenqd` Daemon Core
+## 3. `comenqd` Daemon Core
+
+### 3.1. Daemon core tasks
 
 - [x] Implement configuration loading from a TOML file (done)
   (`/etc/comenqd/config.toml`) for parameters like `github_token`,
@@ -43,7 +49,9 @@
 - [x] Structure the daemon's `main` function to spawn the two primary,
   long-running `tokio` tasks: the UDS listener and the queue worker.
 
-## Milestone 4: `comenqd` Daemon — UDS Listener Task
+## 4. `comenqd` Daemon — UDS Listener Task
+
+### 4.1. UDS listener tasks
 
 - [x] Implement the `run_listener` async task.
 
@@ -58,7 +66,9 @@
 - [x] Implement the `handle_client` task to read the JSON payload, deserialize
   it into a `CommentRequest`, and enqueue it using the `yaque` sender.
 
-## Milestone 5: `comenqd` Daemon — Queue Worker Task
+## 5. `comenqd` Daemon — Queue Worker Task
+
+### 5.1. Queue worker tasks
 
 - [x] Implement the `run_worker` async task.
 
@@ -79,48 +89,51 @@
 - [x] After processing each job (successfully or not), enforce the 16-minute
   (960 seconds) cooling-off period using `tokio::time::sleep`.
 
-## Milestone 6: Automated Cross-Platform Packaging and Release
+## 6. Automated Cross-Platform Packaging and Release
 
 This milestone seeks to produce native packages for major Linux distributions
 and macOS, simplifying installation and improving security and maintainability.
 
-- [x] **Implement Declarative Packaging with GoReleaser**
+### 6.1. Packaging and release tasks
 
-  - [x] Create a comprehensive `.goreleaser.yaml` configuration to define Linux
-    build, packaging, and release process for both `comenq` and `comenqd`.
+- [x] 6.1.1. **Implement Declarative Packaging with GoReleaser**
 
-  - [x] Use GoReleaser's custom builder hooks to integrate the `cargo build`
-    process for the Rust binaries.
+  - [x] 6.1.1.1. Create a comprehensive `.goreleaser.yaml` configuration to
+    define Linux build, packaging, and release process for both `comenq` and
+    `comenqd`.
 
-- [x] **Package for Linux Distributions (Fedora & Ubuntu)**
+  - [x] 6.1.1.2. Use GoReleaser's custom builder hooks to integrate the
+    `cargo build` process for the Rust binaries.
 
-  - [x] Create a hardened `systemd` service unit file (`comenqd.service`) for
-    the daemon, incorporating security best practices (`ProtectSystem`,
-    `PrivateTmp`, `NoNewPrivileges`, etc.).
+- [x] 6.1.2. **Package for Linux Distributions (Fedora & Ubuntu)**
 
-  - [x] Author `preinstall`, `postinstall`, and `preremove` scripts to be
-    embedded in the packages. These will handle the creation of the dedicated
-    `comenq` system user and manage the `systemd` service lifecycle.
+  - [x] 6.1.2.1. Create a hardened `systemd` service unit file
+    (`comenqd.service`) for the daemon, incorporating security best practices
+    (`ProtectSystem`, `PrivateTmp`, `NoNewPrivileges`, etc.).
 
-  - [x] Configure GoReleaser's `nfpms` section to build and sign `.rpm` and
-    `.deb` packages.
+  - [x] 6.1.2.2. Author `preinstall`, `postinstall`, and `preremove` scripts to
+    be embedded in the packages. These will handle the creation of the
+    dedicated `comenq` system user and manage the `systemd` service lifecycle.
 
-- [x] **Automate the Release Workflow**
+  - [x] 6.1.2.3. Configure GoReleaser's `nfpms` section to build and sign
+    `.rpm` and `.deb` packages.
 
-  - [x] Implement a GitHub Actions workflow that triggers on new version tags
-    (e.g., `v*`).
+- [x] 6.1.3. **Automate the Release Workflow**
 
-  - [x] The workflow will orchestrate the entire release: checking out the
-    code, installing dependencies, and executing GoReleaser.
+  - [x] 6.1.3.1. Implement a GitHub Actions workflow that triggers on new
+    version tags (e.g., `v*`).
 
-  - [x] GoReleaser will then build the binaries, create all packages, publish
-    the Homebrew formula, generate a changelog from git history, and upload all
-    assets to a draft GitHub Release.
+  - [x] 6.1.3.2. The workflow will orchestrate the entire release: checking out
+    the code, installing dependencies, and executing GoReleaser.
 
-- [ ] **Update Public Documentation**
+  - [x] 6.1.3.3. GoReleaser will then build the binaries, create all packages,
+    publish the Homebrew formula, generate a changelog from git history, and
+    upload all assets to a draft GitHub Release.
 
-  - [ ] Revise the `README.md` to feature the new, simplified installation
-    instructions using `apt` and `dnf`
+- [ ] 6.1.4. **Update Public Documentation**
 
-  - [ ] Add a new document to the `/docs` directory detailing the automated
-    packaging process for future maintainers and contributors.
+  - [ ] 6.1.4.1. Revise the `README.md` to feature the new, simplified
+    installation instructions using `apt` and `dnf`
+
+  - [ ] 6.1.4.2. Add a new document to the `/docs` directory detailing the
+    automated packaging process for future maintainers and contributors.
