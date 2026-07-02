@@ -111,7 +111,7 @@ jobs:
           rpm-depends: ${{ env.PACKAGE_RPM_DEPENDS }}
       - name: Upload artefacts
         if: fromJSON(needs.metadata.outputs.should_upload_workflow_artifacts) || fromJSON(needs.metadata.outputs.should_publish)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.bin }}-${{ matrix.arch }}
           path: |
