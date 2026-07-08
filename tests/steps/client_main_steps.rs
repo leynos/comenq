@@ -16,6 +16,16 @@ pub struct ClientWorld {
     result: Option<Result<(), ClientError>>,
 }
 
+/// Build the default client arguments targeting `socket`.
+fn base_args(socket: std::path::PathBuf) -> anyhow::Result<Args> {
+    Ok(Args {
+        repo_slug: "octocat/hello-world".parse().context("slug")?,
+        pr_number: 1,
+        comment_body: "Hi".into(),
+        socket,
+    })
+}
+
 #[given("a dummy daemon listening on a socket")]
 fn dummy_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
@@ -29,12 +39,7 @@ fn dummy_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
         Ok(buf)
     });
 
-    world.args = Some(Args {
-        repo_slug: "octocat/hello-world".parse().context("slug")?,
-        pr_number: 1,
-        comment_body: "Hi".into(),
-        socket: socket.clone(),
-    });
+    world.args = Some(base_args(socket)?);
     world.tempdir = Some(dir);
     world.server = Some(handle);
     Ok(())
@@ -44,12 +49,7 @@ fn dummy_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
 fn no_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
     let socket = dir.path().join("sock");
-    world.args = Some(Args {
-        repo_slug: "octocat/hello-world".parse().context("slug")?,
-        pr_number: 1,
-        comment_body: "Hi".into(),
-        socket,
-    });
+    world.args = Some(base_args(socket)?);
     world.tempdir = Some(dir);
     Ok(())
 }

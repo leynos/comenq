@@ -18,15 +18,21 @@ pub struct ConfigWorld {
     socket_guard: Option<EnvVarGuard>,
 }
 
+/// Create a tempdir containing a `config.toml` with `content`.
+fn write_temp_config(content: &str) -> anyhow::Result<(TempDir, PathBuf)> {
+    let dir = TempDir::new().context("create temp dir")?;
+    let path = dir.path().join("config.toml");
+    fs::write(&path, content).context("write file")?;
+    Ok((dir, path))
+}
+
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "cucumber requires owned values"
 )]
 fn config_file_with_token(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
-    let dir = TempDir::new().context("create temp dir")?;
-    let path = dir.path().join("config.toml");
-    fs::write(&path, format!("github_token='{token}'")).context("write file")?;
+    let (dir, path) = write_temp_config(&format!("github_token='{token}'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
     world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
@@ -35,9 +41,7 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) -> anyhow::Res
 
 #[given("an invalid configuration file")]
 fn invalid_configuration_file(world: &mut ConfigWorld) -> anyhow::Result<()> {
-    let dir = TempDir::new().context("create temp dir")?;
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "github_token='abc' this is not toml").context("write file")?;
+    let (dir, path) = write_temp_config("github_token='abc' this is not toml")?;
     world.dir = Some(dir);
     world.path = Some(path);
     Ok(())
@@ -45,9 +49,7 @@ fn invalid_configuration_file(world: &mut ConfigWorld) -> anyhow::Result<()> {
 
 #[given("a configuration file without github_token")]
 fn config_file_without_token(world: &mut ConfigWorld) -> anyhow::Result<()> {
-    let dir = TempDir::new().context("create temp dir")?;
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "socket_path='/tmp/s.sock'").context("write file")?;
+    let (dir, path) = write_temp_config("socket_path='/tmp/s.sock'")?;
     world.dir = Some(dir);
     world.path = Some(path);
     Ok(())
@@ -59,13 +61,7 @@ fn config_file_without_token(world: &mut ConfigWorld) -> anyhow::Result<()> {
     reason = "cucumber requires owned values"
 )]
 fn config_without_socket(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
-    let dir = TempDir::new().context("create temp dir")?;
-    let path = dir.path().join("config.toml");
-    fs::write(
-        &path,
-        format!("github_token='{token}'\nqueue_path='/tmp/q'"),
-    )
-    .context("write file")?;
+    let (dir, path) = write_temp_config(&format!("github_token='{token}'\nqueue_path='/tmp/q'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
     world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));

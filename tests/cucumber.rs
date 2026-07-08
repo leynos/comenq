@@ -11,11 +11,14 @@ use steps::{
 };
 
 fn main() -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
     // Build the runtime explicitly so runtime construction errors propagate
     // instead of panicking inside the `#[tokio::main]` expansion.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?;
+        .build()
+        .context("failed to build the Tokio runtime for the cucumber test binary")?;
     runtime.block_on(async {
         tokio::join!(
             CliWorld::run("tests/features/cli.feature"),
