@@ -30,7 +30,9 @@ EXPECTED_USES = (
 )
 
 #: The exact caller configuration: the root comenq-lib crate plus the
-#: crates/ workspace members are mutation targets; the test-support and
+#: crates/ workspace members are mutation targets (--workspace, because
+#: the root manifest is itself a package so cargo-mutants would
+#: otherwise mutate only comenq-lib); the test-support and
 #: crates/test-utils helper crates are excluded as scaffolding; and the
 #: baseline mirrors CI (workspace-wide, --all-features) so library
 #: crates covered by dependent crates' tests do not report false
@@ -38,7 +40,7 @@ EXPECTED_USES = (
 EXPECTED_WITH = {
     "paths": "src/,crates/",
     "exclude-globs": "test-support/**,crates/test-utils/**",
-    "extra-args": "--all-features --test-workspace=true",
+    "extra-args": "--workspace --all-features --test-workspace=true",
 }
 
 
