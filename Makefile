@@ -5,6 +5,7 @@ CARGO ?= cargo
 BUILD_JOBS ?=
 CLIPPY_FLAGS ?= --workspace --all-targets --all-features -- -D warnings
 MDLINT ?= markdownlint-cli2
+WHITAKER ?= whitaker
 NIXIE ?= nixie
 COV_MIN ?= 0 # Minimum line coverage percentage for coverage targets
 
@@ -51,8 +52,9 @@ test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to cover
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
 
-lint: ## Run Clippy with warnings denied
+lint: ## Run Clippy and the Whitaker Dylint suite with warnings denied
 	$(CARGO) clippy $(CLIPPY_FLAGS)
+	RUSTFLAGS="-D warnings" $(WHITAKER) --all -- --all-targets --all-features
 
 fmt: ## Format Rust and Markdown sources
 	$(CARGO) fmt --all
@@ -65,7 +67,7 @@ markdownlint: ## Lint Markdown files
 	$(MDLINT) "**/*.md"
 
 nixie: ## Validate Mermaid diagrams
-	$(NIXIE) --no-sandbox "**/*.md"
+	$(NIXIE) --no-sandbox
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

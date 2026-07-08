@@ -1,0 +1,21 @@
+# Configuration for the Whitaker Dylint suite.
+#
+# Crates excluded from the no_std_fs_operations lint because they legitimately
+# require ambient std::fs access:
+# - build_script_build: the build scripts stage packaged man pages into
+#   Cargo's OUT_DIR; they run in Cargo's ambient environment by design, so
+#   capability-based handles offer no benefit.
+# - comenqd: the daemon prepares its Unix domain socket (permissions, atomic
+#   rename, stale-socket removal) and inspects its yaque queue directory at
+#   operator-configured absolute paths supplied by systemd-style
+#   configuration; this ambient access is intrinsic to the daemon's role.
+# - cucumber: the behavioural test crate; step fixtures write configuration
+#   files and packaging manifests inside ambient tempdirs, which the Whitaker
+#   user's guide lists as a sanctioned exclusion category (test support
+#   utilities).
+[no_std_fs_operations]
+excluded_crates = [
+    "build_script_build",
+    "comenqd",
+    "cucumber",
+]
