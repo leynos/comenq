@@ -4,6 +4,7 @@
 //! invalid command line inputs, including the optional `--socket`
 //! flag. They ensure the parser surface behaves as documented.
 
+use anyhow::Context as _;
 use clap::Parser;
 use cucumber::{World, given, then, when};
 use std::ffi::OsString;
@@ -52,13 +53,13 @@ fn socket_path(world: &mut CliWorld, path: String) {
 }
 
 #[when("they are parsed")]
-#[expect(clippy::expect_used, reason = "simplify test failure output")]
-fn they_are_parsed(world: &mut CliWorld) {
+fn they_are_parsed(world: &mut CliWorld) -> anyhow::Result<()> {
     let args = world
         .args
         .clone()
-        .expect("world.args should be set by a given step");
+        .context("world.args should be set by a given step")?;
     world.result = Some(Args::try_parse_from(args));
+    Ok(())
 }
 
 #[then("parsing succeeds")]

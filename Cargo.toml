@@ -11,6 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 cucumber = "0.20"
 tokio = { workspace = true }
 clap = { workspace = true }

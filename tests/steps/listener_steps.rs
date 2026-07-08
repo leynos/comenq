@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use cucumber::World;
 use cucumber::{given, then, when};
 use tempfile::TempDir;
@@ -33,15 +34,10 @@ impl std::fmt::Debug for ListenerWorld {
 }
 
 #[given("a running listener task")]
-#[expect(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
-async fn running_listener(world: &mut ListenerWorld) {
-    let dir = TempDir::new().expect("tempdir");
+async fn running_listener(world: &mut ListenerWorld) -> anyhow::Result<()> {
+    let dir = TempDir::new().context("tempdir")?;
     let cfg = Arc::new(Config::from(temp_config(&dir)));
-    let (sender, receiver) = channel(&cfg.queue_path).expect("channel");
+    let (sender, receiver) = channel(&cfg.queue_path).context("channel")?;
     let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let cfg_clone = cfg.clone();
@@ -51,9 +47,9 @@ async fn running_listener(world: &mut ListenerWorld) {
         let _ = queue_writer(sender, writer_rx).await;
     });
     let handle = tokio::spawn(async move {
-        run_listener(cfg_clone, client_tx, shutdown_rx)
-            .await
-            .unwrap();
+        if let Err(error) = run_listener(cfg_clone, client_tx, shutdown_rx).await {
+            panic!("listener task failed: {error}");
+        }
     });
     world.dir = Some(dir);
     world.cfg = Some(cfg);
@@ -65,71 +61,63 @@ async fn running_listener(world: &mut ListenerWorld) {
     let socket_path = &world
         .cfg
         .as_ref()
-        .expect("config not initialised in ListenerWorld")
+        .context("config not initialised in ListenerWorld")?
         .socket_path;
     assert!(
         wait_for_file(socket_path, SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY).await,
         "socket file {} not created within timeout",
         socket_path.display()
     );
+    Ok(())
 }
 
 #[when("a client sends a valid request")]
-#[expect(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
-async fn client_sends_valid(world: &mut ListenerWorld) {
-    let cfg = world.cfg.as_ref().unwrap();
+async fn client_sends_valid(world: &mut ListenerWorld) -> anyhow::Result<()> {
+    let cfg = world.cfg.as_ref().context("config initialised")?;
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await
-        .expect("connect");
+        .context("connect")?;
     let req = CommentRequest {
         owner: "o".into(),
         repo: "r".into(),
         pr_number: 1,
         body: "b".into(),
     };
-    let data = serde_json::to_vec(&req).unwrap();
-    stream.write_all(&data).await.unwrap();
-    stream.shutdown().await.expect("shutdown");
+    let data = serde_json::to_vec(&req).context("serialise request")?;
+    stream.write_all(&data).await.context("write request")?;
+    stream.shutdown().await.context("shutdown")?;
+    Ok(())
 }
 
 #[when("a client sends invalid JSON")]
-#[expect(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
-async fn client_sends_invalid(world: &mut ListenerWorld) {
-    let cfg = world.cfg.as_ref().unwrap();
+async fn client_sends_invalid(world: &mut ListenerWorld) -> anyhow::Result<()> {
+    let cfg = world.cfg.as_ref().context("config initialised")?;
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await
-        .expect("connect");
-    stream.write_all(b"not json").await.unwrap();
-    stream.shutdown().await.expect("shutdown");
+        .context("connect")?;
+    stream
+        .write_all(b"not json")
+        .await
+        .context("write request")?;
+    stream.shutdown().await.context("shutdown")?;
+    Ok(())
 }
 
 #[then("the request is enqueued")]
-#[expect(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "simplify test failure output"
-)]
-async fn request_enqueued(world: &mut ListenerWorld) {
-    let receiver = world.receiver.as_mut().unwrap();
-    let guard = receiver.recv().await.expect("recv");
-    let req: CommentRequest = serde_json::from_slice(&guard).unwrap();
+async fn request_enqueued(world: &mut ListenerWorld) -> anyhow::Result<()> {
+    let receiver = world.receiver.as_mut().context("receiver initialised")?;
+    let guard = receiver.recv().await.context("recv")?;
+    let req: CommentRequest = serde_json::from_slice(&guard).context("parse request")?;
     assert_eq!(req.owner, "o");
+    Ok(())
 }
 
 #[then("the request is rejected")]
-#[expect(clippy::unwrap_used, reason = "simplify test failure output")]
-async fn request_rejected(world: &mut ListenerWorld) {
-    let receiver = world.receiver.as_mut().unwrap();
+async fn request_rejected(world: &mut ListenerWorld) -> anyhow::Result<()> {
+    let receiver = world.receiver.as_mut().context("receiver initialised")?;
     let res = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await;
     assert!(res.is_err());
+    Ok(())
 }
 
 impl Drop for ListenerWorld {

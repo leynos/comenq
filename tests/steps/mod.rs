@@ -1,3 +1,4 @@
+//! Step definitions shared by the cucumber behavioural test suites.
 pub mod cli_steps;
 pub use cli_steps::CliWorld;
 pub mod client_main_steps;

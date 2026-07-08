@@ -110,17 +110,21 @@ impl TestConfig {
 ///
 /// The client is initialised with a placeholder token and its base URL
 /// configured to the mock server's URI.
-#[expect(
-    clippy::expect_used,
-    reason = "test helper prefers descriptive panics over unwrap"
-)]
-pub fn octocrab_for(server: &MockServer) -> Arc<Octocrab> {
-    Arc::new(
+///
+/// # Errors
+///
+/// Returns an error when the mock server URI cannot be parsed or the client
+/// cannot be built.
+///
+/// The error is boxed to keep the `Err` variant small
+/// (`clippy::result_large_err`).
+pub fn octocrab_for(server: &MockServer) -> Result<Arc<Octocrab>, Box<octocrab::Error>> {
+    Ok(Arc::new(
         Octocrab::builder()
             .personal_token(String::from("t"))
             .base_uri(server.uri())
-            .expect("failed to parse MockServer URI for Octocrab base_uri")
+            .map_err(Box::new)?
             .build()
-            .expect("failed to build Octocrab client"),
-    )
+            .map_err(Box::new)?,
+    ))
 }

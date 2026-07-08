@@ -22,12 +22,13 @@ pub use crate::worker::{WorkerControl, WorkerHooks};
 #[doc(hidden)]
 pub use crate::util::is_metadata_file;
 
-/// Listener utilities for accepting client connections.
-///
-/// Re-exports selected listener APIs (functions and constants) so integration
-/// tests can exercise socket preparation, client handling, and read limits
-/// without exposing the entire `listener` module publicly.
 pub mod listener {
+    //! Listener utilities for accepting client connections.
+    //!
+    //! Re-exports selected listener APIs (functions and constants) so
+    //! integration tests can exercise socket preparation, client handling,
+    //! and read limits without exposing the entire `listener` module
+    //! publicly.
     // Keep manual ordering so integration tests import the public API consistently.
     #[rustfmt::skip]
     pub use crate::listener::{
