@@ -8,14 +8,27 @@ fn main() {
 }
 
 /// Describes why staging the man page failed.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 enum StageError {
     /// A required Cargo environment variable was missing or invalid.
-    #[error("environment variable {0}: {1}")]
     Env(&'static str, std::env::VarError),
     /// Copying the man page into `OUT_DIR` failed.
-    #[error("copy failed: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for StageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Env(name, source) => write!(f, "environment variable {name}: {source}"),
+            Self::Io(source) => write!(f, "copy failed: {source}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for StageError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
 }
 
 /// Reads a Cargo-provided environment variable, reporting which one failed.
