@@ -48,7 +48,7 @@ jobs:
       dry_run: ${{ steps.release_modes.outputs.dry-run }}
       should_upload_workflow_artifacts: ${{ steps.release_modes.outputs.should-upload-workflow-artifacts }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Determine release modes
@@ -87,7 +87,7 @@ jobs:
             arch: arm64
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Clean dist directory
@@ -130,7 +130,7 @@ jobs:
     needs: [metadata, build-packages]
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
       - name: Ensure release exists (draft)
         shell: bash
         run: |
