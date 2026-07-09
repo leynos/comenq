@@ -35,6 +35,12 @@ pub async fn ensure_queue_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fallback delay used if a backoff iterator is unexpectedly exhausted.
+///
+/// The builders here never cap attempts, so exhaustion should not occur;
+/// the fallback keeps restart pacing sane without panicking.
+pub(crate) const BACKOFF_FALLBACK_DELAY: Duration = Duration::from_secs(1);
+
 /// Build a jittered exponential backoff with no maximum attempt count.
 ///
 /// The minimum delay is provided by the caller to allow environment-specific
@@ -86,9 +92,7 @@ async fn supervise_task<F, B>(
                     break;
                 }
                 log_task_failure(name, &res);
-                let delay = backoff
-                    .next()
-                    .expect("backoff should yield a duration");
+                let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
@@ -131,7 +135,7 @@ async fn supervise_writer<B>(
                         pair.1
                     }
                 };
-                let delay = backoff.next().expect("backoff should yield a duration");
+                let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }

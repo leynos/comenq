@@ -1,5 +1,6 @@
 //! Behavioural steps for daemon configuration loading.
 
+use anyhow::Context as _;
 use cucumber::{World, given, then, when};
 use std::fs;
 use std::path::PathBuf;
@@ -17,63 +18,59 @@ pub struct ConfigWorld {
     socket_guard: Option<EnvVarGuard>,
 }
 
+/// Create a tempdir containing a `config.toml` with `content`.
+fn write_temp_config(content: &str) -> anyhow::Result<(TempDir, PathBuf)> {
+    let dir = TempDir::new().context("create temp dir")?;
+    let path = dir.path().join("config.toml");
+    fs::write(&path, content).context("write file")?;
+    Ok((dir, path))
+}
+
 #[given(regex = r#"^a configuration file with token \"(.+)\"$"#)]
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "cucumber requires owned values"
 )]
-fn config_file_with_token(world: &mut ConfigWorld, token: String) {
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, format!("github_token='{token}'")).expect("write file");
+fn config_file_with_token(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
+    let (dir, path) = write_temp_config(&format!("github_token='{token}'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
     world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
+    Ok(())
 }
 
 #[given("an invalid configuration file")]
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
-fn invalid_configuration_file(world: &mut ConfigWorld) {
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "github_token='abc' this is not toml").expect("write file");
+fn invalid_configuration_file(world: &mut ConfigWorld) -> anyhow::Result<()> {
+    let (dir, path) = write_temp_config("github_token='abc' this is not toml")?;
     world.dir = Some(dir);
     world.path = Some(path);
+    Ok(())
 }
 
 #[given("a configuration file without github_token")]
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
-fn config_file_without_token(world: &mut ConfigWorld) {
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "socket_path='/tmp/s.sock'").expect("write file");
+fn config_file_without_token(world: &mut ConfigWorld) -> anyhow::Result<()> {
+    let (dir, path) = write_temp_config("socket_path='/tmp/s.sock'")?;
     world.dir = Some(dir);
     world.path = Some(path);
+    Ok(())
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\" and no socket_path$"#)]
-#[expect(clippy::expect_used, reason = "test setup uses expect")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "cucumber requires owned values"
 )]
-fn config_without_socket(world: &mut ConfigWorld, token: String) {
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    fs::write(
-        &path,
-        format!("github_token='{token}'\nqueue_path='/tmp/q'"),
-    )
-    .expect("write file");
+fn config_without_socket(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
+    let (dir, path) = write_temp_config(&format!("github_token='{token}'\nqueue_path='/tmp/q'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
     world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
+    Ok(())
 }
 
 #[given(regex = r#"^a configuration file with token \"(.+)\" and no cooldown_period_seconds$"#)]
-fn config_without_cooldown(world: &mut ConfigWorld, token: String) {
-    config_file_with_token(world, token);
+fn config_without_cooldown(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
+    config_file_with_token(world, token)
 }
 
 #[given("a missing configuration file")]
@@ -91,10 +88,10 @@ fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
 }
 
 #[when("the config is loaded")]
-#[expect(clippy::expect_used, reason = "test assertions")]
-fn load_config(world: &mut ConfigWorld) {
-    let path = world.path.as_ref().expect("path set");
+fn load_config(world: &mut ConfigWorld) -> anyhow::Result<()> {
+    let path = world.path.as_ref().context("path set")?;
     world.result = Some(Config::from_file(path));
+    Ok(())
 }
 
 #[then(regex = r#"^github token is \"(.+)\"$"#)]

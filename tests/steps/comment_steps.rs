@@ -1,5 +1,6 @@
 //! Behavioural test steps for comment request serialisation and parsing.
 
+use anyhow::Context as _;
 use comenq_lib::CommentRequest;
 use cucumber::{World, given, then, when};
 
@@ -21,21 +22,20 @@ fn a_default_comment_request(world: &mut CommentWorld) {
 }
 
 #[when("it is serialised")]
-#[expect(clippy::expect_used, reason = "simplify test failure output")]
-fn it_is_serialised(world: &mut CommentWorld) {
+fn it_is_serialised(world: &mut CommentWorld) -> anyhow::Result<()> {
     if let Some(req) = world.request.take() {
         world.json =
-            Some(serde_json::to_string(&req).expect("serialisation should succeed in test"));
+            Some(serde_json::to_string(&req).context("serialisation should succeed in test")?);
     }
+    Ok(())
 }
 
 #[then("the JSON is correct")]
-#[expect(clippy::expect_used, reason = "simplify test failure output")]
-fn the_json_is(world: &mut CommentWorld) {
+fn the_json_is(world: &mut CommentWorld) -> anyhow::Result<()> {
     match world.json.take() {
         Some(actual) => {
             let act: serde_json::Value =
-                serde_json::from_str(&actual).expect("test JSON should parse successfully");
+                serde_json::from_str(&actual).context("test JSON should parse successfully")?;
             let exp = serde_json::json!({
                 "owner": "octocat",
                 "repo": "hello-world",
@@ -46,6 +46,7 @@ fn the_json_is(world: &mut CommentWorld) {
         }
         None => panic!("missing JSON output - test setup error"),
     }
+    Ok(())
 }
 
 #[given("invalid JSON")]

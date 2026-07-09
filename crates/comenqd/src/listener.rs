@@ -111,7 +111,7 @@ pub async fn run_listener(
                     tracing::error!(error = %e, "Failed to accept client connection");
                     let delay = accept_backoff
                         .next()
-                        .expect("backoff should yield a duration");
+                        .unwrap_or(crate::supervisor::BACKOFF_FALLBACK_DELAY);
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {},
                         _ = shutdown.changed() => break,

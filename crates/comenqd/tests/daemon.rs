@@ -230,7 +230,7 @@ mod worker_tests {
             .expect(1..) // Expect at least one request
             .mount(&server)
             .await;
-        let octo = octocrab_for(&server);
+        let octo = octocrab_for(&server).expect("octocrab client should build for the mock server");
         WorkerTestContext {
             server,
             cfg,
@@ -422,7 +422,7 @@ mod worker_tests {
         // Create empty queue - worker will block on recv()
         let (_sender, rx) = channel(&cfg.queue_path).expect("channel");
         let server = MockServer::start().await;
-        let octo = octocrab_for(&server);
+        let octo = octocrab_for(&server).expect("octocrab client should build for the mock server");
 
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let control = WorkerControl {
@@ -479,7 +479,7 @@ mod worker_tests {
             .expect(1)
             .mount(&server)
             .await;
-        let octo = octocrab_for(&server);
+        let octo = octocrab_for(&server).expect("octocrab client should build for the mock server");
 
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let idle = Arc::new(Notify::new());
@@ -535,7 +535,7 @@ mod worker_tests {
 
         let server = MockServer::start().await;
         // No mock needed - malformed message won't reach GitHub API
-        let octo = octocrab_for(&server);
+        let octo = octocrab_for(&server).expect("octocrab client should build for the mock server");
 
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let idle = Arc::new(Notify::new());

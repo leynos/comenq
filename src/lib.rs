@@ -25,6 +25,7 @@ pub struct CommentRequest {
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for [`CommentRequest`] serialisation.
     use super::CommentRequest;
     use serde_json::{self, json};
 

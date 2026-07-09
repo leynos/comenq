@@ -16,6 +16,7 @@
     "**/target/**",
     "**/.terraform/**",
     "**/.uv-cache/**",
+    "vendor/**",
     "CRUSH.md"
   ]
 }
