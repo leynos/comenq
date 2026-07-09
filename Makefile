@@ -1,4 +1,4 @@
-.PHONY: help all clean test test-cov test-cov-lcov build release lint fmt check-fmt markdownlint nixie
+.PHONY: help all clean test test-cov test-cov-lcov test-workflow-contracts build release lint fmt check-fmt markdownlint nixie
 
 APP ?= comenq
 CARGO ?= cargo
@@ -47,6 +47,9 @@ test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to cover
 	mkdir -p coverage
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov nextest --workspace --all-features --lcov --output-path coverage/lcov.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --no-clean --workspace --all-features --test cucumber --lcov --output-path coverage/lcov-cucumber.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
+
+test-workflow-contracts: ## Validate the mutation-testing caller contract
+	uv run --with 'pytest>=8' --with 'pyyaml>=6' pytest tests/workflow_contracts -q
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
