@@ -1,12 +1,12 @@
 //! Logging utilities for tests.
 //!
-//! Provides test-safe logging initialisation that avoids reading from the
+//! Provides test-safe logging initialization that avoids reading from the
 //! environment.
 
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// Initialise logging with a custom writer and explicit filter.
+/// Initialize logging with a custom writer and explicit filter.
 ///
 /// This avoids reading from the environment, making it suitable for tests
 /// where environment mutation is forbidden.

@@ -223,12 +223,12 @@ resolve this conflict. They allow the developer to inject the necessary
 boilerplate to satisfy the compiler without burdening the human reader with
 irrelevant details. Understanding them as clever workarounds, rather than as
 first-class language features, helps explain their sometimes quirky, text-based
-behavior.
+behaviour.
 
 ## Advanced Doctest Control and Attributes
 
 Beyond basic pass/fail checks, `rustdoc` provides a suite of attributes to
-control doctest behavior with fine-grained precision. These attributes, placed
+control doctest behaviour with fine-grained precision. These attributes, placed
 in the header of a code block (e.g., \`\`\`\`ignore\`), allow developers to
 handle expected failures, non-executable examples, and other complex scenarios.
 
@@ -255,7 +255,7 @@ table provides a comparative reference for the most common doctest attributes.
   illustrative pseudo-code.
 
 - `should_panic`: This attribute inverts the normal test condition. It is used
-  to document and verify behavior that intentionally results in a panic. The
+  to document and verify behaviour that intentionally results in a panic. The
   test will fail if the code completes successfully or panics for a reason
   other than the one expected (if a specific panic message is asserted).[^3]
 
@@ -524,7 +524,7 @@ its own purpose:
   from a completely external perspective, much like doctests. However, they are
   not constrained by the need to be readable documentation. They are suited for
   testing complex user workflows, interactions between multiple API entry
-  points, and the overall behavior of the library as a black box.[^6]
+  points, and the overall behaviour of the library as a black box.[^6]
 
 ### 6.2 The Unsolved Problem: Testing Private APIs
 
@@ -594,7 +594,7 @@ mastering doctests:
 
 1. **Embrace the Model**: Always remember that a doctest is an external
    integration test compiled in a separate crate. This mental model explains
-   nearly all of its behavior.
+   nearly all of its behaviour.
 
 2. **Prioritize Clarity**: Write examples that teach the *why*, not just the
    *how*. Use hidden lines (`#`) ruthlessly to eliminate boilerplate and focus

@@ -49,6 +49,14 @@ jobs:
         with:
           python-version: '3.13'
           enable-cache: true
+      - name: Set up isolated Rust for Merman
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Install Merman CLI
+        run: cargo +1.95.0 install merman-cli --version '=0.7.0' --locked
+      - name: Spelling
+        run: make spelling
+      - name: Validate Mermaid diagrams
+        run: make nixie
       - name: Workflow contract tests
         run: make test-workflow-contracts
       - name: Test Only

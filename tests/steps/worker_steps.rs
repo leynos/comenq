@@ -116,16 +116,16 @@ async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let cfg = world
         .cfg
         .as_ref()
-        .context("configuration should be initialised")?
+        .context("configuration should be initialized")?
         .clone();
     let rx = world
         .receiver
         .take()
-        .context("receiver should be initialised")?;
+        .context("receiver should be initialized")?;
     let server = world
         .server
         .as_ref()
-        .context("server should be initialised")?;
+        .context("server should be initialized")?;
     let octocrab =
         octocrab_for(server).context("octocrab client should build for the mock server")?;
     let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -161,7 +161,7 @@ async fn comment_posted(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let server = world
         .server
         .as_ref()
-        .context("server should be initialised")?;
+        .context("server should be initialized")?;
     assert!(
         !server
             .received_requests()
@@ -178,7 +178,7 @@ async fn queue_retains(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let cfg = world
         .cfg
         .as_ref()
-        .context("configuration should be initialised")?;
+        .context("configuration should be initialized")?;
     let job_count = std::fs::read_dir(&cfg.queue_path)
         .context("queue directory should be readable")?
         .filter_map(Result::ok)
