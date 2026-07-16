@@ -1,4 +1,4 @@
-//! Behavioural test steps for comment request serialisation and parsing.
+//! Behavioural test steps for comment request serialization and parsing.
 
 use anyhow::Context as _;
 use comenq_lib::CommentRequest;
@@ -25,7 +25,7 @@ fn a_default_comment_request(world: &mut CommentWorld) {
 fn it_is_serialised(world: &mut CommentWorld) -> anyhow::Result<()> {
     if let Some(req) = world.request.take() {
         world.json =
-            Some(serde_json::to_string(&req).context("serialisation should succeed in test")?);
+            Some(serde_json::to_string(&req).context("serialization should succeed in test")?);
     }
     Ok(())
 }

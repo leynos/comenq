@@ -25,7 +25,7 @@ pub struct CommentRequest {
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests for [`CommentRequest`] serialisation.
+    //! Unit tests for [`CommentRequest`] serialization.
     use super::CommentRequest;
     use serde_json::{self, json};
 
@@ -38,7 +38,7 @@ mod tests {
             body: "Hi".into(),
         };
         let value =
-            serde_json::to_value(&request).unwrap_or_else(|e| panic!("serialisation failed: {e}"));
+            serde_json::to_value(&request).unwrap_or_else(|e| panic!("serialization failed: {e}"));
         let expected = json!({
             "owner": "octocat",
             "repo": "hello-world",

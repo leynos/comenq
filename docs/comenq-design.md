@@ -63,7 +63,7 @@ The complete lifecycle of a request is illustrated in the following sequence:
 6. The daemon validates the request and pushes it onto a persistent,
    disk-backed queue.
 
-7. The daemon immediately sends an acknowledgment of receipt back to the
+7. The daemon immediately sends an acknowledgement of receipt back to the
    client, which then exits.
 
 8. A separate, dedicated worker task within the daemon continuously monitors
@@ -355,7 +355,7 @@ handling, so `run` operates on validated data without rechecking it.
 
 The `comenqd` daemon is the heart of the system. It is a stateful,
 asynchronous, long-running process responsible for all interactions with the
-persistent queue and the GitHub API. Its design is centered around the `tokio`
+persistent queue and the GitHub API. Its design is centred around the `tokio`
 runtime to handle concurrent operations efficiently.
 
 ### 3.1. The Asynchronous Core and Task Structure
@@ -492,7 +492,7 @@ Its workflow is as follows:
    `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
    rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
-   adjusted. It deserialises the received JSON into a `CommentRequest` and uses
+   adjusted. It deserializes the received JSON into a `CommentRequest` and uses
    the sender half of the `yaque` channel to enqueue the request. After
    enqueuing, the task terminates.
 
@@ -584,7 +584,7 @@ without losing data.
 
 ### 3.5. Daemon Configuration and Logging
 
-For operational flexibility and security, the daemon's behavior must be
+For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 

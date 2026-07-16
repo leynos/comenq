@@ -61,7 +61,7 @@ async fn running_listener(world: &mut ListenerWorld) -> anyhow::Result<()> {
     let socket_path = &world
         .cfg
         .as_ref()
-        .context("config not initialised in ListenerWorld")?
+        .context("config not initialized in ListenerWorld")?
         .socket_path;
     assert!(
         wait_for_file(socket_path, SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY).await,
@@ -73,7 +73,7 @@ async fn running_listener(world: &mut ListenerWorld) -> anyhow::Result<()> {
 
 #[when("a client sends a valid request")]
 async fn client_sends_valid(world: &mut ListenerWorld) -> anyhow::Result<()> {
-    let cfg = world.cfg.as_ref().context("config initialised")?;
+    let cfg = world.cfg.as_ref().context("config initialized")?;
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await
         .context("connect")?;
@@ -83,7 +83,7 @@ async fn client_sends_valid(world: &mut ListenerWorld) -> anyhow::Result<()> {
         pr_number: 1,
         body: "b".into(),
     };
-    let data = serde_json::to_vec(&req).context("serialise request")?;
+    let data = serde_json::to_vec(&req).context("serialize request")?;
     stream.write_all(&data).await.context("write request")?;
     stream.shutdown().await.context("shutdown")?;
     Ok(())
@@ -91,7 +91,7 @@ async fn client_sends_valid(world: &mut ListenerWorld) -> anyhow::Result<()> {
 
 #[when("a client sends invalid JSON")]
 async fn client_sends_invalid(world: &mut ListenerWorld) -> anyhow::Result<()> {
-    let cfg = world.cfg.as_ref().context("config initialised")?;
+    let cfg = world.cfg.as_ref().context("config initialized")?;
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await
         .context("connect")?;
@@ -105,7 +105,7 @@ async fn client_sends_invalid(world: &mut ListenerWorld) -> anyhow::Result<()> {
 
 #[then("the request is enqueued")]
 async fn request_enqueued(world: &mut ListenerWorld) -> anyhow::Result<()> {
-    let receiver = world.receiver.as_mut().context("receiver initialised")?;
+    let receiver = world.receiver.as_mut().context("receiver initialized")?;
     let guard = receiver.recv().await.context("recv")?;
     let req: CommentRequest = serde_json::from_slice(&guard).context("parse request")?;
     assert_eq!(req.owner, "o");
@@ -114,7 +114,7 @@ async fn request_enqueued(world: &mut ListenerWorld) -> anyhow::Result<()> {
 
 #[then("the request is rejected")]
 async fn request_rejected(world: &mut ListenerWorld) -> anyhow::Result<()> {
-    let receiver = world.receiver.as_mut().context("receiver initialised")?;
+    let receiver = world.receiver.as_mut().context("receiver initialized")?;
     let res = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await;
     assert!(res.is_err());
     Ok(())

@@ -1,6 +1,6 @@
 //! Unix socket listener for comenqd.
 //!
-//! Accepts client connections, deserialises requests, and forwards them to the
+//! Accepts client connections, deserializes requests, and forwards them to the
 //! persistent queue for processing by the worker.
 
 use crate::config::Config;

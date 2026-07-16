@@ -108,7 +108,7 @@ impl TestConfig {
 
 /// Construct an [`Octocrab`] client for a [`MockServer`].
 ///
-/// The client is initialised with a placeholder token and its base URL
+/// The client is initialized with a placeholder token and its base URL
 /// configured to the mock server's URI.
 ///
 /// # Errors

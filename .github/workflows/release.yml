@@ -32,7 +32,7 @@ name: Release
         description: Dry run mode
         value: ${{ jobs.metadata.outputs.dry_run }}
       should_upload_workflow_artifacts:
-        description: Upload workflow artifacts
+        description: Upload workflow artefacts
         value: ${{ jobs.metadata.outputs.should_upload_workflow_artifacts }}
 
 concurrency:

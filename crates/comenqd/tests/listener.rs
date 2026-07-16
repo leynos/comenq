@@ -36,11 +36,11 @@ async fn handle_client_accepts_exact_max_request_bytes() {
         pr_number: 0,
         body: String::new(),
     };
-    let base_len = serde_json::to_vec(&base).expect("serialise").len();
+    let base_len = serde_json::to_vec(&base).expect("serialize").len();
     let body_len = MAX_REQUEST_BYTES - base_len;
     let mut request = base;
     request.body = "a".repeat(body_len);
-    let payload = serde_json::to_vec(&request).expect("serialise");
+    let payload = serde_json::to_vec(&request).expect("serialize");
 
     client.write_all(&payload).await.expect("write");
     client.shutdown().await.expect("shutdown");
@@ -62,11 +62,11 @@ async fn handle_client_rejects_request_exceeding_limit() {
         pr_number: 0,
         body: String::new(),
     };
-    let base_len = serde_json::to_vec(&base).expect("serialise").len();
+    let base_len = serde_json::to_vec(&base).expect("serialize").len();
     let body_len = MAX_REQUEST_BYTES - base_len + 1;
     let mut request = base;
     request.body = "a".repeat(body_len);
-    let payload = serde_json::to_vec(&request).expect("serialise");
+    let payload = serde_json::to_vec(&request).expect("serialize");
 
     client.write_all(&payload).await.expect("write");
     client.shutdown().await.expect("shutdown");
