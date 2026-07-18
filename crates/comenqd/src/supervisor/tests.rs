@@ -24,16 +24,21 @@ impl Write for Buffer {
 }
 
 /// Create a [`JoinError`] representing a cancelled task.
+///
+/// The task awaits a future that can never complete, so `abort` always
+/// cancels it. A current-thread runtime guarantees the task is not even
+/// polled before the abort, because only `block_on` drives the executor.
+/// A multi-threaded runtime would race the task against `abort`, letting
+/// it finish first under load and yield `Ok(())` instead of a
+/// [`JoinError`] (see issue #139).
 fn create_cancelled_join_error() -> JoinError {
-    tokio::runtime::Runtime::new()
+    tokio::runtime::Builder::new_current_thread()
+        .build()
         .expect("create runtime")
         .block_on(async {
-            // Use yield_now to ensure task doesn't complete before abort() is called
-            let handle = tokio::spawn(async {
-                tokio::task::yield_now().await;
-            });
+            let handle = tokio::spawn(std::future::pending::<()>());
             handle.abort();
-            handle.await.unwrap_err()
+            handle.await.expect_err("aborted task must be cancelled")
         })
 }
 
