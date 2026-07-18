@@ -13,7 +13,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       BUILD_PROFILE: debug
-      WHITAKER_INSTALLER_VERSION: '0.2.5'
+      WHITAKER_INSTALLER_VERSION: '0.2.6'
     steps:
       - uses: actions/checkout@v7
       - name: Setup Rust
@@ -32,6 +32,13 @@ jobs:
             ~/.cache/cargo-binstall
           key: whitaker-installer-${{ runner.os }}-${{ runner.arch }}-${{ env.WHITAKER_INSTALLER_VERSION }}
       - name: Install Whitaker Dylint suite
+        env:
+          # The prebuilt dylint-link binary aborts its post-install
+          # verification when RUSTUP_TOOLCHAIN is unset, and the source
+          # fallback needs rustc >= 1.91, which the repository's pinned
+          # nightly predates. Run the installer on the runner's stable
+          # toolchain to satisfy both paths.
+          RUSTUP_TOOLCHAIN: stable
         run: |
           if ! command -v whitaker-installer >/dev/null 2>&1; then
             if cargo binstall --version >/dev/null 2>&1; then
