@@ -1,0 +1,32 @@
+schema = 1
+
+[oxford]
+stems = []
+
+[words]
+accepted = []
+
+[words.corrections]
+
+[patterns]
+ignore = [
+  '\bCARGO_TERM_COLOR\b',
+  'types: \[[^]]*\blabeled\b',
+  '\bcolor_eyre\b',
+  '\bfn serialises_to_json\b',
+  'it is serialised',
+  '\bfn it_is_serialised\b',
+  '\bfn is_metadata_file_recognises_metadata\b',
+  '\bfn wait_or_shutdown_prioritises_shutdown_over_timeout\b',
+  '"ises"',
+  "(?m)^        if: fromJSON\\(needs\\.metadata\\.outputs\\.should_upload_workflow_artifacts\\) \\|\\| fromJSON\\(needs\\.metadata\\.outputs\\.should_publish\\)$",
+  "(?m)^        value: \\$\\{\\{ jobs\\.metadata\\.outputs\\.should_upload_workflow_artifacts \\}\\}$",
+  "(?m)^      should_upload_workflow_artifacts: \\$\\{\\{ steps\\.release_modes\\.outputs\\.should-upload-workflow-artifacts \\}\\}$",
+  "(?m)^      should_upload_workflow_artifacts:$",
+]
+
+[files]
+exclude = [
+  "scripts/tests/test_typos_rollout_hardening.py",
+  "vendor/filetime",
+]

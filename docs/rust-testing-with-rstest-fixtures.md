@@ -20,7 +20,7 @@ objects used as a baseline for running tests. The primary purpose of a fixture
 is to ensure that there is a well-known and controlled environment in which
 tests are run so that results are repeatable. Test dependencies, such as
 database connections, user objects, or specific configurations, often require
-careful setup before a test can execute and, sometimes, teardown afterward.
+careful setup before a test can execute and, sometimes, teardown afterwards.
 Managing this setup and teardown logic within each test function can lead to
 considerable boilerplate code and repetition, making tests harder to read and
 maintain.
@@ -51,7 +51,7 @@ projects that may share the same name but operate in different ecosystems
 The `rstest` crate utilizes Rust's procedural macros, such as `#[rstest]` and
 `#[fixture]`, to achieve its declarative and expressive syntax.[^2] These
 macros allow developers to define fixtures and inject them into test functions
-simply by listing them as arguments. This compile-time mechanism analyzes test
+simply by listing them as arguments. This compile-time mechanism analyses test
 function signatures and fixture definitions to wire up dependencies
 automatically.
 
@@ -63,7 +63,7 @@ developer experience for writing tests, the underlying macro expansion involves
 compile-time code generation. This complexity, though hidden, can have
 implications for build times, particularly in large test suites.[^7]
 Furthermore, understanding the macro expansion can sometimes be necessary for
-debugging complex test scenarios or unexpected behavior.[^8]
+debugging complex test scenarios or unexpected behaviour.[^8]
 
 ### C. Core Benefits: Readability, Reusability, Reduced Boilerplate
 
@@ -293,12 +293,12 @@ Here are a few examples illustrating different kinds of fixtures:
 This example, adapted from concepts in [^1] and [^1], demonstrates a fixture
 providing a mutable `Repository` implementation.
 
-### B. Understanding Fixture Scope and Lifetime (Default Behavior)
+### B. Understanding Fixture Scope and Lifetime (Default Behaviour)
 
 By default, `rstest` calls a fixture function anew for each test that uses it.
 This means if five different tests inject the same fixture, the fixture
 function will be executed five times, and each test will receive a fresh,
-independent instance of the fixture's result. This behavior is crucial for test
+independent instance of the fixture's result. This behaviour is crucial for test
 isolation. The `rstest` macro effectively desugars a test like
 `fn the_test(injected: i32)` into something conceptually similar to
 `#[test] fn the_test() { let injected = injected_fixture_func(); /*... */ }`
@@ -306,7 +306,7 @@ within the test body, implying a new call each time.[^13]
 
 Test isolation prevents the state from one test from inadvertently affecting
 another. If fixtures were shared by default, a mutation to a fixture's state in
-one test could lead to unpredictable behavior or failures in subsequent tests
+one test could lead to unpredictable behaviour or failures in subsequent tests
 that use the same fixture. Such dependencies would make tests order-dependent
 and significantly harder to debug. By providing a fresh instance for each test
 (unless explicitly specified otherwise using `#[once]`), `rstest` upholds this
@@ -550,7 +550,7 @@ When using `#[once]`, there are critical caveats 12:
    and cannot be generic functions (neither with generic type parameters nor
    using `impl Trait` in arguments or return types).
 
-The "never dropped" behavior arises because `rstest` typically creates a
+The "never dropped" behaviour arises because `rstest` typically creates a
 `static` variable to hold the result of the `#[once]` fixture. `static`
 variables in Rust live for the entire duration of the program, and their `Drop`
 implementations are not usually called at program exit. This is a crucial
@@ -1012,7 +1012,7 @@ verbose, involving defining expectations, return values, and call counts) from
 the actual test function. Tests then simply request the configured mock as an
 argument. If different tests require the mock to behave differently, multiple
 specialized mock fixtures can be created, or fixture arguments combined with
-`#[with(...)]` can be used to dynamically configure the mock's behavior within
+`#[with(...)]` can be used to dynamically configure the mock's behaviour within
 the fixture itself. This makes tests that depend on external services more
 readable and maintainable.
 
@@ -1140,7 +1140,7 @@ for maintainability and scalability.
     integration tests.
 - **Naming Conventions:** Use clear, descriptive names for fixtures that
   indicate what they provide or set up. Test function names should clearly
-  state what behavior they are verifying.
+  state what behaviour they are verifying.
 - **Fixture Responsibility:** Aim for fixtures with a single, well-defined
   responsibility. Complex setups can be achieved by composing smaller, focused
   fixtures.[^12]
@@ -1244,7 +1244,7 @@ mind:
   helpful for identifying and running specific failing cases with
   `cargo test test_function_name::case_N`. Some IDEs or debuggers might require
   specific configurations or might not fully support stepping through the
-  macro-generated code as seamlessly as hand-written code, though support is
+  macro-generated code as seamlessly as handwritten code, though support is
   improving.
 - **Static Nature of Test Cases:** Test cases (e.g., from `#[case]` or
   `#[files]`) are defined and discovered at compile time.[^7] This means the

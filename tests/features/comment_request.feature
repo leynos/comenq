@@ -1,6 +1,6 @@
-Feature: CommentRequest serialisation
+Feature: CommentRequest serialization
 
-  Scenario: serialising a valid request
+  Scenario: serializing a valid request
     Given a default comment request
     When it is serialised
     Then the JSON is correct

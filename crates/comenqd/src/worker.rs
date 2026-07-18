@@ -192,7 +192,7 @@ pub async fn run_worker(
         let request: CommentRequest = match serde_json::from_slice::<CommentRequest>(&guard) {
             Ok(req) => req,
             Err(e) => {
-                tracing::error!(error = %e, "Failed to deserialise queued request; dropping");
+                tracing::error!(error = %e, "Failed to deserialize queued request; dropping");
                 if let Err(commit_err) = guard.commit() {
                     tracing::error!(error = %commit_err, "Failed to commit malformed queue entry");
                 }
@@ -277,7 +277,7 @@ mod tests {
         tx.send(()).expect("send shutdown signal");
         // Even with zero timeout, shutdown should be detected due to biased select
         let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
-        assert!(result, "biased select should prioritise shutdown signal");
+        assert!(result, "biased select should prioritize shutdown signal");
     }
 
     /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.

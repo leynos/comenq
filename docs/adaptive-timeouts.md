@@ -33,5 +33,5 @@ let result = timeout_with_retries(
 # }
 ```
 
-By centralising these rules, the tests remain concise yet adapt to differing
+By centralizing these rules, the tests remain concise yet adapt to differing
 runtime conditions.

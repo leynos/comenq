@@ -2,19 +2,6 @@
 
 use serde_yaml::Value;
 
-// Provide the shared-actions commit hash as a literal so concat! can build constants without runtime formatting.
-macro_rules! shared_actions_commit_literal {
-    () => {
-        "cb06757ebba47bb018ac0ade84fa5dc9ffb95020"
-    };
-}
-
-/// The commit hash for the shared-actions repository that the workflow must be pinned to.
-const SHARED_ACTIONS_COMMIT: &str = shared_actions_commit_literal!();
-
-/// The expected commit hash for the shared-actions repository.
-#[cfg(test)]
-const EXPECTED_SHARED_ACTIONS_COMMIT: &str = shared_actions_commit_literal!();
 /// The prefix for the shared release build composite action identifier.
 const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/rust-build-release@";
 
@@ -22,22 +9,25 @@ const RUST_BUILD_RELEASE_PREFIX: &str = "leynos/shared-actions/.github/actions/r
 const UPLOAD_RELEASE_ASSETS_PREFIX: &str =
     "leynos/shared-actions/.github/actions/upload-release-assets@";
 
-/// The release builder action reference expected by tests, built at compile time to avoid allocations.
-#[cfg(test)]
-const EXPECTED_RUST_BUILDER: &str = concat!(
-    "leynos/shared-actions/.github/actions/rust-build-release@",
-    shared_actions_commit_literal!(),
-);
-
-/// The release publisher action reference expected by tests, built at compile time to avoid allocations.
-#[cfg(test)]
-const EXPECTED_UPLOAD_RELEASE_ASSETS: &str = concat!(
-    "leynos/shared-actions/.github/actions/upload-release-assets@",
-    shared_actions_commit_literal!(),
-);
+/// Return `true` when `commit` is a full 40-character lowercase hex commit SHA.
+///
+/// Dependabot owns the specific SHA value each `uses:` ref is pinned to, so
+/// this checks only the *shape* of the pin (a commit SHA, not a mutable
+/// branch or tag such as `main`), not which commit it names.
+fn is_forty_hex_commit_sha(commit: &str) -> bool {
+    commit.len() == 40
+        && commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
 
 /// Return `true` when the release workflow uses the shared composite actions to
-/// build binaries and publish packages.
+/// build binaries and publish packages, each pinned to a full commit SHA.
+///
+/// Dependabot bumps `rust-build-release` and `upload-release-assets`
+/// independently, so their pinned commits are not required to match one
+/// another — only that each is a genuine 40-hex commit SHA on the correct
+/// path.
 ///
 /// # Errors
 ///
@@ -64,13 +54,13 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
             if let Some(uses) = step.get("uses").and_then(Value::as_str) {
                 if uses
                     .strip_prefix(RUST_BUILD_RELEASE_PREFIX)
-                    .is_some_and(|commit| commit == SHARED_ACTIONS_COMMIT)
+                    .is_some_and(is_forty_hex_commit_sha)
                 {
                     saw_rust_builder = true;
                 }
                 if uses
                     .strip_prefix(UPLOAD_RELEASE_ASSETS_PREFIX)
-                    .is_some_and(|commit| commit == SHARED_ACTIONS_COMMIT)
+                    .is_some_and(is_forty_hex_commit_sha)
                 {
                     saw_release_publisher = true;
                 }
@@ -83,25 +73,39 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        EXPECTED_RUST_BUILDER, EXPECTED_SHARED_ACTIONS_COMMIT, EXPECTED_UPLOAD_RELEASE_ASSETS,
-        uses_shared_release_actions,
-    };
+    use super::uses_shared_release_actions;
     use rstest::rstest;
+
+    const RUST_BUILDER: &str = "leynos/shared-actions/.github/actions/rust-build-release@cb06757ebba47bb018ac0ade84fa5dc9ffb95020";
+    const UPLOAD_RELEASE_ASSETS: &str = "leynos/shared-actions/.github/actions/upload-release-assets@cb06757ebba47bb018ac0ade84fa5dc9ffb95020";
 
     #[test]
     #[expect(clippy::expect_used, reason = "simplify test output")]
     fn detects_shared_actions() {
-        assert!(EXPECTED_RUST_BUILDER.ends_with(EXPECTED_SHARED_ACTIONS_COMMIT));
-        assert!(EXPECTED_UPLOAD_RELEASE_ASSETS.ends_with(EXPECTED_SHARED_ACTIONS_COMMIT));
-
         let yaml = format!(
             r#"
         jobs:
           release:
             steps:
-              - uses: {EXPECTED_RUST_BUILDER}
-              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
+              - uses: {RUST_BUILDER}
+              - uses: {UPLOAD_RELEASE_ASSETS}
+        "#
+        );
+        assert!(uses_shared_release_actions(&yaml).expect("parse"));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "simplify test output")]
+    fn independently_pinned_commits_are_accepted() {
+        // Dependabot bumps one action's pin at a time, so the two actions
+        // legitimately land on different commits between bumps.
+        let yaml = format!(
+            r#"
+        jobs:
+          release:
+            steps:
+              - uses: {RUST_BUILDER}
+              - uses: leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
         "#
         );
         assert!(uses_shared_release_actions(&yaml).expect("parse"));
@@ -115,7 +119,7 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: {EXPECTED_UPLOAD_RELEASE_ASSETS}
+              - uses: {UPLOAD_RELEASE_ASSETS}
         "#
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
@@ -129,28 +133,28 @@ mod tests {
         jobs:
           release:
             steps:
-              - uses: {EXPECTED_RUST_BUILDER}
+              - uses: {RUST_BUILDER}
         "#
         );
         assert!(!uses_shared_release_actions(&yaml).expect("parse"));
     }
 
     #[rstest]
-    #[case::mismatched_builder_commit(
-        "leynos/shared-actions/.github/actions/rust-build-release@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-        EXPECTED_UPLOAD_RELEASE_ASSETS
-    )]
     #[case::unpinned_builder(
         "leynos/shared-actions/.github/actions/rust-build-release@v1",
-        EXPECTED_UPLOAD_RELEASE_ASSETS
-    )]
-    #[case::mismatched_publisher_commit(
-        EXPECTED_RUST_BUILDER,
-        "leynos/shared-actions/.github/actions/upload-release-assets@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        UPLOAD_RELEASE_ASSETS
     )]
     #[case::unpinned_publisher(
-        EXPECTED_RUST_BUILDER,
+        RUST_BUILDER,
         "leynos/shared-actions/.github/actions/upload-release-assets@v1"
+    )]
+    #[case::short_builder_commit(
+        "leynos/shared-actions/.github/actions/rust-build-release@cb06757",
+        UPLOAD_RELEASE_ASSETS
+    )]
+    #[case::uppercase_publisher_commit(
+        RUST_BUILDER,
+        "leynos/shared-actions/.github/actions/upload-release-assets@CB06757EBBA47BB018AC0ADE84FA5DC9FFB95020"
     )]
     fn invalid_action_pinning_fails(#[case] builder: &str, #[case] publisher: &str) {
         let yaml = format!(

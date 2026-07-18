@@ -32,7 +32,7 @@ name: Release
         description: Dry run mode
         value: ${{ jobs.metadata.outputs.dry_run }}
       should_upload_workflow_artifacts:
-        description: Upload workflow artifacts
+        description: Upload workflow artefacts
         value: ${{ jobs.metadata.outputs.should_upload_workflow_artifacts }}
 
 concurrency:
@@ -53,7 +53,7 @@ jobs:
           fetch-depth: 0
       - name: Determine release modes
         id: release_modes
-        uses: leynos/shared-actions/.github/actions/determine-release-modes@cb06757ebba47bb018ac0ade84fa5dc9ffb95020
+        uses: leynos/shared-actions/.github/actions/determine-release-modes@29eea2635ee0f92e42c05f4cd360b7f1a2f00b12
         with:
           dry-run: ${{ inputs.dry-run }}
           publish: ${{ inputs.publish }}
