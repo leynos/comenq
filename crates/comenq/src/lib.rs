@@ -120,6 +120,10 @@ pub struct Args {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Enqueue a comment and print its identifier and approximate ETA.
+    ///
+    /// By default the comment waits one full cooldown (plus its flutter)
+    /// from enqueue even when the queue is idle; pass `--now` to post as
+    /// soon as the queue allows.
     Put {
         /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
         repo_slug: RepoSlug,
@@ -129,6 +133,11 @@ pub enum Command {
 
         /// The body of the comment. It is recommended to quote this argument.
         comment_body: String,
+
+        /// Post as soon as the queue allows instead of waiting a full
+        /// cooldown from enqueue.
+        #[arg(long)]
+        now: bool,
     },
     /// List pending comments with identifiers and ETAs.
     List,
@@ -159,6 +168,7 @@ impl Command {
                 repo_slug,
                 pr_number,
                 comment_body,
+                now,
             } => Request::Put {
                 request: comenq_lib::CommentRequest {
                     owner: repo_slug.owner().to_owned(),
@@ -166,6 +176,7 @@ impl Command {
                     pr_number: *pr_number,
                     body: comment_body.clone(),
                 },
+                immediate: *now,
             },
             Self::List => Request::List,
             Self::Bump { id } => Request::Bump { id: id.clone() },
@@ -233,6 +244,7 @@ mod tests {
             repo_slug,
             pr_number,
             comment_body,
+            now,
         } = args.command
         else {
             panic!("expected put command");
@@ -240,6 +252,22 @@ mod tests {
         assert_eq!(repo_slug, expected);
         assert_eq!(pr_number, pr);
         assert_eq!(comment_body, body);
+        assert!(!now, "put must default to deferred posting");
+    }
+
+    #[test]
+    fn put_accepts_the_now_flag() {
+        let args =
+            Args::try_parse_from(["comenq", "put", "--now", "octocat/hello-world", "1", "Hi"])
+                .expect("valid arguments should parse");
+        let Command::Put { now, .. } = args.command else {
+            panic!("expected put command");
+        };
+        assert!(now);
+        let comenq_lib::protocol::Request::Put { immediate, .. } = args.command.to_request() else {
+            panic!("expected put request");
+        };
+        assert!(immediate);
     }
 
     #[rstest]

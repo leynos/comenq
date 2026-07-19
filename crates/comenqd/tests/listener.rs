@@ -54,6 +54,7 @@ fn payload_of_size(target: usize) -> Vec<u8> {
             pr_number: 0,
             body: String::new(),
         },
+        immediate: false,
     };
     let base_len = serde_json::to_vec(&base).expect("serialize").len();
     let body_len = target - base_len;
@@ -64,6 +65,7 @@ fn payload_of_size(target: usize) -> Vec<u8> {
             pr_number: 0,
             body: "a".repeat(body_len),
         },
+        immediate: false,
     };
     let payload = serde_json::to_vec(&request).expect("serialize");
     assert_eq!(payload.len(), target);

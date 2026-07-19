@@ -366,7 +366,9 @@ operation, all sharing a global `--socket` flag (also settable via the
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
   prints its identifier and an approximate ETA, e.g. `Queued 1a2b3c4d for
-  octocat/hello-world#7 — posts in ~1h 01m`.
+  octocat/hello-world#7 — posts in ~1h 01m`. By default the comment waits one
+  full cooldown (plus its flutter) from enqueue even when the queue is idle;
+  `--now` lifts that floor so the comment posts as soon as the queue allows.
 
 - `comenq list`: prints one line per pending comment, in posting order, each
   showing the identifier, the ETA, the target `owner/repo#pr`, and the
@@ -386,7 +388,7 @@ confirmation, or the daemon's error message, once the single reply is
 received.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
-reflects two rules enforced by the daemon:
+reflects three rules enforced by the daemon:
 
 - **Flutter is fixed at enqueue time.** When a comment is enqueued, a random
   flutter duration (up to `cooldown_flutter_seconds`) is sampled once and
@@ -400,6 +402,13 @@ reflects two rules enforced by the daemon:
   own flutter (or, for the head entry, the last successful post plus a full
   cooldown plus its own flutter). This keeps the reported ETA consistent with
   what the worker will actually do.
+
+- **A fresh comment waits a cooldown by default.** A default `put` records a
+  `not_before` floor of its enqueue time plus one full cooldown plus its own
+  flutter, so even an idle queue paces a new comment. `put --now` sets no
+  floor, restoring the previous behaviour of posting as soon as the queue
+  allows. An entry never posts before the later of its floor and its
+  chain-projected due time, so `bump` cannot circumvent the floor.
 
 ## Section 3: Design of the `comenqd` Daemon
 
