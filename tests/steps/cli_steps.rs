@@ -22,6 +22,7 @@ pub struct CliWorld {
 fn valid_cli_arguments(world: &mut CliWorld) {
     world.args = Some(vec![
         OsString::from("comenq"),
+        OsString::from("put"),
         OsString::from("octocat/hello-world"),
         OsString::from("1"),
         OsString::from("Hi"),
@@ -32,6 +33,7 @@ fn valid_cli_arguments(world: &mut CliWorld) {
 fn cli_args_with_repo_slug(world: &mut CliWorld, slug: String) {
     world.args = Some(vec![
         OsString::from("comenq"),
+        OsString::from("put"),
         OsString::from(slug),
         OsString::from("1"),
         OsString::from("Hi"),
