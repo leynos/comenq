@@ -4,6 +4,12 @@ Feature: Queue management
     Given an empty comment queue
     When the comment "First comment" is put
     Then the reply carries an eight character identifier
+    And the reply reports an ETA of one cooldown
+
+  Scenario: an immediate put bypasses the enqueue cooldown
+    Given an empty comment queue
+    When the comment "First comment" is put immediately
+    Then the reply carries an eight character identifier
     And the reply reports an immediate ETA
 
   Scenario: put identifiers reappear in listings
