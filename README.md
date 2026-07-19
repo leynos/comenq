@@ -33,7 +33,10 @@ make build
 
 Queued requests persist on disk and are posted sequentially by the daemon.
 `put` prints the comment's deterministic eight-character identifier and an
-approximate ETA. The queue can be inspected and reordered by identifier:
+approximate ETA. By default a fresh comment waits one full cooldown (plus
+its flutter) from enqueue even when the queue is idle; pass `--now` to
+post as soon as the queue allows. The queue can be inspected and
+reordered by identifier:
 
 ```bash
 comenq list          # schedule of pending comments with IDs and ETAs

@@ -3,6 +3,9 @@
 comenq \- enqueue a GitHub pull request comment for the comenqd daemon
 .SH SYNOPSIS
 .B comenq put
+[
+.B --now
+]
 .I owner/repo
 .I pr-number
 .I comment
@@ -29,7 +32,11 @@ Enqueue a comment for the given repository (in
 .I owner/repo
 format) and pull request.  Prints the comment's deterministic
 eight-character identifier and an approximate ETA.  The ETA includes the
-random flutter, which is fixed when the comment is enqueued.
+random flutter, which is fixed when the comment is enqueued.  By default
+the comment waits one full cooldown (plus its flutter) from enqueue even
+when the queue is idle; pass
+.B --now
+to post as soon as the queue allows.
 .TP
 .B list
 Print the schedule of pending comments: identifier, ETA, target pull

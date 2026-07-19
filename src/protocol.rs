@@ -16,6 +16,10 @@ pub enum Request {
     Put {
         /// The comment to enqueue.
         request: CommentRequest,
+        /// Post as soon as the queue allows instead of waiting a full
+        /// cooldown from enqueue.
+        #[serde(default)]
+        immediate: bool,
     },
     /// List pending comments in posting order.
     List,
@@ -136,6 +140,7 @@ mod tests {
                 pr_number: 7,
                 body: "Hi".into(),
             },
+            immediate: false,
         };
         let json = serde_json::to_string(&req).unwrap_or_else(|e| panic!("serialize: {e}"));
         assert!(json.contains(r#""op":"put""#), "missing op tag: {json}");
@@ -178,6 +183,22 @@ mod tests {
                 serde_json::from_str(&json).unwrap_or_else(|e| panic!("deserialize: {e}"));
             assert_eq!(back, resp);
         }
+    }
+
+    #[test]
+    fn put_defaults_to_deferred_posting() {
+        let json = concat!(
+            r#"{"op":"put","request":{"owner":"o","repo":"r","#,
+            r#""pr_number":1,"body":"b"}}"#
+        );
+        let req: Request = serde_json::from_str(json).unwrap_or_else(|e| panic!("parse: {e}"));
+        assert!(matches!(
+            req,
+            Request::Put {
+                immediate: false,
+                ..
+            }
+        ));
     }
 
     #[test]

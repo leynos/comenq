@@ -24,6 +24,7 @@ fn base_args(socket: std::path::PathBuf) -> anyhow::Result<Args> {
             repo_slug: "octocat/hello-world".parse().context("slug")?,
             pr_number: 1,
             comment_body: "Hi".into(),
+            now: false,
         },
     })
 }
@@ -79,9 +80,14 @@ async fn daemon_receives(world: &mut ClientWorld) -> anyhow::Result<()> {
     let handle = world.server.take().context("server handle")?;
     let data = handle.await.context("join")??;
     let request: Request = serde_json::from_slice(&data).context("parse")?;
-    let Request::Put { request: req } = request else {
+    let Request::Put {
+        request: req,
+        immediate,
+    } = request
+    else {
         anyhow::bail!("expected put request, got {request:?}");
     };
+    anyhow::ensure!(!immediate, "plain put must not request immediate posting");
     assert_eq!(req.owner, "octocat");
     assert_eq!(req.repo, "hello-world");
     assert_eq!(req.pr_number, 1);

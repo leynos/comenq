@@ -124,6 +124,7 @@ mod tests {
                 repo_slug: "octocat/hello-world".parse().expect("slug"),
                 pr_number: 1,
                 comment_body: "Hi".into(),
+                now: false,
             },
         }
     }
@@ -158,13 +159,14 @@ mod tests {
 
         run(put_args(socket)).await.expect("run succeeds");
         let request = accept.await.expect("join");
-        let Request::Put { request } = request else {
+        let Request::Put { request, immediate } = request else {
             panic!("expected put request, got {request:?}");
         };
         assert_eq!(request.owner, "octocat");
         assert_eq!(request.repo, "hello-world");
         assert_eq!(request.pr_number, 1);
         assert_eq!(request.body, "Hi");
+        assert!(!immediate, "put must default to deferred posting");
     }
 
     #[tokio::test]
