@@ -66,6 +66,7 @@ async fn seed_queue(queue: &Arc<SharedQueue>) -> PendingEntry {
     match queue
         .execute(Request::Put {
             request: sample_request(),
+            immediate: true,
         })
         .await
     {
@@ -154,6 +155,7 @@ async fn handle_client_enqueues_request() {
         client,
         &Request::Put {
             request: sample_request(),
+            immediate: true,
         },
     )
     .await;
@@ -203,6 +205,7 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
         stream,
         &Request::Put {
             request: sample_request(),
+            immediate: true,
         },
     )
     .await;
@@ -459,6 +462,7 @@ mod worker_tests {
                     pr_number: 1,
                     body: "second".into(),
                 },
+                immediate: true,
             })
             .await;
 

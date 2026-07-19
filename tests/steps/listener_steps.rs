@@ -96,6 +96,7 @@ async fn client_sends_valid(world: &mut ListenerWorld) -> anyhow::Result<()> {
             pr_number: 1,
             body: "b".into(),
         },
+        immediate: false,
     };
     let data = serde_json::to_vec(&request).context("serialize request")?;
     let response = send_raw(world, &data).await?;
