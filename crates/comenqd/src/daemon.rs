@@ -8,19 +8,16 @@
 pub use crate::supervisor::SupervisorError as DaemonError;
 /// Create the queue directory (idempotent).
 pub use crate::supervisor::ensure_queue_dir;
-/// Spawn the background writer that persists enqueued payloads.
-pub use crate::supervisor::queue_writer;
 /// Run the daemon orchestration loop.
 pub use crate::supervisor::run;
+
+/// Shared queue state used by the listener and worker.
+pub use crate::queue::SharedQueue;
 
 /// Run the worker that drains the queue and talks to the GitHub API.
 pub use crate::worker::run_worker;
 /// Control handle and lifecycle hooks for the worker task.
 pub use crate::worker::{WorkerControl, WorkerHooks};
-
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use crate::util::is_metadata_file;
 
 pub mod listener {
     //! Listener utilities for accepting client connections.
