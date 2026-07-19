@@ -1,5 +1,8 @@
 # Comenq
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](
+https://deepwiki.com/leynos/comenq)
+
 Comenq is a fault-tolerant service that queues GitHub Pull Request comments. It
 follows a daemon-client model: the `comenqd` daemon enforces a 16-minute
 cooling-off period for posting, while the `comenq` CLI simply enqueues
