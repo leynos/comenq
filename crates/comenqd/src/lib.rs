@@ -18,9 +18,9 @@
 pub mod config;
 
 mod listener;
+pub mod queue;
 pub mod store;
 mod supervisor;
-mod util;
 mod worker;
 
 pub mod daemon;

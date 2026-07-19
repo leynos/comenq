@@ -121,7 +121,16 @@ impl QueueStore {
     ///
     /// The flutter is fixed at enqueue time so the entry's estimated posting
     /// time is stable from the moment it is reported to the client.
+    ///
+    /// Identifiers derive from the request content and enqueue second, so an
+    /// identical request repeated within the same second maps to the same
+    /// identifier; the operation is idempotent and returns the existing
+    /// entry unchanged.
     pub fn put(&self, request: CommentRequest, flutter_max: u64, now: u64) -> Result<StoredEntry> {
+        let id = entry_id(&request, now);
+        if let Ok(existing) = self.find(&id) {
+            return Ok(existing);
+        }
         let flutter_seconds = if flutter_max == 0 {
             0
         } else {
@@ -132,7 +141,7 @@ impl QueueStore {
             .last()
             .map_or(0, |e| e.order.saturating_add(1));
         let entry = StoredEntry {
-            id: entry_id(&request, now),
+            id,
             order,
             flutter_seconds,
             enqueued_at: now,

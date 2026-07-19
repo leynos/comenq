@@ -1,21 +1,21 @@
 //! Unix socket listener for comenqd.
 //!
-//! Accepts client connections, deserializes requests, and forwards them to the
-//! persistent queue for processing by the worker.
+//! Accepts client connections, deserializes protocol requests, executes them
+//! against the shared queue, and writes the JSON reply back to the client.
 
-use crate::config::Config;
 use anyhow::{Context, Result};
-use comenq_lib::CommentRequest;
+use comenq_lib::protocol::{Request, Response};
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::queue::SharedQueue;
 use crate::supervisor::backoff;
 
 /// Prepare a Unix domain socket for the listener.
@@ -76,22 +76,22 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
 
 /// Listen on the Unix socket and spawn a handler for each client.
 ///
-/// The listener accepts connections on the path configured in [`Config`]. Each
-/// connection is handled concurrently by [`handle_client`], forwarding valid
-/// requests to the queue writer. The function exits when the `shutdown` watch
-/// channel is triggered.
+/// The listener accepts connections on the path configured in the shared
+/// queue's configuration. Each connection is handled concurrently by
+/// [`handle_client`], which executes the request and replies. The function
+/// exits when the `shutdown` watch channel is triggered.
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created or if accepting a
 /// connection fails after retries. Exiting due to a shutdown signal is normal
 /// and not treated as an error.
 pub async fn run_listener(
-    config: Arc<Config>,
-    tx: mpsc::Sender<Vec<u8>>,
+    queue: Arc<SharedQueue>,
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
-    let listener = prepare_listener(&config.socket_path)?;
-    let min_delay = Duration::from_millis(config.restart_min_delay_ms);
+    let cfg = queue.config();
+    let listener = prepare_listener(&cfg.socket_path)?;
+    let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let mut accept_backoff = backoff(min_delay);
 
     loop {
@@ -102,9 +102,9 @@ pub async fn run_listener(
                     let cred = stream.peer_cred().ok();
                     let pid = cred.as_ref().map(|c| c.pid());
                     let uid = cred.as_ref().map(|c| c.uid());
-                    let tx_clone = tx.clone();
+                    let queue = queue.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, tx_clone).await {
+                        if let Err(e) = handle_client(stream, queue).await {
                             match (pid, uid) {
                                 (Some(pid), Some(uid)) => {
                                     tracing::warn!(pid, uid, error = %e, "Client handling failed");
@@ -133,19 +133,22 @@ pub async fn run_listener(
     Ok(())
 }
 
-/// Read a single request from `stream` and forward it to the queue.
-///
-/// Expects the client to send a JSON encoded [`CommentRequest`] and then close
-/// the connection. The request is re-encoded to bytes and sent over `tx` for the
-/// queue writer to persist.
-///
-/// # Errors
-/// Fails if reading from the socket or parsing JSON fails, or if the queue
-/// writer has shut down.
+/// Maximum accepted request payload, in bytes.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
+/// Seconds a client has to transmit its request.
 pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 
-pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
+/// Read a single request from `stream`, execute it, and reply.
+///
+/// Expects the client to send one JSON encoded [`Request`] and then close its
+/// write side. The reply is a JSON encoded [`Response`] written back over the
+/// same connection. A malformed request receives an error reply rather than
+/// silently closing the connection.
+///
+/// # Errors
+/// Fails if reading from or writing to the socket fails, or if the payload
+/// exceeds [`MAX_REQUEST_BYTES`].
+pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -158,11 +161,14 @@ pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Res
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {} bytes", MAX_REQUEST_BYTES);
     }
-    let request: CommentRequest = serde_json::from_slice(&buffer)?;
-    let bytes = serde_json::to_vec(&request)?;
-    tx.send(bytes)
-        .await
-        .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
+    let response = match serde_json::from_slice::<Request>(&buffer) {
+        Ok(request) => queue.execute(request).await,
+        Err(e) => Response::error(format!("invalid request: {e}")),
+    };
+    let bytes = serde_json::to_vec(&response)?;
+    let mut stream = limited.into_inner();
+    stream.write_all(&bytes).await.context("write response")?;
+    stream.shutdown().await.context("close connection")?;
     Ok(())
 }
 
