@@ -1,42 +1,9 @@
-//! Tests for the queue worker's cooldown, flutter, and notification hooks.
+//! Tests for the worker's shutdown waits and notification hooks.
 
-use super::{Config, Notify, WorkerHooks, cooldown_with_flutter};
+use super::{Notify, WorkerHooks};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
-
-/// Build a minimal config with the given cooldown and flutter.
-fn config_with_flutter(cooldown: u64, flutter: u64) -> Config {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    let mut cfg = Config::from(test_support::temp_config(&dir).with_cooldown(cooldown));
-    cfg.cooldown_flutter_seconds = flutter;
-    cfg
-}
-
-#[test]
-fn zero_flutter_leaves_cooldown_unchanged() {
-    let cfg = config_with_flutter(960, 0);
-    assert_eq!(cooldown_with_flutter(&cfg), 960);
-}
-
-#[test]
-fn flutter_only_lengthens_the_cooldown() {
-    let cfg = config_with_flutter(60, 240);
-    for _ in 0..200 {
-        let wait = cooldown_with_flutter(&cfg);
-        assert!(
-            (60..=300).contains(&wait),
-            "wait {wait} outside [cooldown, cooldown + flutter]"
-        );
-    }
-}
-
-#[test]
-fn flutter_saturates_instead_of_overflowing() {
-    let cfg = config_with_flutter(u64::MAX, 1);
-    assert_eq!(cooldown_with_flutter(&cfg), u64::MAX);
-}
 
 #[tokio::test]
 async fn wait_or_shutdown_returns_false_on_timeout() {
@@ -75,7 +42,6 @@ async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
 #[tokio::test]
 async fn notify_one_wakes_exactly_one_waiter() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     let notify = Arc::new(Notify::new());
     let wake_count = Arc::new(AtomicUsize::new(0));

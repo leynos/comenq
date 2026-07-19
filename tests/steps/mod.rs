@@ -11,6 +11,8 @@ pub mod listener_steps;
 pub use listener_steps::ListenerWorld;
 pub mod packaging_steps;
 pub use packaging_steps::PackagingWorld;
+pub mod queue_steps;
+pub use queue_steps::QueueWorld;
 pub mod release_steps;
 pub use release_steps::ReleaseWorld;
 pub mod worker_steps;

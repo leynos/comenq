@@ -2,22 +2,55 @@
 .SH NAME
 comenq \- enqueue a GitHub pull request comment for the comenqd daemon
 .SH SYNOPSIS
-.B comenq
+.B comenq put
+[
+.B --now
+]
 .I owner/repo
 .I pr-number
 .I comment
-[
-.B --socket
-.I path
-]
+.br
+.B comenq list
+.br
+.B comenq bump
+.I id
+.br
+.B comenq bust
+.I id
+.br
+.B comenq del
+.I id
 .SH DESCRIPTION
 The
 .B comenq
-command enqueues a comment request for the
+command manages the comment queue of the
 .BR comenqd (8)
-daemon.  It takes the target repository in
+daemon.
+.TP
+.B put
+Enqueue a comment for the given repository (in
 .I owner/repo
-format, the pull request number, and the comment body to submit.
+format) and pull request.  Prints the comment's deterministic
+eight-character identifier and an approximate ETA.  The ETA includes the
+random flutter, which is fixed when the comment is enqueued.  By default
+the comment waits one full cooldown (plus its flutter) from enqueue even
+when the queue is idle; pass
+.B --now
+to post as soon as the queue allows.
+.TP
+.B list
+Print the schedule of pending comments: identifier, ETA, target pull
+request, and the comment text collapsed to a single line of at most 60
+characters.
+.TP
+.B bump
+Move the identified comment to the head of the queue.
+.TP
+.B bust
+Move the identified comment to the tail of the queue.
+.TP
+.B del
+Remove the identified comment from the queue.
 .PP
 Use
 .B --socket
@@ -32,11 +65,12 @@ contact the daemon.  By default the client tries
 accepts.  A stale socket file left behind by a daemon that exited without
 unlinking it is skipped rather than shadowing a healthy daemon.
 .SH EXAMPLES
-Send a comment to pull request 42 of example/repo:
+Send a comment to pull request 42 of example/repo, then inspect the queue:
 .PP
 .RS
 .nf
-comenq example/repo 42 "Queued for review"
+comenq put example/repo 42 "Queued for review"
+comenq list
 .fi
 .RE
 .SH SEE ALSO

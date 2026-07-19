@@ -28,10 +28,22 @@ After building, launch the daemon and queue comments with the client:
 ```bash
 make build
 ./target/debug/comenqd &
-./target/debug/comenq owner/repo 123 "Comment body"
+./target/debug/comenq put owner/repo 123 "Comment body"
 ```
 
 Queued requests persist on disk and are posted sequentially by the daemon.
+`put` prints the comment's deterministic eight-character identifier and an
+approximate ETA. By default a fresh comment waits one full cooldown (plus
+its flutter) from enqueue even when the queue is idle; pass `--now` to
+post as soon as the queue allows. The queue can be inspected and
+reordered by identifier:
+
+```bash
+comenq list          # schedule of pending comments with IDs and ETAs
+comenq bump 1a2b3c4d # move to the head of the queue
+comenq bust 1a2b3c4d # move to the tail of the queue
+comenq del 1a2b3c4d  # remove from the queue
+```
 
 ## Running as a user service
 

@@ -1,27 +1,19 @@
 //! Queue worker for comenqd.
 //!
-//! Dequeues requests from the persistent queue and posts comments to GitHub
-//! while enforcing a cooldown between attempts. The cooldown always runs in
-//! full; an optional random flutter lengthens each wait to avoid a perfectly
-//! regular posting cadence.
+//! Watches the shared queue and posts the head comment once its estimated
+//! posting time arrives. Cooldowns always run in full; each entry's random
+//! flutter was fixed when it was enqueued, so the projected schedule reported
+//! to clients matches what the worker executes.
 
 use crate::config::Config;
+use crate::queue::SharedQueue;
 use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
-use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Notify, watch};
-use yaque::Receiver;
-
-#[cfg(any(test, feature = "test-support"))]
-use crate::util::is_metadata_file;
-#[cfg(any(test, feature = "test-support"))]
-use std::fs as stdfs;
-#[cfg(any(test, feature = "test-support"))]
-use std::path::Path;
 
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
@@ -32,21 +24,6 @@ enum PostCommentError {
     /// The request timed out.
     #[error("timeout")]
     Timeout,
-}
-
-/// Seconds to wait after processing a request: the configured cooldown plus
-/// a fresh random flutter of up to `cooldown_flutter_seconds`.
-///
-/// Flutter only ever lengthens the wait — the full cooldown always elapses —
-/// so the posting cadence stays below GitHub's secondary rate limits while
-/// avoiding a perfectly regular interval.
-fn cooldown_with_flutter(config: &Config) -> u64 {
-    let flutter = config.cooldown_flutter_seconds;
-    if flutter == 0 {
-        return config.cooldown_period_seconds;
-    }
-    let jitter = rand::rng().random_range(0..=flutter);
-    config.cooldown_period_seconds.saturating_add(jitter)
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
@@ -77,11 +54,11 @@ async fn post_comment(
 /// multiple tasks await the same hook, only one will be woken per notification.
 #[derive(Default)]
 pub struct WorkerHooks {
-    /// Signalled when a request is retrieved from the queue.
+    /// Signalled when the worker picks up a due entry for posting.
     ///
     /// Only one waiter is supported; additional waiters will not be notified.
     pub enqueued: Option<Arc<Notify>>,
-    /// Signalled after the worker completes processing of a request.
+    /// Signalled after the worker completes processing of an entry.
     ///
     /// Only one waiter is supported; additional waiters will not be notified.
     pub idle: Option<Arc<Notify>>,
@@ -104,19 +81,10 @@ impl WorkerHooks {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
+    fn notify_drained(&self) {
         if let Some(n) = &self.drained {
-            // Ignore sentinel files left by the queue implementation and
-            // consider the directory empty when no other files remain.
-            let empty = !stdfs::read_dir(queue_path)?
-                .filter_map(Result::ok)
-                .any(|e| !is_metadata_file(e.file_name()));
-            if empty {
-                n.notify_one();
-            }
+            n.notify_one();
         }
-        Ok(())
     }
 
     /// Waits for the specified number of seconds or until a shutdown is signalled.
@@ -187,77 +155,62 @@ impl WorkerControl {
     }
 }
 
-/// Processes queued comment requests and posts them to GitHub, enforcing a cooldown between attempts.
+/// Posts queued comments as they fall due, enforcing the scheduled cooldowns.
+///
+/// The worker recomputes the head entry's due time on every iteration, so
+/// queue mutations (put, bump, bust, del) take effect immediately: the shared
+/// queue's change signal interrupts any wait.
 pub async fn run_worker(
-    config: Arc<Config>,
-    mut rx: Receiver,
+    queue: Arc<SharedQueue>,
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
-    let hooks = &mut control.hooks;
+    let hooks = &control.hooks;
     let shutdown = &mut control.shutdown;
+    let config = queue.config().clone();
     loop {
-        let guard = tokio::select! {
-            biased;
-            _ = shutdown.changed() => {
-                break;
-            }
-            res = rx.recv() => {
-                res?
+        let due = queue.next_due().await?;
+        let Some((entry, wait_seconds)) = due else {
+            hooks.notify_drained();
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => break,
+                () = queue.changed() => continue,
             }
         };
+        if wait_seconds > 0 {
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => break,
+                () = queue.changed() => {}
+                _ = tokio::time::sleep(Duration::from_secs(wait_seconds)) => {}
+            }
+            continue;
+        }
         hooks.notify_enqueued();
-        let request: CommentRequest = match serde_json::from_slice::<CommentRequest>(&guard) {
-            Ok(req) => req,
+        match post_comment(&octocrab, &entry.request, &config).await {
+            Ok(()) => {
+                queue.complete(&entry.id).await?;
+            }
             Err(e) => {
-                tracing::error!(error = %e, "Failed to deserialize queued request; dropping");
-                if let Err(commit_err) = guard.commit() {
-                    tracing::error!(error = %commit_err, "Failed to commit malformed queue entry");
-                }
+                tracing::error!(
+                    error = %e,
+                    id = %entry.id,
+                    owner = %entry.request.owner,
+                    repo = %entry.request.repo,
+                    pr = entry.request.pr_number,
+                    "GitHub API call failed; will retry after cooldown",
+                );
                 hooks.notify_idle();
-                #[cfg(any(test, feature = "test-support"))]
-                if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
-                    tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
-                }
-                if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
+                // Pace retries so a persistently failing API is not hammered.
+                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
                     break;
                 }
                 continue;
             }
-        };
-
-        match post_comment(&octocrab, &request, &config).await {
-            Ok(_) => {
-                guard.commit()?;
-            }
-            Err(PostCommentError::Api(e)) => {
-                tracing::error!(
-                    error = %e,
-                    owner = %request.owner,
-                    repo = %request.repo,
-                    pr = request.pr_number,
-                    "GitHub API call failed",
-                );
-            }
-            Err(PostCommentError::Timeout) => {
-                tracing::error!(
-                    owner = %request.owner,
-                    repo = %request.repo,
-                    pr = request.pr_number,
-                    "GitHub API call timed out",
-                );
-            }
         }
-
         hooks.notify_idle();
-        #[cfg(any(test, feature = "test-support"))]
-        hooks.notify_drained_if_empty(&config.queue_path)?;
-        if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
-            break;
-        }
     }
-    #[cfg(any(test, feature = "test-support"))]
-    hooks.notify_drained_if_empty(&config.queue_path)?;
     Ok(())
 }
 
