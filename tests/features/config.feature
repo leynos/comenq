@@ -39,6 +39,16 @@ Feature: Daemon configuration
     When the config is loaded
     Then socket path is "/run/user/1000/comenq/comenq.sock"
 
+  Scenario: reading the token from a file
+    Given a configuration file referencing a token file containing "s3cret"
+    When the config is loaded
+    Then github token is "s3cret"
+
+  Scenario: token file missing on disk
+    Given a configuration file referencing a missing token file
+    When the config is loaded
+    Then config loading fails
+
   Scenario: uses default cooldown period
     Given a configuration file with token "abc" and no cooldown_period_seconds
     When the config is loaded

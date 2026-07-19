@@ -116,12 +116,124 @@ fn cli_overrides_env_and_file() {
     let cli = CliArgs {
         config: path.clone(),
         github_token: None,
+        github_token_file: None,
         socket_path: Some(PathBuf::from("/tmp/cli.sock")),
         queue_path: None,
+        cooldown_period_seconds: None,
         github_api_timeout_secs: None,
     };
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
     assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+}
+
+#[rstest]
+#[serial_test::serial]
+fn cli_overrides_cooldown() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token='abc'\ncooldown_period_seconds=10")
+        .expect("write config fixture");
+    let cli = CliArgs {
+        config: path.clone(),
+        github_token: None,
+        github_token_file: None,
+        socket_path: None,
+        queue_path: None,
+        cooldown_period_seconds: Some(30),
+        github_api_timeout_secs: None,
+    };
+    let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
+    assert_eq!(cfg.cooldown_period_seconds, 30);
+}
+
+#[rstest]
+#[serial_test::serial]
+fn token_file_overrides_inline_token() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "s3cret\n").expect("write token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "github_token='inline'\ngithub_token_file='{}'",
+            token_path.display()
+        ),
+    )
+    .expect("write config fixture");
+    let cfg = Config::from_file(&path).expect("load config");
+    assert_eq!(cfg.github_token, "s3cret");
+}
+
+#[rstest]
+#[serial_test::serial]
+fn token_file_alone_suffices() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "s3cret").expect("write token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token_file='{}'", token_path.display()),
+    )
+    .expect("write config fixture");
+    let cfg = Config::from_file(&path).expect("load config");
+    assert_eq!(cfg.github_token, "s3cret");
+}
+
+#[rstest]
+#[serial_test::serial]
+fn missing_token_file_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token_file='/nonexistent/token'").expect("write config fixture");
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn empty_token_file_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "\n").expect("write empty token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token_file='{}'", token_path.display()),
+    )
+    .expect("write config fixture");
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn token_file_expands_credentials_directory() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "cred-token").expect("write token file");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token_file='${CREDENTIALS_DIRECTORY}/token'")
+        .expect("write config fixture");
+    let _guard = EnvVarGuard::set(
+        "CREDENTIALS_DIRECTORY",
+        dir.path().to_str().expect("tempdir path is UTF-8"),
+    );
+    let cfg = Config::from_file(&path).expect("load config");
+    assert_eq!(cfg.github_token, "cred-token");
+}
+
+#[rstest]
+#[serial_test::serial]
+fn token_file_with_unset_placeholder_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        "github_token_file='${COMENQD_TEST_UNSET_VARIABLE}/token'",
+    )
+    .expect("write config fixture");
+    let _guard = EnvVarGuard::remove("COMENQD_TEST_UNSET_VARIABLE");
+    assert!(Config::from_file(&path).is_err());
 }
 
 #[cfg(feature = "test-support")]

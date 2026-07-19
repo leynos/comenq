@@ -27,7 +27,20 @@ const DEFAULT_CLIENT_CHANNEL_CAPACITY: usize = 1024;
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 pub struct Config {
     /// GitHub Personal Access Token.
+    ///
+    /// May be supplied directly or via [`Config::github_token_file`]; one of
+    /// the two must be provided.
+    #[serde(default)]
     pub github_token: String,
+    /// Optional path to a file containing the GitHub Personal Access Token.
+    ///
+    /// When set, the file is read at startup and its trimmed contents
+    /// override [`Config::github_token`]. A leading `${VAR}` placeholder is
+    /// expanded from the environment, so systemd credentials work with
+    /// `LoadCredential=token:...` and
+    /// `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`.
+    #[serde(default)]
+    pub github_token_file: Option<PathBuf>,
     /// Path to the Unix Domain Socket.
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
@@ -81,6 +94,7 @@ impl From<test_support::daemon::TestConfig> for Config {
         } = value;
         Self {
             github_token,
+            github_token_file: None,
             socket_path,
             queue_path,
             cooldown_period_seconds,
@@ -119,6 +133,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
     fn from(value: &test_support::daemon::TestConfig) -> Self {
         Self {
             github_token: value.github_token.clone(),
+            github_token_file: None,
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
@@ -138,12 +153,18 @@ struct CliArgs {
     /// GitHub Personal Access Token.
     #[arg(long)]
     github_token: Option<String>,
+    /// Path to a file containing the GitHub Personal Access Token.
+    #[arg(long, value_name = "FILE")]
+    github_token_file: Option<PathBuf>,
     /// Override the Unix Domain Socket path.
     #[arg(long)]
     socket_path: Option<PathBuf>,
     /// Override the queue directory.
     #[arg(long)]
     queue_path: Option<PathBuf>,
+    /// Override the cooldown between comment posts (seconds).
+    #[arg(long)]
+    cooldown_period_seconds: Option<u64>,
     /// Override GitHub API timeout (seconds).
     #[arg(long)]
     github_api_timeout_secs: Option<u64>,
@@ -235,17 +256,79 @@ impl Config {
         if let Some(token) = &cli.github_token {
             cfg.github_token = token.clone();
         }
+        if let Some(file) = &cli.github_token_file {
+            cfg.github_token_file = Some(file.clone());
+        }
         if let Some(socket) = &cli.socket_path {
             cfg.socket_path = socket.clone();
         }
         if let Some(queue) = &cli.queue_path {
             cfg.queue_path = queue.clone();
         }
+        if let Some(secs) = cli.cooldown_period_seconds {
+            cfg.cooldown_period_seconds = secs;
+        }
         if let Some(secs) = cli.github_api_timeout_secs {
             cfg.github_api_timeout_secs = secs;
         }
+        cfg.resolve_github_token()?;
         Ok(cfg)
     }
+
+    /// Resolve the effective GitHub token, reading `github_token_file` when
+    /// set and validating that a non-empty token is available.
+    #[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
+    fn resolve_github_token(&mut self) -> Result<(), ortho_config::OrthoError> {
+        if let Some(file) = &self.github_token_file {
+            let path = expand_env_prefix(file)?;
+            let token =
+                std::fs::read_to_string(&path).map_err(|e| ortho_config::OrthoError::File {
+                    path: path.clone(),
+                    source: Box::new(e),
+                })?;
+            let token = token.trim();
+            if token.is_empty() {
+                return Err(ortho_config::OrthoError::Validation {
+                    key: "github_token_file".into(),
+                    message: format!("token file {} is empty", path.display()),
+                });
+            }
+            self.github_token = token.to_owned();
+        }
+        if self.github_token.is_empty() {
+            return Err(ortho_config::OrthoError::Validation {
+                key: "github_token".into(),
+                message: "provide github_token or github_token_file".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Expand a leading `${VAR}` placeholder in `path` from the environment.
+///
+/// Only a placeholder at the very start of the path is expanded; paths
+/// without one are returned unchanged. An unset variable or a malformed
+/// placeholder is an error so misconfiguration fails loudly at startup.
+#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
+fn expand_env_prefix(path: &Path) -> Result<PathBuf, ortho_config::OrthoError> {
+    let Some(text) = path.to_str() else {
+        return Ok(path.to_path_buf());
+    };
+    let Some(rest) = text.strip_prefix("${") else {
+        return Ok(path.to_path_buf());
+    };
+    let Some((var, tail)) = rest.split_once('}') else {
+        return Err(ortho_config::OrthoError::Validation {
+            key: "github_token_file".into(),
+            message: format!("unterminated environment placeholder in '{text}'"),
+        });
+    };
+    let value = std::env::var(var).map_err(|_| ortho_config::OrthoError::Validation {
+        key: "github_token_file".into(),
+        message: format!("environment variable '{var}' is not set"),
+    })?;
+    Ok(PathBuf::from(format!("{value}{tail}")))
 }
 
 #[cfg(test)]
