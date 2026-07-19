@@ -84,20 +84,26 @@ The complete lifecycle of a request is illustrated in the following sequence:
 This architecture ensures that comment posting is strictly serialized and
 paced, directly addressing the primary goal of avoiding API rate limits.
 
-### Channels and buffering
+### Shared queue and concurrency
 
-The daemon sends client requests via an unbounded channel. The channel sender
-is recreated whenever the writer task restarts, preserving the existing
-receiver when possible.
+The listener and worker tasks do not communicate over a channel. Instead, both
+hold an `Arc<SharedQueue>` wrapping the on-disk `QueueStore`, the daemon
+configuration, and a `tokio::sync::Notify` used to wake the worker promptly
+when the queue changes.
 
-- Operational warning: the channel is unbounded. During writer downtime, the
-  in-memory backlog can grow until the supervisor respawns the writer. Deploy
-  with external backpressure (e.g., rate-limiting clients) if this risk is
-  unacceptable.
+- The listener executes each client request directly against the shared
+  queue (via `SharedQueue::execute`) and writes the reply before the
+  connection closes. A request is durably persisted to disk before the client
+  receives its acknowledgement, so there is no in-memory backlog that could be
+  lost if the daemon exits unexpectedly.
 
-- Lossy path: If the writer task panics, the old receiver is dropped and any
-  buffered items in that channel are lost. This is the only scenario where
-  pending requests may be discarded.
+- Mutating operations (`put`, `bump`, `bust`, `del`) call `notify_one` on the
+  shared `Notify` after the change is written, so the worker interrupts any
+  wait and re-evaluates the head of the queue immediately.
+
+- Because every mutation goes straight to disk, restarting either the
+  listener or the worker after a panic loses no pending requests: the store
+  itself is the single source of truth, not an in-memory buffer.
 
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
@@ -113,7 +119,7 @@ project requirements.
 | Asynchronous Runtime | tokio | The de-facto standard for asynchronous programming in Rust. It provides a high-performance, multithreaded scheduler and a comprehensive suite of utilities for I/O, networking, and timers, including the essential UnixListener, UnixStream, and time::sleep components.[^2] Its maturity and extensive ecosystem make it the definitive choice for the daemon's core. | async-std |
 | CLI Argument Parsing | clap | The most popular and feature-rich CLI argument parsing library for Rust.[^3] The | derive feature offers an exceptionally ergonomic and declarative way to define the CLI's structure, automatically generating argument parsing, validation, and help text from a simple struct definition.[^3] | argh, pico-args 4 |
 | GitHub API Client | octocrab | A modern, actively maintained, and extensible GitHub API client.[^5] It provides strongly typed models for API responses and a builder pattern for requests, simplifying interaction with the GitHub REST API. Its static API and support for custom middleware are valuable for building robust clients.[^3] | roctokit 12, manual | reqwest 13 |
-| Persistent Queue | yaque | A disk-backed, persistent queue designed for asynchronous environments.[^7] Its most critical feature is | transactional reads via its RecvGuard mechanism. This ensures that a dequeued item is automatically returned to the queue if the program panics or fails before the item is explicitly committed, providing an "at-least-once" delivery guarantee essential for reliability.[^7] | queue-file 16, | v_queue 18 |
+| Persistent Queue | bespoke `QueueStore` (`comenqd::store`) | A disk-backed store using one JSON file per pending entry plus a `last_post` marker, with atomic write-then-rename updates. Unlike an append-only queue, it supports reordering (`bump`, `bust`) and removal (`del`) of arbitrary entries, and only deletes an entry after a confirmed post, giving an "at-least-once" delivery guarantee. | yaque (rejected: append-only, cannot reorder or delete arbitrary entries) |
 | IPC Serialization | serde / serde_json | serde is the universal framework for serialization and deserialization in Rust. serde_json provides a straightforward implementation for the JSON data format, which is chosen for its human-readability (aiding in debugging) and widespread support. | bincode, prost |
 | Systemd Integration | systemd (crate) | Provides native Rust bindings for interacting with the systemd journal and daemon notification APIs.[^8] While the primary deployment mechanism is a | .service file, this crate can be used for more advanced integration, such as sending readiness notifications. | systemctl (crate) 20 |
 | Logging | tracing / tracing-subscriber | A modern, structured, and asynchronous-aware logging and diagnostics framework. It is the standard choice for tokio-based applications, providing contextual information that is superior to traditional line-based logging. | log / env_logger 22 |
@@ -351,6 +357,50 @@ communicate with the daemon are surfaced via a small `ClientError` enumeration.
 The repository slug is converted into a structured `RepoSlug` during argument
 handling, so `run` operates on validated data without rechecking it.
 
+### 2.4. Client Subcommands and ETA Semantics
+
+The illustrative blueprint above shows a client that only enqueues a comment.
+The shipped client instead exposes five subcommands, one per protocol
+operation, all sharing a global `--socket` flag (also settable via the
+`COMENQ_SOCKET` environment variable):
+
+- `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
+  prints its identifier and an approximate ETA, e.g. `Queued 1a2b3c4d for
+  octocat/hello-world#7 — posts in ~1h 01m`.
+
+- `comenq list`: prints one line per pending comment, in posting order, each
+  showing the identifier, the ETA, the target `owner/repo#pr`, and the
+  comment body collapsed to a single line of at most 60 characters (control
+  characters, including newlines, become spaces; longer bodies are truncated
+  with an ellipsis).
+
+- `comenq bump <id>`: moves the identified comment to the head of the queue.
+
+- `comenq bust <id>`: moves the identified comment to the tail of the queue.
+
+- `comenq del <id>`: removes the identified comment from the queue.
+
+Each subcommand maps directly to one variant of the `Request` enum (see
+§3.2 for the store and §5 for the wire protocol) and prints a short
+confirmation, or the daemon's error message, once the single reply is
+received.
+
+**ETA semantics.** The estimated time until posting shown by `put` and `list`
+reflects two rules enforced by the daemon:
+
+- **Flutter is fixed at enqueue time.** When a comment is enqueued, a random
+  flutter duration (up to `cooldown_flutter_seconds`) is sampled once and
+  stored with the entry. It does not change on subsequent `list` calls, so the
+  reported ETA for a given entry only decreases as time passes; it never
+  jumps around.
+
+- **The cooldown always runs in full.** The daemon never shortens
+  `cooldown_period_seconds` to catch up; each entry's projected posting time
+  is its predecessor's projected posting time plus a full cooldown plus its
+  own flutter (or, for the head entry, the last successful post plus a full
+  cooldown plus its own flutter). This keeps the reported ETA consistent with
+  what the worker will actually do.
+
 ## Section 3: Design of the `comenqd` Daemon
 
 The `comenqd` daemon is the heart of the system. It is a stateful,
@@ -365,33 +415,36 @@ Upon startup, the `main` function will initialize necessary resources
 (configuration, logger, queue) and then spawn two primary, independent
 asynchronous tasks that run concurrently for the lifetime of the daemon:
 
-1. `task_listen_for_requests`: This task is the daemon's public-facing
+1. **Listener** (`run_listener`): This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
-   `comenq` clients. Its sole job is to accept requests and place them into the
-   queue as quickly as possible.
+   `comenq` clients. For each connection it reads one JSON `Request`,
+   executes it directly against the shared queue, and writes back one JSON
+   `Response` before closing the connection.
 
-2. `task_process_queue`: This is the main worker task. It operates in a
-   serialized loop, pulling one job at a time from the queue, processing it
-   (i.e., posting the comment to GitHub), and then observing the mandatory
-   16-minute cooldown period.
+2. **Worker** (`run_worker`): This is the main worker task. It operates in a
+   loop, recomputing the head entry's due time on every iteration, waiting
+   until that entry is due (or until the queue changes, or shutdown is
+   signalled), posting the comment to GitHub, and recording the post before
+   moving on to the next entry.
 
-This concurrent design ensures that the daemon remains responsive to new client
-requests even while the worker task is in its long sleep phase. A request can
-be accepted and enqueued in milliseconds, while the worker task independently
-processes the queue at its own deliberate pace.
+This concurrent design ensures that the daemon remains responsive to new
+client requests even while the worker task is in its long sleep phase. A
+request can be accepted, persisted, and acknowledged in milliseconds, while
+the worker task independently processes the queue at its own deliberate pace.
 
-All daemon tasks—the listener, worker, and queue writer—are supervised. If any
-task exits unexpectedly, the daemon logs the failure, waits using an
-exponential backoff with jitter (via the `backon` crate) to avoid a tight
-restart loop, and then respawns the task. The minimum delay between restarts is
-configurable via `restart_min_delay_ms`. This keeps the service available
-without relying on an external process supervisor. Restarting the writer
-recreates the listener→writer channel and restarts the listener to attach a
-fresh sender, preserving single-writer semantics. When the writer exits
-cleanly, the supervisor reuses the existing receiver, so buffered bytes are
-preserved. If the writer panics and the receiver is lost, a new channel is
-created, and any bytes buffered in the discarded channel that were not
-persisted to the queue are lost.
+Both tasks share the queue through an `Arc<SharedQueue>` rather than a
+channel: there is no intermediate queue-writer task. The listener performs
+each mutation directly, and the worker is woken (via a `tokio::sync::Notify`)
+whenever a mutation occurs.
+
+Both the listener and the worker are supervised. If either task exits
+unexpectedly, the daemon logs the failure, waits using an exponential backoff
+with jitter (via the `backon` crate) to avoid a tight restart loop, and then
+respawns the task. The minimum delay between restarts is configurable via
+`restart_min_delay_ms`. This keeps the service available without relying on
+an external process supervisor. Because both tasks operate on the same
+on-disk store rather than an in-memory buffer, restarting either task after a
+panic does not discard any pending request.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -403,26 +456,22 @@ sequenceDiagram
   participant Sup as Supervisor::run
   participant L as Listener
   participant W as Worker
-  participant QW as QueueWriter
-  participant YQ as YaQue
+  participant Q as SharedQueue
 
   Sup->>Sup: ensure_queue_dir()
-  Sup->>YQ: init Sender
-  Sup->>QW: spawn queue_writer(rx)
-  Sup->>L: spawn run_listener(tx, shutdown)
-  Sup->>W: spawn run_worker(yaque_rx, octocrab, control)
+  Sup->>Q: SharedQueue::open(config)
+  Sup->>L: spawn run_listener(queue, shutdown)
+  Sup->>W: spawn run_worker(queue, octocrab, control)
 
   par Normal flow
-    L->>QW: tx.send(bytes)
-    QW->>YQ: enqueue(bytes)
-    YQ-->>W: deliver entry
-    W->>W: deserialize & post to GitHub
-    W->>YQ: commit()
+    L->>Q: execute(Request) [persist & reply]
+    Q-->>W: notify_one() on mutation
+    W->>Q: next_due()
+    W->>W: post to GitHub
+    W->>Q: complete(id)
   and Error/backoff
     L--x Sup: accept error
     Sup->>L: restart after backoff
-    QW--x Sup: enqueue error
-    Sup->>QW: restart after backoff
     W--x Sup: fatal error
     Sup->>W: restart after backoff
   end
@@ -430,43 +479,64 @@ sequenceDiagram
   OS-->>Sup: SIGINT/SIGTERM
   Sup->>L: signal shutdown
   Sup->>W: signal shutdown
-  Sup->>QW: abort/await
   Sup-->>OS: exit
 ```
 
-### 3.2. The Persistent Job Queue with `yaque`
+### 3.2. The Persistent Job Queue: `comenqd::store::QueueStore`
 
 A core requirement for the daemon is fault tolerance. If the daemon or the
 entire server restarts, pending comments must not be lost. This rules out
-simple in-memory queues like `std::collections::VecDeque` 26 and necessitates a
+simple in-memory queues like `std::collections::VecDeque` and necessitates a
 disk-backed, persistent solution.
 
-The `yaque` crate is selected as the ideal queue implementation for this
-project.[^7] While other file-based queues exist 17,
+An earlier design used the `yaque` crate, an append-only, transactional,
+disk-backed queue. `yaque` was rejected once the client gained `bump`, `bust`,
+and `del` operations: an append-only queue has no way to reorder or delete an
+arbitrary entry, only to dequeue from the head. The daemon therefore uses a
+bespoke store, `comenqd::store::QueueStore`, built directly on plain files.
 
-`yaque` offers a unique combination of features perfectly suited to this
-daemon's needs:
+`QueueStore` keeps one JSON file per pending comment under
+`<queue_path>/entries`, plus a `<queue_path>/last_post` file recording the Unix
+time of the most recent successful post. Each entry (a `StoredEntry`) carries:
 
-- **Natively Asynchronous:** It is built on `mio` and integrates seamlessly
-  with the `tokio` runtime without requiring blocking operations.[^7]
+- **A deterministic eight-character identifier.** This is the first eight hex
+  digits of a 64-bit FNV-1a hash computed over the request's owner, repo, PR
+  number, and body, together with the second at which it was enqueued. The
+  identifier is therefore stable across daemon restarts, and an identical
+  request repeated within the same second is idempotent: `put` returns the
+  existing entry unchanged rather than creating a duplicate.
 
-- **Persistence:** It stores queue data on the filesystem, ensuring durability
-  across process restarts.[^7]
+- **An explicit integer ordering key.** New entries are appended after the
+  current tail. `bump` sets the key to one less than the current head's key
+  (or leaves it unchanged if the entry is already the head); `bust` sets it to
+  one more than the current tail's key. Repeated bumps or busts can drive the
+  key negative or arbitrarily large; entries are always read back sorted by
+  `(order, enqueued_at, id)`.
 
-- **Transactional Reads:** This is the most compelling feature. When an item is
-  dequeued using `receiver.recv().await`, `yaque` returns a `RecvGuard`. The
-  item is not permanently removed from the queue at this point. It is only
-  removed when `guard.commit()` is explicitly called. If the `RecvGuard` is
-  dropped without being committed (e.g., due to a program panic or an API
-  error), the item is automatically and safely returned to the head of the
-  queue. This "dead man's switch" mechanism provides a powerful "at-least-once"
-  delivery guarantee, which is the cornerstone of the daemon's reliability.[^7]
+- **The flutter sampled at enqueue time.** A random duration up to
+  `cooldown_flutter_seconds` is chosen once, when the entry is created, and
+  stored with it. Fixing the flutter at enqueue time keeps the ETA reported to
+  the client stable for the entry's whole life, rather than jittering on every
+  `list`.
 
-The queue will be initialized at a configurable path (e.g.,
-`/var/lib/comenq/queue`) and will store the `CommentRequest` struct defined in
-the shared library.
+- **The enqueue time**, used both as a tiebreaker for ordering and as an input
+  to the identifier hash.
 
-### 3.3. The UDS Listener and Request Ingestion (`task_listen_for_requests`)
+Entries are written to a temporary sibling file and then renamed into place,
+so a reader never observes a half-written entry. `bump`, `bust`, and `del`
+mutate or remove a single entry file the same way. `complete` removes the
+posted entry and atomically rewrites `last_post` with the current Unix time.
+
+Because an entry is only removed from disk after a successful post
+(`complete`), and a failed post simply leaves the entry in place for the next
+attempt, the store preserves the same "at-least-once" delivery guarantee that
+motivated the original choice of `yaque`, without its append-only limitation.
+
+The queue is initialized at a configurable path (e.g., `/var/lib/comenq/queue`)
+and stores the `CommentRequest` struct defined in the shared library as part of
+each entry.
+
+### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
 This task is responsible for handling all client communication. It will be
 implemented as an asynchronous function spawned by the main `tokio` runtime.
@@ -486,21 +556,25 @@ Its workflow is as follows:
 
 4. **Spawn Connection Handler:** To ensure the listener is never blocked, upon
    accepting a new connection, it immediately spawns a new, short-lived `tokio`
-   task to handle that specific client.
+   task (`handle_client`) to handle that specific client.
 
 5. **Handle Client:** This per-client task reads at most 1 MiB within
    `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
    rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
-   adjusted. It deserializes the received JSON into a `CommentRequest` and uses
-   the sender half of the `yaque` channel to enqueue the request. After
-   enqueuing, the task terminates.
+   adjusted. It deserializes the received JSON into a `Request`, executes it
+   directly against the shared queue (`SharedQueue::execute`), and writes the
+   resulting `Response` back to the client before closing the connection. A
+   request that fails to deserialize receives an error `Response` rather than
+   a silently dropped connection.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
-the main worker loop.
+the worker loop. Because each request is executed and persisted before the
+reply is sent, there is no intermediate queue-writer stage to lose data if the
+listener is later restarted.
 
-The interaction between the client, listener, and queue writer is shown in the
+The interaction between the client, listener, and shared queue is shown in the
 sequence diagram below.
 
 ```mermaid
@@ -509,23 +583,22 @@ sequenceDiagram
   participant Client as Client
   participant L as Listener
   participant H as handle_client
-  participant TX as mpsc::UnboundedSender
-  participant QW as QueueWriter
+  participant Q as SharedQueue
 
   Client->>L: connect(socket)
   L->>H: spawn handler(stream)
-  Client->>H: write JSON CommentRequest
+  Client->>H: write JSON Request
   H->>H: read & deserialize
-  H->>TX: send JSON bytes
-  TX-->>QW: deliver payload
-  H-->>Client: close
+  H->>Q: execute(Request)
+  Q-->>H: Response
+  H-->>Client: write JSON Response, close
 ```
 
-### 3.4. The GitHub Comment-Posting Worker (`task_process_queue`)
+### 3.4. The GitHub Comment-Posting Worker (`run_worker`)
 
 This task implements the core business logic of the service. It runs in a
-simple, infinite loop, ensuring that comments are processed one by one with the
-required delay.
+loop, ensuring that comments are processed one by one with the required
+delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
@@ -551,36 +624,52 @@ octocrab.issues("owner", "repo").create_comment(pr_number, "body").await?;
 
 The worker task's loop consists of the following steps:
 
-1. **Dequeue Job:** It calls `receiver.recv().await?` to receive the next
-   `CommentRequest` wrapped in a `yaque::RecvGuard`. This operation will block
-   asynchronously until a job is available in the queue.
+1. **Compute the due entry:** It calls `queue.next_due()`, which asks the
+   store to recompute the head entry and its estimated seconds-until-post on
+   every iteration. This means a `bump`, `bust`, `del`, or new `put` performed
+   by a client takes effect on the very next iteration, not just at the start
+   of the loop.
 
-2. **Post Comment:** It constructs and sends the API request to GitHub using
-   the `octocrab` client and the data from the dequeued job.
+2. **Wait until due:** If nothing is queued, the worker waits for the shared
+   queue's change signal or a shutdown signal. If the head entry is not yet
+   due, the worker sleeps for the remaining time, but the sleep is
+   interruptible: a queue change (e.g. a `bump` promoting a different entry)
+   or shutdown wakes it early, and it loops back to recompute the due entry
+   rather than blindly posting whichever entry it started waiting for.
 
-3. **Handle Result:**
+3. **Post Comment:** Once an entry is due, the worker constructs and sends the
+   API request to GitHub using the `octocrab` client and the data from the
+   entry.
 
-   - **On API Success:** The task immediately calls `guard.commit()` to
-     finalize the transaction and permanently remove the job from the queue. It
-     then logs the successful post.
+4. **Handle Result:**
+
+   - **On API Success:** The task calls `queue.complete(&entry.id)`, which
+     removes the entry from disk and atomically records the current time in
+     `last_post`. It then logs the successful post.
 
    - **On API Failure:** The task logs the error from the GitHub API. The
-     `guard` is simply dropped. `yaque`'s transactional guarantee ensures the
-     job is automatically returned to the queue, ready to be retried on the
-     next iteration of the loop. For more advanced error handling, a retry
+     entry is left in place (`complete` is never called for it), so it is
+     retried on a later iteration. The worker waits a full
+     `cooldown_period_seconds` before retrying, to avoid hammering a
+     persistently failing API. For more advanced error handling, a retry
      counter could be added to the `CommentRequest` to prevent infinite loops
      for unfixable errors, eventually moving the job to a "dead-letter" queue.
 
-4. **Cooldown:** After successfully processing a job (or after a failed
-   attempt), the task calls
-   `tokio::time::sleep(Duration::from_secs(960)).await` to enforce the
-   16-minute cooling-off period.
-
 5. The loop then repeats.
 
-This workflow, built upon `yaque`'s transactional foundation, creates a highly
-resilient system that can tolerate both network failures and process crashes
-without losing data.
+**ETA projection.** The store computes, for each pending entry, an estimated
+number of seconds until it is posted (`schedule` in `QueueStore`). The head
+entry is due one full `cooldown_period_seconds` plus its own sampled flutter
+after the last successful post, or immediately if nothing has been posted
+yet. Each subsequent entry is due a further cooldown plus its own flutter
+after its predecessor's projected posting time. Because flutter is sampled
+once, at enqueue time, and the cooldown always runs in full, the ETA reported
+to a client by `put` or `list` matches what the worker will actually do, and
+does not drift as time passes.
+
+This workflow gives a highly resilient system that can tolerate both network
+failures and process crashes without losing data: an entry is only ever
+removed from the store once GitHub has confirmed the post.
 
 ### 3.5. Daemon Configuration and Logging
 
@@ -593,7 +682,7 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                    | /var/lib/comenq/queue                                                                                          |
+| queue_path               | PathBuf | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                    | /var/lib/comenq/queue                                                                                          |
 | log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
 | cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                 | 960                                                                                                            |
 | cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                               | 0                                                                                                              |
@@ -885,7 +974,9 @@ clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 octocrab = "0.38"
-yaque = "0.6"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
+backon = "1.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
@@ -1019,20 +1110,22 @@ sequenceDiagram
     participant WatchChannel
     participant WorkerHooks
     loop Process queue
-        Worker->>Queue: rx.recv()
-        alt Shutdown signal
-            WatchChannel-->>Worker: shutdown.changed()
-            Worker->>WorkerHooks: (optional) drained.notify_waiters()
-            Worker-->>Worker: break
-        else Got request
-            Worker->>WorkerHooks: (optional) enqueued.notify_waiters()
-            Worker->>Worker: process and commit
-            alt Queue empty
-                Worker->>WorkerHooks: (optional) drained.notify_waiters()
-                Worker->>WorkerHooks: (optional) idle.notify_waiters()
-            else Queue not empty
-                Worker->>Worker: sleep or shutdown
+        Worker->>Queue: next_due()
+        alt Nothing queued
+            Worker->>WorkerHooks: (optional) drained.notify_one()
+            Worker->>WatchChannel: select: shutdown.changed() or queue.changed()
+        else Head not yet due
+            Worker->>WatchChannel: select: shutdown, queue.changed(), or sleep(wait_seconds)
+        else Head due now
+            Worker->>WorkerHooks: (optional) enqueued.notify_one()
+            Worker->>Worker: post to GitHub
+            alt Success
+                Worker->>Queue: complete(id)
+            else Failure
+                Worker->>WorkerHooks: (optional) idle.notify_one()
+                Worker->>WatchChannel: wait_or_shutdown(cooldown_period_seconds)
             end
+            Worker->>WorkerHooks: (optional) idle.notify_one()
         end
     end
 ```
@@ -1046,16 +1139,18 @@ because the notifier may fire before the waiter starts listening.
 ### 5.6. Implementation Notes
 
 The repository initializes the workspace with `comenq-lib` at the root and two
-binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix socket
-listener and queue worker as described above. Structured logging is initialized
-using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
-environment variable. The queue directory is created asynchronously on start if
-it does not already exist before `yaque` opens it. Incoming requests are
-forwarded from the listener to a dedicated queue writer task over a bounded
-Tokio `mpsc` channel sized by `client_channel_capacity`. This task serializes
-writes to the `yaque::Sender`, preserving single-writer semantics without
-per-connection locking.
+binary crates under `crates/`. `CommentRequest` and the `protocol` module
+(`Request`/`Response`) reside in the library and derive both `Serialize` and
+`Deserialize`. The daemon now spawns a Unix socket listener and queue worker as
+described above. Structured logging is initialized using `tracing_subscriber`
+with JSON output controlled by the `RUST_LOG` environment variable. The queue
+directory is created asynchronously on start if it does not already exist,
+before `QueueStore::open` reads or creates the `entries` sub-directory within
+it. There is no dedicated queue-writer task or inter-task channel: the listener
+and worker both hold an `Arc<SharedQueue>`, which wraps the store in a
+`tokio::sync::Mutex`. Serializing access through this mutex, rather than a
+per-connection lock or a writer task, gives the same single-writer semantics
+for on-disk mutations while keeping the concurrency model simple.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
@@ -1086,7 +1181,6 @@ flag.
 [^8]: octocrab/examples/custom_client.rs at main - GitHub. Accessed on July 24,
       2025.
       <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
-       July 24, 2025. <https://github.com/tokahuke/yaque>
 [^10]: codyps/rust-systemd: Rust interface to systemd c apis - GitHub. Accessed
        on July 24, 2025. <https://github.com/codyps/rust-systemd>
        <https://docs.rs/clap/latest/clap/_derive/index.html>
