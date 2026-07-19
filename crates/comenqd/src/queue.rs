@@ -12,7 +12,7 @@ use comenq_lib::protocol::{Request, Response};
 use tokio::sync::{Mutex, Notify};
 
 use crate::config::Config;
-use crate::store::{QueueStore, Result as StoreResult, StoredEntry};
+use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
 
 /// Current Unix time in whole seconds.
 ///
@@ -76,17 +76,20 @@ impl SharedQueue {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = unix_now();
         let (response, mutated) = match request {
-            Request::Put { request } => {
-                let outcome = store
-                    .put(request, self.cfg.cooldown_flutter_seconds, now)
-                    .and_then(|entry| {
-                        let eta = store
-                            .schedule(cooldown, now)?
-                            .into_iter()
-                            .find(|(scheduled, _)| scheduled.id == entry.id)
-                            .map_or(0, |(_, eta)| eta);
-                        Ok(Response::entry(entry.to_pending(eta)))
-                    });
+            Request::Put { request, immediate } => {
+                let options = PutOptions {
+                    cooldown,
+                    flutter_max: self.cfg.cooldown_flutter_seconds,
+                    immediate,
+                };
+                let outcome = store.put(request, &options, now).and_then(|entry| {
+                    let eta = store
+                        .schedule(cooldown, now)?
+                        .into_iter()
+                        .find(|(scheduled, _)| scheduled.id == entry.id)
+                        .map_or(0, |(_, eta)| eta);
+                    Ok(Response::entry(entry.to_pending(eta)))
+                });
                 (outcome, true)
             }
             Request::List => {

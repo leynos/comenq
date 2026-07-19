@@ -36,6 +36,14 @@ pub struct StoredEntry {
     pub flutter_seconds: u64,
     /// Unix time the entry was enqueued, in seconds.
     pub enqueued_at: u64,
+    /// Earliest Unix time the entry may post.
+    ///
+    /// A default `put` sets this one cooldown plus the entry's flutter
+    /// after enqueue, so even an idle queue paces a fresh comment; an
+    /// immediate put (and entries persisted before this field existed)
+    /// leave it at zero.
+    #[serde(default)]
+    pub not_before: u64,
     /// The comment to post.
     pub request: CommentRequest,
 }
@@ -71,6 +79,18 @@ pub enum StoreError {
 
 /// Result alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Scheduling inputs for [`QueueStore::put`].
+#[derive(Debug, Clone, Copy)]
+pub struct PutOptions {
+    /// Cooldown between posts, in seconds.
+    pub cooldown: u64,
+    /// Flutter ceiling to sample from, in seconds.
+    pub flutter_max: u64,
+    /// Post as soon as the queue allows instead of waiting a full cooldown
+    /// from enqueue.
+    pub immediate: bool,
+}
 
 /// Filesystem-backed queue of pending comments.
 #[derive(Debug, Clone)]
@@ -120,21 +140,35 @@ impl QueueStore {
     /// Enqueue `request` at the tail, sampling its flutter now.
     ///
     /// The flutter is fixed at enqueue time so the entry's estimated posting
-    /// time is stable from the moment it is reported to the client.
+    /// time is stable from the moment it is reported to the client. By
+    /// default the entry may not post until one full cooldown plus its
+    /// flutter after enqueue; `options.immediate` lifts that floor so the
+    /// entry posts as soon as the queue allows.
     ///
     /// Identifiers derive from the request content and enqueue second, so an
     /// identical request repeated within the same second maps to the same
     /// identifier; the operation is idempotent and returns the existing
     /// entry unchanged.
-    pub fn put(&self, request: CommentRequest, flutter_max: u64, now: u64) -> Result<StoredEntry> {
+    pub fn put(
+        &self,
+        request: CommentRequest,
+        options: &PutOptions,
+        now: u64,
+    ) -> Result<StoredEntry> {
         let id = entry_id(&request, now);
         if let Ok(existing) = self.find(&id) {
             return Ok(existing);
         }
-        let flutter_seconds = if flutter_max == 0 {
+        let flutter_seconds = if options.flutter_max == 0 {
             0
         } else {
-            rand::rng().random_range(0..=flutter_max)
+            rand::rng().random_range(0..=options.flutter_max)
+        };
+        let not_before = if options.immediate {
+            0
+        } else {
+            now.saturating_add(options.cooldown)
+                .saturating_add(flutter_seconds)
         };
         let order = self
             .entries()?
@@ -145,6 +179,7 @@ impl QueueStore {
             order,
             flutter_seconds,
             enqueued_at: now,
+            not_before,
             request,
         };
         self.write_entry(&entry)?;
@@ -226,7 +261,8 @@ impl QueueStore {
     /// The head is due one full cooldown plus its own flutter after the most
     /// recent post (immediately when nothing has been posted yet); each
     /// subsequent entry follows a further cooldown plus its own flutter after
-    /// the projected posting time of its predecessor.
+    /// the projected posting time of its predecessor. An entry additionally
+    /// never posts before its own `not_before` floor.
     pub fn schedule(&self, cooldown: u64, now: u64) -> Result<Vec<(StoredEntry, u64)>> {
         let mut previous_post = self.last_post();
         let mut scheduled = Vec::new();
@@ -235,7 +271,7 @@ impl QueueStore {
                 prev.saturating_add(cooldown)
                     .saturating_add(entry.flutter_seconds)
             });
-            let post_at = due.max(now);
+            let post_at = due.max(entry.not_before).max(now);
             previous_post = Some(post_at);
             scheduled.push((entry, post_at.saturating_sub(now)));
         }

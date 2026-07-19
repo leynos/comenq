@@ -28,6 +28,8 @@ pub struct QueueWorld {
     queue: Option<Arc<SharedQueue>>,
     /// Identifier of each queued comment, keyed by its body text.
     ids: HashMap<String, String>,
+    /// Whether the next put bypasses the enqueue cooldown floor.
+    immediate_puts: bool,
     last_put: Option<PendingEntry>,
     last_response: Option<Response>,
 }
@@ -60,6 +62,7 @@ impl QueueWorld {
                     pr_number: 7,
                     body: body.into(),
                 },
+                immediate: self.immediate_puts,
             })
             .await;
         let Response::Ok {
@@ -102,15 +105,28 @@ async fn comments_are_queued(
     second: String,
     third: String,
 ) -> anyhow::Result<()> {
+    // Queue with immediate puts so ordering scenarios are not skewed by
+    // per-entry enqueue floors.
+    world.immediate_puts = true;
     for body in [first, second, third] {
         world.put(&body).await?;
     }
+    world.immediate_puts = false;
     Ok(())
 }
 
 #[when(regex = r#"^the comment \"(.+)\" is put$"#)]
 async fn comment_is_put(world: &mut QueueWorld, body: String) -> anyhow::Result<()> {
     let entry = world.put(&body).await?;
+    world.last_put = Some(entry);
+    Ok(())
+}
+
+#[when(regex = r#"^the comment \"(.+)\" is put immediately$"#)]
+async fn comment_is_put_immediately(world: &mut QueueWorld, body: String) -> anyhow::Result<()> {
+    world.immediate_puts = true;
+    let entry = world.put(&body).await?;
+    world.immediate_puts = false;
     world.last_put = Some(entry);
     Ok(())
 }
@@ -166,8 +182,18 @@ fn reply_has_identifier(world: &mut QueueWorld) -> anyhow::Result<()> {
 #[then("the reply reports an immediate ETA")]
 fn reply_reports_eta(world: &mut QueueWorld) -> anyhow::Result<()> {
     let entry = world.last_put.as_ref().context("no put reply recorded")?;
-    // Nothing has ever been posted, so the queue head is due immediately.
+    // Nothing has ever been posted and the floor was bypassed, so the
+    // queue head is due immediately.
     assert_eq!(entry.eta_seconds, 0);
+    Ok(())
+}
+
+#[then("the reply reports an ETA of one cooldown")]
+fn reply_reports_cooldown_eta(world: &mut QueueWorld) -> anyhow::Result<()> {
+    let entry = world.last_put.as_ref().context("no put reply recorded")?;
+    // A default put waits one full cooldown from enqueue even though the
+    // queue is idle (flutter is zero in these scenarios).
+    assert_eq!(entry.eta_seconds, COOLDOWN_SECONDS);
     Ok(())
 }
 

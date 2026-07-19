@@ -93,6 +93,7 @@ async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
                 pr_number: 1,
                 body: "b".into(),
             },
+            immediate: true,
         })
         .await;
     anyhow::ensure!(
