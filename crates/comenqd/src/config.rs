@@ -16,6 +16,8 @@ const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// The period was increased from 15 to 16 minutes to provide a larger
 /// buffer against GitHub's secondary rate limits.
 const DEFAULT_COOLDOWN: u64 = 960;
+/// Default random flutter added to the cooldown, in seconds (disabled).
+const DEFAULT_COOLDOWN_FLUTTER: u64 = 0;
 /// Default minimum delay between task restarts in milliseconds.
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 /// Default timeout in seconds for GitHub API calls.
@@ -54,6 +56,13 @@ pub struct Config {
     /// Cooldown between comment posts in seconds.
     #[serde(default = "default_cooldown")]
     pub cooldown_period_seconds: u64,
+    /// Maximum random flutter added to each cooldown, in seconds.
+    ///
+    /// After every post the worker waits the full cooldown plus a fresh
+    /// uniformly random duration between zero and this value. Flutter only
+    /// ever lengthens the wait; zero (the default) disables it.
+    #[serde(default = "default_cooldown_flutter")]
+    pub cooldown_flutter_seconds: u64,
     /// Minimum delay in milliseconds applied between task restarts.
     #[serde(default = "default_restart_min_delay_ms")]
     pub restart_min_delay_ms: u64,
@@ -98,6 +107,7 @@ impl From<test_support::daemon::TestConfig> for Config {
             socket_path,
             queue_path,
             cooldown_period_seconds,
+            cooldown_flutter_seconds: DEFAULT_COOLDOWN_FLUTTER,
             restart_min_delay_ms,
             github_api_timeout_secs,
             client_channel_capacity,
@@ -137,6 +147,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
+            cooldown_flutter_seconds: DEFAULT_COOLDOWN_FLUTTER,
             restart_min_delay_ms: value.restart_min_delay_ms,
             github_api_timeout_secs: value.github_api_timeout_secs,
             client_channel_capacity: value.client_channel_capacity,
@@ -180,6 +191,10 @@ fn default_queue_path() -> PathBuf {
 
 fn default_cooldown() -> u64 {
     DEFAULT_COOLDOWN
+}
+
+fn default_cooldown_flutter() -> u64 {
+    DEFAULT_COOLDOWN_FLUTTER
 }
 
 fn default_restart_min_delay_ms() -> u64 {

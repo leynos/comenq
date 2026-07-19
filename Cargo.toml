@@ -60,6 +60,7 @@ rstest = "0.18.0"
 wiremock = "0.6"
 test-support = { path = "test-support" }
 backon = "1.5.2"
+rand = "0.9"
 uuid = { version = "1", features = ["v4"] }
 
 [lints.clippy]

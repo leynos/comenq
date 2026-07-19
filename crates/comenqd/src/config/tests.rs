@@ -83,6 +83,7 @@ fn defaults_are_applied() {
     );
     assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
     assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
+    assert_eq!(cfg.cooldown_flutter_seconds, 0);
     assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
     assert_eq!(cfg.github_api_timeout_secs, DEFAULT_GITHUB_API_TIMEOUT_SECS);
     assert_eq!(cfg.client_channel_capacity, DEFAULT_CLIENT_CHANNEL_CAPACITY);
