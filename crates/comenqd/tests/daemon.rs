@@ -49,7 +49,6 @@ fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
         cooldown_flutter_seconds: 0,
         restart_min_delay_ms: cfg.restart_min_delay_ms,
         github_api_timeout_secs: cfg.github_api_timeout_secs,
-        client_channel_capacity: cfg.client_channel_capacity,
     }
 }
 
