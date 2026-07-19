@@ -12,12 +12,20 @@ comenqd \- daemon that posts queued GitHub pull request comments
 .I token
 ]
 [
+.B --github-token-file
+.I file
+]
+[
 .B --socket-path
 .I path
 ]
 [
 .B --queue-path
 .I path
+]
+[
+.B --cooldown-period-seconds
+.I seconds
 ]
 .SH DESCRIPTION
 The
@@ -30,8 +38,28 @@ and may be overridden through command line options or
 environment variables prefixed with
 .BR COMENQD_.
 .PP
-The daemon is designed to run as a system service using the packaged
-systemd unit.  When launched manually it logs its effective socket and
+The GitHub token may be given inline via
+.B github_token
+or read from a file named by
+.BR github_token_file .
+The file is read at startup and its trimmed contents take precedence.  A
+leading \fB${VAR}\fR placeholder in the path is expanded from the
+environment, so a systemd unit using
+.B LoadCredential=token:...
+can reference \fB${CREDENTIALS_DIRECTORY}/token\fR.
+.PP
+The cooldown between comment posts is set by
+.B cooldown_period_seconds
+and may be lengthened by a random flutter of up to
+.B cooldown_flutter_seconds
+after each post; the full cooldown always elapses.
+.PP
+The daemon may run as a system service using the packaged systemd unit,
+or as a per-user service (\fBsystemd --user\fR) using the
+.I comenqd-user.service
+example.  For user sessions the socket defaults to
+.IR $XDG_RUNTIME_DIR/comenq/comenq.sock .
+When launched manually it logs its effective socket and
 queue locations to the terminal.
 .SH FILES
 .TP
