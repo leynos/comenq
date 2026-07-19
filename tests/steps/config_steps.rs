@@ -73,6 +73,34 @@ fn config_without_cooldown(world: &mut ConfigWorld, token: String) -> anyhow::Re
     config_file_with_token(world, token)
 }
 
+#[given(regex = r#"^a configuration file referencing a token file containing \"(.+)\"$"#)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
+fn config_with_token_file(world: &mut ConfigWorld, token: String) -> anyhow::Result<()> {
+    let dir = TempDir::new().context("create temp dir")?;
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, format!("{token}\n")).context("write token file")?;
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token_file='{}'", token_path.display()),
+    )
+    .context("write config")?;
+    world.dir = Some(dir);
+    world.path = Some(path);
+    Ok(())
+}
+
+#[given("a configuration file referencing a missing token file")]
+fn config_with_missing_token_file(world: &mut ConfigWorld) -> anyhow::Result<()> {
+    let (dir, path) = write_temp_config("github_token_file='/nonexistent/token'")?;
+    world.dir = Some(dir);
+    world.path = Some(path);
+    Ok(())
+}
+
 #[given("a missing configuration file")]
 fn missing_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(PathBuf::from("/nonexistent/nowhere.toml"));
@@ -85,6 +113,15 @@ fn missing_configuration_file(world: &mut ConfigWorld) {
 #[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
 fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
     world.env_guard = Some(EnvVarGuard::set(&key, &value));
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber requires owned values"
+)]
+#[given(regex = r#"^environment variable \"(.+)\" is unset$"#)]
+fn unset_env_var(world: &mut ConfigWorld, key: String) {
+    world.env_guard = Some(EnvVarGuard::remove(&key));
 }
 
 #[when("the config is loaded")]

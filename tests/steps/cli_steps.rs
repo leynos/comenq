@@ -84,5 +84,16 @@ fn the_socket_path_is(world: &mut CliWorld, expected: String) {
         Some(Ok(a)) => a,
         other => panic!("expected parsed args, got {other:?}"),
     };
-    assert_eq!(args.socket, PathBuf::from(expected));
+    assert_eq!(args.socket, Some(PathBuf::from(expected)));
+}
+
+#[then("no socket path override is present")]
+fn no_socket_override(world: &mut CliWorld) {
+    let args = match world.result.take() {
+        Some(Ok(a)) => a,
+        other => panic!("expected parsed args, got {other:?}"),
+    };
+    // Discovery of the actual path is covered by unit tests; the parser
+    // must simply leave the override unset.
+    assert_eq!(args.socket, None);
 }

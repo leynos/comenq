@@ -588,14 +588,16 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter               | Type    | Description                                                                                | Default Value           |
-| ----------------------- | ------- | ------------------------------------------------------------------------------------------ | ----------------------- |
-| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field.  | (none)                  |
-| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                            | /run/comenq/comenq.sock |
-| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                    | /var/lib/comenq/queue   |
-| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                          | info                    |
-| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                 | 960                     |
-| restart_min_delay_ms    | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor). | 100                     |
+| Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
+| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
+| github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                    | /var/lib/comenq/queue                                                                                          |
+| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
+| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                 | 960                                                                                                            |
+| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                               | 0                                                                                                              |
+| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
@@ -758,6 +760,28 @@ sudo systemctl start comenq.service
 # Check the status of the service
 sudo systemctl status comenq.service
 ```
+
+#### 4.2.1. Running as a per-user service
+
+The daemon also runs unprivileged under `systemd --user`, using the
+`packaging/linux/comenqd-user.service` unit and the matching example
+configuration `packaging/config/comenqd-user.toml`:
+
+- The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`;
+  `RuntimeDirectory=comenq` provisions the directory, and the client discovers
+  whichever socket (user or system) exists.
+- The queue lives in `~/.local/state/comenq/queue`, provided through
+  `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
+  the unit.
+- The PAT is supplied through the systemd credential system:
+  `LoadCredential=token:%h/pandalump-token` exposes the token file to the
+  service, and the configuration references it as
+  `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`, keeping the secret
+  out of the unit, the environment, and `ps` output.
+
+Install the unit as `~/.config/systemd/user/comenqd.service`, the configuration
+as `~/.config/comenqd/config.toml`, then enable it with
+`systemctl --user enable --now comenqd.service`.
 
 ### 4.3. Security Posture and Best Practices
 

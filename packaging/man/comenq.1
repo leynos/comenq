@@ -21,10 +21,16 @@ format, the pull request number, and the comment body to submit.
 .PP
 Use
 .B --socket
-to override the Unix Domain Socket path used to contact the daemon.  The
-socket defaults to
+(or the
+.B COMENQ_SOCKET
+environment variable) to override the Unix Domain Socket path used to
+contact the daemon.  By default the client tries
+.I $XDG_RUNTIME_DIR/comenq/comenq.sock
+(a user-hosted daemon) and then
 .I /run/comenq/comenq.sock
-which matches the packaged systemd service configuration.
+(the packaged system service), connecting to the first socket that
+accepts.  A stale socket file left behind by a daemon that exited without
+unlinking it is skipped rather than shadowing a healthy daemon.
 .SH EXAMPLES
 Send a comment to pull request 42 of example/repo:
 .PP

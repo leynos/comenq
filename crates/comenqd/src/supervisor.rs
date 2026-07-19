@@ -14,7 +14,7 @@ use tokio::fs;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
-use yaque::{Sender, channel};
+use yaque::{Receiver, Sender};
 
 use crate::listener::run_listener;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
@@ -140,8 +140,10 @@ async fn supervise_writer<B>(
                     break;
                 }
                 backoff = backoff_builder();
-                match channel(&cfg.queue_path) {
-                    Ok((queue_tx, _)) => {
+                // Open only the sender: the worker holds the queue's receiver,
+                // and yaque permits one live handle per side.
+                match Sender::open(&cfg.queue_path) {
+                    Ok(queue_tx) => {
                         handle = tokio::spawn(queue_writer(queue_tx, rx));
                     }
                     Err(e) => {
@@ -198,7 +200,10 @@ pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
-    let (queue_tx, _) = channel(&config.queue_path)?; // drop unused receiver
+    // Open only the sender here; the worker opens the matching receiver.
+    // Opening a full channel() in both places would contend for yaque's
+    // per-side lock files and leave the worker in a permanent restart loop.
+    let queue_tx = Sender::open(&config.queue_path)?;
     let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
     let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
@@ -305,7 +310,8 @@ fn spawn_worker(
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let cfg_clone = cfg.clone();
     tokio::spawn(async move {
-        let (_tx, rx) = channel(&cfg_clone.queue_path)?;
+        // Open only the receiver; the queue writer owns the sender side.
+        let rx = Receiver::open(&cfg_clone.queue_path)?;
         let control = WorkerControl::new(shutdown, WorkerHooks::default());
         run_worker(cfg_clone, rx, octocrab, control).await
     })
