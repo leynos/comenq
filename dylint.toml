@@ -13,9 +13,13 @@
 #   files and packaging manifests inside ambient tempdirs, which the Whitaker
 #   user's guide lists as a sanctioned exclusion category (test support
 #   utilities).
+# - comenq_lib: socket discovery unit tests create placeholder sockets inside
+#   ambient tempdirs to exercise filesystem probing; the same sanctioned test
+#   support category as the cucumber crate.
 [no_std_fs_operations]
 excluded_crates = [
     "build_script_build",
     "comenqd",
+    "comenq_lib",
     "cucumber",
 ]

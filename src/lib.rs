@@ -4,11 +4,78 @@
 //! and daemon.
 
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::path::PathBuf;
 
 /// Default Unix Domain Socket path for the Comenq daemon.
 ///
 /// Shared by the daemon and CLI to avoid configuration drift.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
+
+/// Environment variable naming the per-user runtime directory.
+const XDG_RUNTIME_DIR: &str = "XDG_RUNTIME_DIR";
+
+/// Socket location relative to a runtime directory.
+const SOCKET_RELATIVE_PATH: &str = "comenq/comenq.sock";
+
+/// Socket path within the per-user runtime directory, when one is available.
+///
+/// Returns `None` when `XDG_RUNTIME_DIR` is unset or empty, which is the
+/// case for system services and non-session processes.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// if let Some(path) = comenq_lib::user_socket_path() {
+///     println!("user socket would live at {}", path.display());
+/// }
+/// ```
+#[must_use]
+pub fn user_socket_path() -> Option<PathBuf> {
+    env::var_os(XDG_RUNTIME_DIR)
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| PathBuf::from(dir).join(SOCKET_RELATIVE_PATH))
+}
+
+/// Default socket path for the current execution context.
+///
+/// Prefers the per-user runtime directory so a user-hosted daemon needs no
+/// configuration, falling back to [`DEFAULT_SOCKET_PATH`] when no user
+/// runtime directory is available (for example under a system service).
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// let path = comenq_lib::default_socket_path();
+/// println!("daemon will listen on {}", path.display());
+/// ```
+#[must_use]
+pub fn default_socket_path() -> PathBuf {
+    user_socket_path().unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_PATH))
+}
+
+/// Discover the socket a client should connect to.
+///
+/// Returns the first existing socket among the per-user runtime path and the
+/// system path, so a client reaches a user-hosted daemon when one is running
+/// and otherwise falls back to a system-hosted daemon. When neither socket
+/// exists the context-appropriate default is returned so connection errors
+/// mention the most likely intended path.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// let path = comenq_lib::discover_socket_path();
+/// println!("connecting to {}", path.display());
+/// ```
+#[must_use]
+pub fn discover_socket_path() -> PathBuf {
+    [user_socket_path(), Some(PathBuf::from(DEFAULT_SOCKET_PATH))]
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(default_socket_path)
+}
 
 /// Request sent from the client to the daemon.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -72,5 +139,79 @@ mod tests {
         }"#;
         let result: Result<CommentRequest, _> = serde_json::from_str(data);
         assert!(result.is_err());
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "tests should fail loudly when fixture setup fails"
+    )]
+    mod socket_path {
+
+        //! Unit tests for socket path resolution and discovery.
+        use crate::{
+            DEFAULT_SOCKET_PATH, default_socket_path, discover_socket_path, user_socket_path,
+        };
+        use std::path::PathBuf;
+        use test_support::EnvVarGuard;
+
+        #[serial_test::serial]
+        #[test]
+        fn user_socket_path_requires_runtime_dir() {
+            let _guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
+            assert_eq!(user_socket_path(), None);
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn user_socket_path_ignores_empty_runtime_dir() {
+            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "");
+            assert_eq!(user_socket_path(), None);
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn default_socket_path_prefers_runtime_dir() {
+            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/run/user/1000");
+            assert_eq!(
+                default_socket_path(),
+                PathBuf::from("/run/user/1000/comenq/comenq.sock")
+            );
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn default_socket_path_falls_back_to_system_path() {
+            let _guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
+            assert_eq!(default_socket_path(), PathBuf::from(DEFAULT_SOCKET_PATH));
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn discover_socket_path_prefers_existing_user_socket() {
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let socket_dir = dir.path().join("comenq");
+            std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+            let socket = socket_dir.join("comenq.sock");
+            std::fs::write(&socket, b"").expect("create placeholder socket");
+            let _guard = EnvVarGuard::set(
+                "XDG_RUNTIME_DIR",
+                dir.path().to_str().expect("tempdir path is UTF-8"),
+            );
+            assert_eq!(discover_socket_path(), socket);
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn discover_socket_path_defaults_when_nothing_exists() {
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let _guard = EnvVarGuard::set(
+                "XDG_RUNTIME_DIR",
+                dir.path().to_str().expect("tempdir path is UTF-8"),
+            );
+            assert_eq!(
+                discover_socket_path(),
+                dir.path().join("comenq/comenq.sock")
+            );
+        }
     }
 }

@@ -42,13 +42,14 @@ pub enum ClientError {
 ///     repo_slug: "owner/repo".parse().expect("slug"),
 ///     pr_number: 1,
 ///     comment_body: String::from("Hi"),
-///     socket: PathBuf::from(DEFAULT_SOCKET_PATH),
+///     socket: Some(PathBuf::from(DEFAULT_SOCKET_PATH)),
 /// };
 /// run(args).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
+    let socket = args.socket_path();
     let request = CommentRequest {
         owner: args.repo_slug.owner().to_owned(),
         repo: args.repo_slug.repo().to_owned(),
@@ -58,7 +59,7 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 
     let payload = serde_json::to_vec(&request)?;
 
-    let mut stream = UnixStream::connect(&args.socket)
+    let mut stream = UnixStream::connect(socket)
         .await
         .map_err(ClientError::Connect)?;
     stream
@@ -98,7 +99,7 @@ mod tests {
             repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
-            socket: socket.clone(),
+            socket: Some(socket.clone()),
         };
 
         run(args).await.expect("run succeeds");
@@ -118,7 +119,7 @@ mod tests {
             repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
-            socket: socket.clone(),
+            socket: Some(socket.clone()),
         };
 
         let err = run(args).await.expect_err("should error");

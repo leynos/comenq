@@ -4,7 +4,6 @@
 //! overridden by environment variables using the `COMENQD_` prefix.
 
 use clap::Parser;
-use comenq_lib::DEFAULT_SOCKET_PATH;
 use figment::providers::Env;
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -30,6 +29,10 @@ pub struct Config {
     /// GitHub Personal Access Token.
     pub github_token: String,
     /// Path to the Unix Domain Socket.
+    ///
+    /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
+    /// directory is available, falling back to the system-wide path
+    /// otherwise. See [`comenq_lib::default_socket_path`].
     #[serde(default = "default_socket_path")]
     pub socket_path: PathBuf,
     /// Directory for the persistent queue.
@@ -147,7 +150,7 @@ struct CliArgs {
 }
 
 fn default_socket_path() -> PathBuf {
-    PathBuf::from(DEFAULT_SOCKET_PATH)
+    comenq_lib::default_socket_path()
 }
 
 fn default_queue_path() -> PathBuf {
@@ -246,137 +249,4 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rstest::rstest;
-    use std::fs;
-    use tempfile::tempdir;
-
-    use test_support::EnvVarGuard;
-
-    #[rstest]
-    #[serial_test::serial]
-    fn loads_from_file() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(
-            &path,
-            "github_token='abc'\nsocket_path='/tmp/s.sock'\nqueue_path='/tmp/q'",
-        )
-        .expect("write config fixture");
-        let _guard = EnvVarGuard::remove("COMENQD_SOCKET_PATH");
-        let cfg = Config::from_file(&path).expect("load config");
-        assert_eq!(cfg.github_token, "abc");
-        assert_eq!(cfg.socket_path, PathBuf::from("/tmp/s.sock"));
-        assert_eq!(cfg.queue_path, PathBuf::from("/tmp/q"));
-    }
-
-    #[rstest]
-    #[serial_test::serial]
-    fn error_when_missing_file() {
-        let path = PathBuf::from("/nonexistent/file.toml");
-        let res = Config::from_file(&path);
-        assert!(res.is_err());
-    }
-
-    #[rstest]
-    #[serial_test::serial]
-    fn env_vars_override_file() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/s.sock'")
-            .expect("write config fixture");
-        let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/override.sock");
-        let cfg = Config::from_file(&path).expect("load config");
-        assert_eq!(cfg.socket_path, PathBuf::from("/tmp/override.sock"));
-    }
-
-    #[rstest]
-    #[serial_test::serial]
-    fn error_with_invalid_toml() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc' this is not toml").expect("write invalid toml");
-        let res = Config::from_file(&path);
-        assert!(res.is_err());
-    }
-
-    #[rstest]
-    #[serial_test::serial]
-    fn error_when_missing_token() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "socket_path='/tmp/s.sock'").expect("write config without token");
-        let res = Config::from_file(&path);
-        assert!(res.is_err());
-    }
-
-    #[rstest]
-    #[serial_test::serial]
-    fn defaults_are_applied() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'").expect("write config fixture");
-        let cfg = Config::from_file(&path).expect("load config");
-        assert_eq!(
-            cfg.socket_path,
-            PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)
-        );
-        assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
-        assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);
-        assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
-        assert_eq!(cfg.github_api_timeout_secs, DEFAULT_GITHUB_API_TIMEOUT_SECS);
-        assert_eq!(cfg.client_channel_capacity, DEFAULT_CLIENT_CHANNEL_CAPACITY);
-    }
-
-    /// CLI arguments should take precedence over environment variables
-    /// and configuration file values when building the daemon `Config`.
-    #[rstest]
-    #[serial_test::serial]
-    fn cli_overrides_env_and_file() {
-        let dir = tempdir().expect("create tempdir");
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "github_token='abc'\nsocket_path='/tmp/file.sock'")
-            .expect("write config fixture");
-        let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
-        let cli = CliArgs {
-            config: path.clone(),
-            github_token: None,
-            socket_path: Some(PathBuf::from("/tmp/cli.sock")),
-            queue_path: None,
-            github_api_timeout_secs: None,
-        };
-        let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
-        assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
-    }
-
-    #[cfg(feature = "test-support")]
-    #[rstest]
-    #[case(|cfg: &test_support::daemon::TestConfig| Config::from(cfg))]
-    #[case(|cfg: &test_support::daemon::TestConfig| Config::from(cfg.clone()))]
-    #[serial_test::serial]
-    fn converts_from_test_config(#[case] conv: fn(&test_support::daemon::TestConfig) -> Config) {
-        use test_support::temp_config;
-
-        let tmp = tempdir().expect("create tempdir");
-        let test_cfg = temp_config(&tmp).with_cooldown(42);
-        let cfg = conv(&test_cfg);
-
-        assert_eq!(cfg.github_token, test_cfg.github_token);
-        assert_eq!(cfg.socket_path, test_cfg.socket_path);
-        assert_eq!(cfg.queue_path, test_cfg.queue_path);
-        assert_eq!(
-            cfg.cooldown_period_seconds,
-            test_cfg.cooldown_period_seconds
-        );
-        assert_eq!(cfg.restart_min_delay_ms, test_cfg.restart_min_delay_ms);
-        assert_eq!(
-            cfg.github_api_timeout_secs,
-            test_cfg.github_api_timeout_secs
-        );
-        assert_eq!(
-            cfg.client_channel_capacity,
-            test_cfg.client_channel_capacity
-        );
-    }
-}
+mod tests;

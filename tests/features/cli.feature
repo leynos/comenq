@@ -4,7 +4,7 @@ Feature: CLI argument parsing
     Given valid CLI arguments
     When they are parsed
     Then parsing succeeds
-    And the socket path is "/run/comenq/comenq.sock"
+    And no socket path override is present
 
   Scenario: overriding the socket path
     Given valid CLI arguments

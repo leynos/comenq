@@ -27,10 +27,17 @@ Feature: Daemon configuration
     When the config is loaded
     Then config loading fails
 
-  Scenario: uses default socket path
+  Scenario: uses default socket path without a user runtime directory
     Given a configuration file with token "abc" and no socket_path
+    And environment variable "XDG_RUNTIME_DIR" is unset
     When the config is loaded
     Then socket path is "/run/comenq/comenq.sock"
+
+  Scenario: derives default socket path from the user runtime directory
+    Given a configuration file with token "abc" and no socket_path
+    And environment variable "XDG_RUNTIME_DIR" is "/run/user/1000"
+    When the config is loaded
+    Then socket path is "/run/user/1000/comenq/comenq.sock"
 
   Scenario: uses default cooldown period
     Given a configuration file with token "abc" and no cooldown_period_seconds

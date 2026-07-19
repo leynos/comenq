@@ -18,6 +18,7 @@ clap = { workspace = true }
 comenq = { path = "crates/comenq" }
 comenqd = { path = "crates/comenqd", features = ["test-support"] }
 ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
+serial_test = "2"
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 yaque = { workspace = true }
 wiremock = { workspace = true }
@@ -41,7 +42,7 @@ resolver = "2"
 
 [workspace.dependencies]
 tokio = { version = "1.35", features = ["full"] }
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
   octocrab = "0.38"
