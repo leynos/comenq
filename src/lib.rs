@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Request sent from the client to the daemon.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommentRequest {
     /// Repository owner.
     pub owner: String,
@@ -70,3 +70,5 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+pub mod protocol;
