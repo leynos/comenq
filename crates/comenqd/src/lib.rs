@@ -19,6 +19,7 @@ pub mod config;
 pub mod metrics;
 
 mod listener;
+pub mod store;
 mod supervisor;
 mod util;
 mod worker;
