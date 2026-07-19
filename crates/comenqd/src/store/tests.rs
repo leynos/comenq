@@ -177,3 +177,13 @@ fn entries_survive_reopen() {
     let reopened = open_store(&dir);
     assert_eq!(ids(&reopened), vec![a.id]);
 }
+
+#[rstest]
+fn identical_put_within_the_same_second_is_idempotent() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let first = store.put(request("dup"), 240, 1000).expect("first put");
+    let second = store.put(request("dup"), 240, 1000).expect("second put");
+    assert_eq!(first, second, "repeat put must return the existing entry");
+    assert_eq!(ids(&store).len(), 1);
+}

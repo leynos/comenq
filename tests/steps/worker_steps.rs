@@ -3,16 +3,17 @@
 //! These steps drive the Cucumber scenarios that verify the worker posts
 //! queued comments and handles failures gracefully.
 //!
-//! Uses Wiremock to stub the GitHub Issues API and yaque for the on-disk queue.
-//! See also: `test-support::octocrab_for()` and `yaque::channel()`.
+//! Uses Wiremock to stub the GitHub Issues API and the daemon's shared queue
+//! for on-disk persistence.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use comenq_lib::CommentRequest;
+use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::{WorkerControl, WorkerHooks, is_metadata_file, run_worker};
+use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -20,7 +21,6 @@ use tokio::sync::{Notify, watch};
 use tokio::time::timeout;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use yaque::{self, channel};
 
 fn coverage_timeout_multiplier() -> u32 {
     if std::env::var("CARGO_LLVM_COV_TARGET_DIR").is_ok()
@@ -35,8 +35,7 @@ fn coverage_timeout_multiplier() -> u32 {
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,
-    cfg: Option<Arc<Config>>,
-    receiver: Option<yaque::Receiver>,
+    queue: Option<Arc<SharedQueue>>,
     server: Option<MockServer>,
     shutdown: Option<watch::Sender<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -70,34 +69,57 @@ impl WorkerWorld {
     }
 }
 
+/// Pending entries as reported through the protocol.
+async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingEntry>> {
+    match queue.execute(Request::List).await {
+        Response::Ok {
+            entries: Some(entries),
+            ..
+        } => Ok(entries),
+        other => anyhow::bail!("expected list reply, got {other:?}"),
+    }
+}
+
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(0)));
-    let (mut sender, receiver) = channel(&cfg.queue_path).context("channel")?;
-    let req = CommentRequest {
-        owner: "o".into(),
-        repo: "r".into(),
-        pr_number: 1,
-        body: "b".into(),
-    };
-    let data = serde_json::to_vec(&req).context("serialize")?;
-    sender.send(data).await.context("send")?;
+    let queue = SharedQueue::open(cfg).context("open queue")?;
+    let response = queue
+        .execute(Request::Put {
+            request: CommentRequest {
+                owner: "o".into(),
+                repo: "r".into(),
+                pr_number: 1,
+                body: "b".into(),
+            },
+        })
+        .await;
+    anyhow::ensure!(
+        matches!(response, Response::Ok { .. }),
+        "put should succeed, got {response:?}"
+    );
     world.dir = Some(dir);
-    world.cfg = Some(cfg);
-    world.receiver = Some(receiver);
+    world.queue = Some(queue);
     Ok(())
 }
 
 #[given("GitHub returns success")]
-async fn github_success(world: &mut WorkerWorld) {
+async fn github_success(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let server = MockServer::start().await;
+    // A structurally valid comment body: an empty object fails octocrab's
+    // response parsing and would masquerade as an API error.
+    let body: serde_json::Value = serde_json::from_str(include_str!(
+        "../../crates/comenqd/tests/fixtures/github_comment_response.json"
+    ))
+    .context("parse comment fixture")?;
     Mock::given(method("POST"))
         .and(path("/repos/o/r/issues/1/comments"))
-        .respond_with(ResponseTemplate::new(201).set_body_raw("{}", "application/json"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(body))
         .mount(&server)
         .await;
     world.server = Some(server);
+    Ok(())
 }
 
 #[given("GitHub returns an error")]
@@ -113,15 +135,11 @@ async fn github_error(world: &mut WorkerWorld) {
 
 #[when("the worker runs briefly")]
 async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
-    let cfg = world
-        .cfg
+    let queue = world
+        .queue
         .as_ref()
-        .context("configuration should be initialized")?
+        .context("queue should be initialized")?
         .clone();
-    let rx = world
-        .receiver
-        .take()
-        .context("receiver should be initialized")?;
     let server = world
         .server
         .as_ref()
@@ -141,7 +159,7 @@ async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
         },
     );
     let handle = tokio::spawn(async move {
-        let _ = run_worker(cfg, rx, octocrab, control).await;
+        let _ = run_worker(queue, octocrab, control).await;
     });
     timeout(
         Duration::from_secs(30 * u64::from(coverage_timeout_multiplier())),
@@ -169,22 +187,23 @@ async fn comment_posted(world: &mut WorkerWorld) -> anyhow::Result<()> {
             .context("inbound requests should be recorded")?
             .is_empty(),
     );
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    assert!(
+        listed_entries(&queue).await?.is_empty(),
+        "posted entry should leave the queue"
+    );
     world.shutdown_and_join().await;
     Ok(())
 }
 
 #[then("the queue retains the job")]
 async fn queue_retains(world: &mut WorkerWorld) -> anyhow::Result<()> {
-    let cfg = world
-        .cfg
-        .as_ref()
-        .context("configuration should be initialized")?;
-    let job_count = std::fs::read_dir(&cfg.queue_path)
-        .context("queue directory should be readable")?
-        .filter_map(Result::ok)
-        .filter(|e| !is_metadata_file(e.file_name()))
-        .count();
-    assert!(job_count > 0, "queue should retain at least one job file");
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    assert_eq!(
+        listed_entries(&queue).await?.len(),
+        1,
+        "queue should retain the entry after an API failure"
+    );
     world.shutdown_and_join().await;
     Ok(())
 }
