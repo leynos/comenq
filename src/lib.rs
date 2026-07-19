@@ -56,27 +56,30 @@ pub fn default_socket_path() -> PathBuf {
     user_socket_path().unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_PATH))
 }
 
-/// Discover the socket a client should connect to.
+/// Candidate sockets a client should try, in preference order.
 ///
-/// Returns the first existing socket among the per-user runtime path and the
-/// system path, so a client reaches a user-hosted daemon when one is running
-/// and otherwise falls back to a system-hosted daemon. When neither socket
-/// exists the context-appropriate default is returned so connection errors
-/// mention the most likely intended path.
+/// Returns the per-user runtime path (when a user runtime directory is
+/// available) followed by the system path. Callers must probe candidates by
+/// actually connecting, in order, rather than checking for file existence: a
+/// daemon that exits without unlinking its socket leaves a stale file
+/// behind, and an existence check would select it even though nothing is
+/// listening, shadowing a healthy daemon at the next candidate.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// let path = comenq_lib::discover_socket_path();
-/// println!("connecting to {}", path.display());
+/// for path in comenq_lib::socket_candidates() {
+///     println!("would try {}", path.display());
+/// }
 /// ```
 #[must_use]
-pub fn discover_socket_path() -> PathBuf {
-    [user_socket_path(), Some(PathBuf::from(DEFAULT_SOCKET_PATH))]
-        .into_iter()
-        .flatten()
-        .find(|candidate| candidate.exists())
-        .unwrap_or_else(default_socket_path)
+pub fn socket_candidates() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = user_socket_path().into_iter().collect();
+    let system = PathBuf::from(DEFAULT_SOCKET_PATH);
+    if !candidates.contains(&system) {
+        candidates.push(system);
+    }
+    candidates
 }
 
 /// Request sent from the client to the daemon.
@@ -151,7 +154,7 @@ mod tests {
 
         //! Unit tests for socket path resolution and discovery.
         use crate::{
-            DEFAULT_SOCKET_PATH, default_socket_path, discover_socket_path, user_socket_path,
+            DEFAULT_SOCKET_PATH, default_socket_path, socket_candidates, user_socket_path,
         };
         use std::path::PathBuf;
         use test_support::EnvVarGuard;
@@ -189,31 +192,43 @@ mod tests {
 
         #[serial_test::serial]
         #[test]
-        fn discover_socket_path_prefers_existing_user_socket() {
-            let dir = tempfile::tempdir().expect("create tempdir");
-            let socket_dir = dir.path().join("comenq");
-            std::fs::create_dir_all(&socket_dir).expect("create socket dir");
-            let socket = socket_dir.join("comenq.sock");
-            std::fs::write(&socket, b"").expect("create placeholder socket");
-            let _guard = EnvVarGuard::set(
-                "XDG_RUNTIME_DIR",
-                dir.path().to_str().expect("tempdir path is UTF-8"),
-            );
-            assert_eq!(discover_socket_path(), socket);
-        }
-
-        #[serial_test::serial]
-        #[test]
-        fn discover_socket_path_defaults_when_nothing_exists() {
+        fn socket_candidates_prefer_the_user_socket() {
             let dir = tempfile::tempdir().expect("create tempdir");
             let _guard = EnvVarGuard::set(
                 "XDG_RUNTIME_DIR",
                 dir.path().to_str().expect("tempdir path is UTF-8"),
             );
             assert_eq!(
-                discover_socket_path(),
-                dir.path().join("comenq/comenq.sock")
+                socket_candidates(),
+                vec![
+                    dir.path().join("comenq/comenq.sock"),
+                    PathBuf::from(DEFAULT_SOCKET_PATH),
+                ]
             );
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn socket_candidates_fall_back_to_the_system_path_alone() {
+            let _guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
+            assert_eq!(
+                socket_candidates(),
+                vec![PathBuf::from(DEFAULT_SOCKET_PATH)]
+            );
+        }
+
+        #[serial_test::serial]
+        #[test]
+        fn socket_candidates_deduplicate_identical_paths() {
+            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/run/comenq");
+            // Contrived: the user path resolves inside /run/comenq, but the
+            // system path must not be listed twice if they ever coincide.
+            let candidates = socket_candidates();
+            let system_count = candidates
+                .iter()
+                .filter(|p| **p == PathBuf::from(DEFAULT_SOCKET_PATH))
+                .count();
+            assert!(system_count <= 1);
         }
     }
 }

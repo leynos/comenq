@@ -6,12 +6,13 @@
 //! is easily testable.
 
 use comenq_lib::protocol::{Request, Response};
-use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
 };
+use tracing::warn;
 
 use crate::output::{render_entry, render_put};
 use crate::{Args, Command};
@@ -42,12 +43,33 @@ pub enum ClientError {
     UnexpectedResponse,
 }
 
-/// Send `request` to the daemon at `socket` and parse the reply.
-async fn transact(socket: &Path, request: &Request) -> Result<Response, ClientError> {
+/// Connect to the first candidate socket that accepts a connection.
+///
+/// A daemon that exits without unlinking its socket leaves a stale file
+/// behind; connecting to it fails (typically `ECONNREFUSED`), and the next
+/// candidate is tried, so a stale user socket never shadows a healthy
+/// system daemon. The last connection error is returned when every
+/// candidate fails.
+async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError> {
+    let mut last_error: Option<std::io::Error> = None;
+    for candidate in candidates {
+        match UnixStream::connect(candidate).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                warn!(socket = %candidate.display(), error = %e, "socket candidate refused");
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(ClientError::Connect(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no socket candidates to try")
+    })))
+}
+
+/// Send `request` to the first reachable candidate and parse the reply.
+async fn transact(candidates: &[PathBuf], request: &Request) -> Result<Response, ClientError> {
     let payload = serde_json::to_vec(request)?;
-    let mut stream = UnixStream::connect(socket)
-        .await
-        .map_err(ClientError::Connect)?;
+    let mut stream = connect_first(candidates).await?;
     stream
         .write_all(&payload)
         .await
@@ -78,9 +100,8 @@ async fn transact(socket: &Path, request: &Request) -> Result<Response, ClientEr
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    let socket = args.socket_path();
     let request = args.command.to_request();
-    let response = transact(&socket, &request).await?;
+    let response = transact(&args.socket_candidates(), &request).await?;
     let (entry, entries) = match response {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
         Response::Ok { entry, entries } => (entry, entries),
@@ -192,6 +213,39 @@ mod tests {
         let err = run(put_args(socket)).await.expect_err("should error");
         assert!(matches!(err, ClientError::UnexpectedResponse));
         accept.await.expect("join");
+    }
+
+    /// A stale socket file (bound once, listener dropped, file left behind)
+    /// must not shadow a live daemon later in the candidate list.
+    #[tokio::test]
+    async fn connect_first_skips_stale_sockets() {
+        let dir = tempdir().expect("temp dir");
+        let stale = dir.path().join("stale.sock");
+        drop(UnixListener::bind(&stale).expect("bind stale socket"));
+        assert!(stale.exists(), "stale socket file should remain on disk");
+
+        let live = dir.path().join("live.sock");
+        let listener = UnixListener::bind(&live).expect("bind live socket");
+
+        let stream = super::connect_first(&[stale.clone(), live.clone()])
+            .await
+            .expect("should fall back to the live socket");
+        drop(stream);
+        drop(listener);
+    }
+
+    /// Every candidate failing yields the connection error.
+    #[tokio::test]
+    async fn connect_first_reports_failure_when_all_candidates_fail() {
+        let dir = tempdir().expect("temp dir");
+        let stale = dir.path().join("stale.sock");
+        drop(UnixListener::bind(&stale).expect("bind stale socket"));
+        let missing = dir.path().join("missing.sock");
+
+        let err = super::connect_first(&[stale, missing])
+            .await
+            .expect_err("all candidates should fail");
+        assert!(matches!(err, ClientError::Connect(_)));
     }
 
     #[tokio::test]

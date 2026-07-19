@@ -98,13 +98,14 @@ impl fmt::Display for RepoSlug {
 pub struct Args {
     /// Path to the daemon's Unix Domain Socket.
     ///
-    /// When omitted, the client discovers the socket: the first existing
-    /// path among the per-user runtime path
-    /// (`$XDG_RUNTIME_DIR/comenq/comenq.sock`) and the system path is used,
-    /// so a user-hosted daemon is found automatically. May be overridden
-    /// with the `COMENQ_SOCKET` environment variable or this flag.
-    // The default is resolved in `socket_path` rather than through clap's
-    // `default_value_os_t`, which caches the computed value in a
+    /// When omitted, the client tries the per-user runtime path
+    /// (`$XDG_RUNTIME_DIR/comenq/comenq.sock`) and then the system path,
+    /// connecting to the first socket that accepts, so a user-hosted daemon
+    /// is found automatically and a stale socket file never shadows a
+    /// healthy daemon. May be overridden with the `COMENQ_SOCKET`
+    /// environment variable or this flag.
+    // The candidates are resolved at connect time rather than through
+    // clap's `default_value_os_t`, which caches the computed value in a
     // process-wide static and would ignore later environment changes.
     #[arg(long, global = true, value_hint = ValueHint::FilePath, env = "COMENQ_SOCKET")]
     pub socket: Option<PathBuf>,
@@ -185,8 +186,12 @@ impl Command {
 }
 
 impl Args {
-    /// Socket path to connect to, discovering a running daemon when the
-    /// user did not specify one.
+    /// Socket paths to try in order, honouring an explicit override.
+    ///
+    /// An explicit `--socket` (or `COMENQ_SOCKET`) yields exactly that
+    /// path; otherwise the discovery candidates from
+    /// [`comenq_lib::socket_candidates`] are returned. Callers connect to
+    /// each in turn so a stale socket file cannot shadow a live daemon.
     ///
     /// # Examples
     ///
@@ -204,13 +209,16 @@ impl Args {
     ///     "/tmp/comenq.sock",
     /// ])
     /// .expect("arguments parse");
-    /// assert_eq!(args.socket_path(), std::path::PathBuf::from("/tmp/comenq.sock"));
+    /// assert_eq!(
+    ///     args.socket_candidates(),
+    ///     vec![std::path::PathBuf::from("/tmp/comenq.sock")]
+    /// );
     /// ```
     #[must_use]
-    pub fn socket_path(&self) -> PathBuf {
+    pub fn socket_candidates(&self) -> Vec<PathBuf> {
         self.socket
             .clone()
-            .unwrap_or_else(comenq_lib::discover_socket_path)
+            .map_or_else(comenq_lib::socket_candidates, |explicit| vec![explicit])
     }
 }
 
@@ -332,14 +340,14 @@ mod tests {
             .expect("valid arguments should parse");
         assert_eq!(args.socket, None);
         assert_eq!(
-            args.socket_path(),
-            PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)
+            args.socket_candidates(),
+            vec![PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)]
         );
     }
 
     #[serial_test::serial]
     #[test]
-    fn socket_defaults_to_user_runtime_path() {
+    fn socket_candidates_prefer_the_user_runtime_path() {
         let dir = tempfile::tempdir().expect("create tempdir");
         let _socket_guard = EnvVarGuard::remove("COMENQ_SOCKET");
         let _xdg_guard = EnvVarGuard::set(
@@ -349,7 +357,13 @@ mod tests {
         let args = Args::try_parse_from(["comenq", "put", "octocat/hello-world", "1", "Hi"])
             .expect("valid arguments should parse");
         assert_eq!(args.socket, None);
-        assert_eq!(args.socket_path(), dir.path().join("comenq/comenq.sock"));
+        assert_eq!(
+            args.socket_candidates(),
+            vec![
+                dir.path().join("comenq/comenq.sock"),
+                PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH),
+            ]
+        );
     }
 
     #[serial_test::serial]
@@ -358,7 +372,10 @@ mod tests {
         let _socket_guard = EnvVarGuard::set("COMENQ_SOCKET", "/tmp/custom.sock");
         let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
         assert_eq!(args.socket, Some(PathBuf::from("/tmp/custom.sock")));
-        assert_eq!(args.socket_path(), PathBuf::from("/tmp/custom.sock"));
+        assert_eq!(
+            args.socket_candidates(),
+            vec![PathBuf::from("/tmp/custom.sock")]
+        );
     }
 
     #[serial_test::serial]

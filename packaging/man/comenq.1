@@ -57,12 +57,13 @@ Use
 (or the
 .B COMENQ_SOCKET
 environment variable) to override the Unix Domain Socket path used to
-contact the daemon.  By default the client connects to the first existing
-socket among
+contact the daemon.  By default the client tries
 .I $XDG_RUNTIME_DIR/comenq/comenq.sock
-(a user-hosted daemon) and
+(a user-hosted daemon) and then
 .I /run/comenq/comenq.sock
-(the packaged system service).
+(the packaged system service), connecting to the first socket that
+accepts.  A stale socket file left behind by a daemon that exited without
+unlinking it is skipped rather than shadowing a healthy daemon.
 .SH EXAMPLES
 Send a comment to pull request 42 of example/repo, then inspect the queue:
 .PP
