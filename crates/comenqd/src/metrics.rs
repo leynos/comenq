@@ -5,15 +5,13 @@
 //! Metric labels are static, low-cardinality classifications so metrics never
 //! include request content, repository names, file paths, or credentials.
 
-use metrics::{counter, gauge, histogram};
+use metrics::{counter, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
 /// Local address of the daemon's Prometheus scrape endpoint.
 pub const PROMETHEUS_LISTEN_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 9000);
 
 const TASK_RESTARTS: &str = "comenqd_task_restarts_total";
-const QUEUE_WRITER_FAILURES: &str = "comenqd_queue_writer_failures_total";
-const CLIENT_CHANNEL_DEPTH: &str = "comenqd_client_channel_depth";
 const REQUESTS: &str = "comenqd_requests_total";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
 const GITHUB_POSTS: &str = "comenqd_github_posts_total";
@@ -34,16 +32,6 @@ pub fn install_prometheus() -> Result<(), BuildError> {
 /// Record a supervised task restart using a fixed task-name label.
 pub(crate) fn record_task_restart(task: &'static str) {
     counter!(TASK_RESTARTS, "task" => task).increment(1);
-}
-
-/// Record an enqueue failure from the persistent queue writer.
-pub(crate) fn record_queue_writer_failure() {
-    counter!(QUEUE_WRITER_FAILURES, "queue_side" => "sender").increment(1);
-}
-
-/// Record the currently buffered client requests as a bounded depth proxy.
-pub(crate) fn record_client_channel_depth(depth: usize) {
-    gauge!(CLIENT_CHANNEL_DEPTH).set(depth as f64);
 }
 
 /// Record whether a client request reached the daemon queue.
@@ -94,7 +82,6 @@ mod tests {
         let snapshotter = recorder.snapshotter();
         with_local_recorder(&recorder, || {
             record_task_restart("worker");
-            record_queue_writer_failure();
             record_request_outcome("accepted");
             record_request_outcome("rejected");
             record_github_post_outcome("success");
@@ -106,7 +93,6 @@ mod tests {
         let names = metric_names(&metrics);
 
         assert!(names.contains(&TASK_RESTARTS));
-        assert!(names.contains(&QUEUE_WRITER_FAILURES));
         assert!(names.contains(&GITHUB_POSTS));
         assert_eq!(
             metrics
@@ -127,7 +113,6 @@ mod tests {
                 matches!(
                     (label.key(), label.value()),
                     ("task", "listener" | "worker" | "writer")
-                        | ("queue_side", "sender")
                         | ("outcome", "accepted" | "rejected")
                         | ("outcome", "success" | "api_error" | "timeout")
                 )
@@ -136,11 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn records_bounded_depth_and_cooldown_duration() {
+    fn records_cooldown_duration() {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         with_local_recorder(&recorder, || {
-            record_client_channel_depth(3);
             record_cooldown_wait(45);
             record_github_post_duration(std::time::Duration::from_secs(2));
         });
