@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
 
+pub mod protocol;
+
 /// Default Unix Domain Socket path for the Comenq daemon.
 ///
 /// Shared by the daemon and CLI to avoid configuration drift.
@@ -78,7 +80,7 @@ pub fn discover_socket_path() -> PathBuf {
 }
 
 /// Request sent from the client to the daemon.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommentRequest {
     /// Repository owner.
     pub owner: String,
