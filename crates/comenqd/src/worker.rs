@@ -294,7 +294,16 @@ pub async fn run_worker(
         control.notify_enqueued();
         match post_comment_with_metrics(&octocrab, &entry.request, &config).await {
             Ok(()) => {
-                queue.complete(&entry.id, entry.claim_token).await?;
+                queue
+                    .complete(&entry.id, entry.claim_token.clone())
+                    .await?;
+                if let Err(error) = queue.record_success(&entry).await {
+                    tracing::error!(
+                        error = %error,
+                        id = %entry.id,
+                        "Failed to record the successful post in the history log",
+                    );
+                }
             }
             Err(e) => {
                 tracing::error!(
@@ -305,6 +314,13 @@ pub async fn run_worker(
                     pr = entry.request.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
+                if let Err(error) = queue.record_failure(&entry, &e.to_string()).await {
+                    tracing::error!(
+                        error = %error,
+                        id = %entry.id,
+                        "Failed to record the posting failure in the history log",
+                    );
+                }
                 if let Some(claim_token) = entry.claim_token.as_deref() {
                     queue.release_claim(&entry.id, claim_token).await?;
                 }

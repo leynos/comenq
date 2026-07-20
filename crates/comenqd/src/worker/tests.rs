@@ -185,12 +185,13 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
 }
 
 #[tokio::test]
-async fn failed_post_retries_after_a_full_cooldown() {
+async fn failed_post_retries_after_a_full_cooldown_when_history_is_unavailable() {
     let dir = tempdir().expect("create temporary queue directory");
     let cooldown = Duration::from_secs(1);
-    let cfg = Arc::new(Config::from(
-        temp_config(&dir).with_cooldown(cooldown.as_secs()),
-    ));
+    let test_config = temp_config(&dir).with_cooldown(cooldown.as_secs());
+    std::fs::create_dir_all(test_config.queue_path.join("history.jsonl"))
+        .expect("make history log path unavailable");
+    let cfg = Arc::new(Config::from(test_config));
     let queue = SharedQueue::open(cfg).expect("open queue");
     let response = dispatch_request(
         &queue,

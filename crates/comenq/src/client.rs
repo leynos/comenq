@@ -16,7 +16,7 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
-use crate::output::{render_entry, render_put};
+use crate::output::{render_entry, render_history, render_put};
 use crate::{Args, Command};
 
 /// Maximum time to wait for a complete daemon reply.
@@ -180,11 +180,15 @@ fn render_reply<W: Write>(
     response: Response,
     writer: &mut W,
 ) -> Result<(), ClientError> {
-    let (entry, entries) = match response {
+    let (entry, entries, history) = match response {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
-        Response::Ok { entry, entries } => (entry, entries),
+        Response::Ok {
+            entry,
+            entries,
+            history,
+        } => (entry, entries, history),
     };
-    render_response(command, entry, entries, writer)
+    render_response(command, entry, entries, history, writer)
 }
 
 /// Render a response whose shape has already been checked against `command`.
@@ -192,13 +196,14 @@ fn render_response<W: Write>(
     command: &Command,
     entry: Option<comenq_lib::protocol::PendingEntry>,
     entries: Option<Vec<comenq_lib::protocol::PendingEntry>>,
+    history: Option<Vec<comenq_lib::protocol::HistoryEntry>>,
     writer: &mut W,
 ) -> Result<(), ClientError> {
-    match (command, entry, entries) {
-        (Command::Put { .. }, Some(entry), None) => {
+    match (command, entry, entries, history) {
+        (Command::Put { .. }, Some(entry), None, None) => {
             let _ = write_line(writer, &render_put(&entry))?;
         }
-        (Command::List, None, Some(entries)) => {
+        (Command::List, None, Some(entries), None) => {
             if entries.is_empty() {
                 let _ = write_line(writer, "No comments queued.")?;
             } else {
@@ -209,14 +214,28 @@ fn render_response<W: Write>(
                 }
             }
         }
-        (Command::Bump { id }, None, None) => {
+        (Command::Bump { id }, None, None, None) => {
             let _ = write_line(writer, &format!("Moved {id} to the head of the queue."))?;
         }
-        (Command::Bust { id }, None, None) => {
+        (Command::Bust { id }, None, None, None) => {
             let _ = write_line(writer, &format!("Moved {id} to the tail of the queue."))?;
         }
-        (Command::Del { id }, None, None) => {
+        (Command::Del { id }, None, None, None) => {
             let _ = write_line(writer, &format!("Removed {id} from the queue."))?;
+        }
+        (Command::Hist { .. }, None, None, Some(history)) => {
+            if history.is_empty() {
+                let _ = write_line(writer, "No posting history recorded.")?;
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_secs());
+                for record in &history {
+                    if !write_line(writer, &render_history(record, now))? {
+                        break;
+                    }
+                }
+            }
         }
         _ => return Err(ClientError::UnexpectedResponse),
     }

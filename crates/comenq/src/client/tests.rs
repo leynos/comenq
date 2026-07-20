@@ -4,7 +4,7 @@ mod transport;
 
 use super::{ClientError, render_response};
 use crate::Command;
-use comenq_lib::protocol::PendingEntry;
+use comenq_lib::protocol::{HistoryEntry, PendingEntry};
 use std::io::{self, Write};
 
 struct FailingWriter;
@@ -30,10 +30,23 @@ fn sample_entry() -> PendingEntry {
     }
 }
 
+fn sample_history(success: bool, error: Option<&str>) -> HistoryEntry {
+    HistoryEntry {
+        id: "1a2b3c4d".into(),
+        posted_at: 1_000,
+        success,
+        error: error.map(str::to_owned),
+        owner: "octocat".into(),
+        repo: "hello-world".into(),
+        pr_number: 1,
+        body: "Hi".into(),
+    }
+}
+
 #[test]
 fn output_failures_are_returned_to_the_caller() {
     let mut output = FailingWriter;
-    let err = render_response(&Command::List, None, Some(vec![]), &mut output)
+    let err = render_response(&Command::List, None, Some(vec![]), None, &mut output)
         .expect_err("non-broken output failure must surface");
     assert!(
         matches!(err, ClientError::Output(error) if error.kind() == io::ErrorKind::PermissionDenied)
@@ -44,9 +57,10 @@ fn render_to_string(
     command: &Command,
     entry: Option<PendingEntry>,
     entries: Option<Vec<PendingEntry>>,
+    history: Option<Vec<comenq_lib::protocol::HistoryEntry>>,
 ) -> String {
     let mut output = Vec::new();
-    render_response(command, entry, entries, &mut output).expect("render response");
+    render_response(command, entry, entries, history, &mut output).expect("render response");
     String::from_utf8(output).expect("rendered output is UTF-8")
 }
 
@@ -61,6 +75,7 @@ fn renders_put_output_exactly() {
         },
         Some(sample_entry()),
         None,
+        None,
     );
     assert_eq!(
         output,
@@ -74,7 +89,7 @@ fn renders_non_empty_list_output_exactly() {
     second.id = "deadbeef".into();
     second.eta_seconds = 90;
     second.body = "Later".into();
-    let output = render_to_string(&Command::List, None, Some(vec![sample_entry(), second]));
+    let output = render_to_string(&Command::List, None, Some(vec![sample_entry(), second]), None);
     assert_eq!(
         output,
         concat!(
@@ -86,8 +101,37 @@ fn renders_non_empty_list_output_exactly() {
 
 #[test]
 fn renders_empty_list_output_exactly() {
-    let output = render_to_string(&Command::List, None, Some(vec![]));
+    let output = render_to_string(&Command::List, None, Some(vec![]), None);
     assert_eq!(output, "No comments queued.\n");
+}
+
+#[test]
+fn renders_empty_history_output_exactly() {
+    let output = render_to_string(
+        &Command::Hist { limit: None },
+        None,
+        None,
+        Some(vec![]),
+    );
+    assert_eq!(output, "No posting history recorded.\n");
+}
+
+#[test]
+fn renders_success_and_failure_history_lines() {
+    let output = render_to_string(
+        &Command::Hist { limit: None },
+        None,
+        None,
+        Some(vec![
+            sample_history(true, None),
+            sample_history(false, Some("timeout\nafter 10s")),
+        ]),
+    );
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("ok    octocat/hello-world#1  Hi"));
+    assert!(lines[1].contains("FAIL  octocat/hello-world#1  Hi"));
+    assert!(lines[1].ends_with("— timeout after 10s"));
 }
 
 #[test]
@@ -96,6 +140,7 @@ fn renders_bump_output_exactly() {
         &Command::Bump {
             id: "1a2b3c4d".into(),
         },
+        None,
         None,
         None,
     );
@@ -110,6 +155,7 @@ fn renders_bust_output_exactly() {
         },
         None,
         None,
+        None,
     );
     assert_eq!(output, "Moved 1a2b3c4d to the tail of the queue.\n");
 }
@@ -120,6 +166,7 @@ fn renders_del_output_exactly() {
         &Command::Del {
             id: "1a2b3c4d".into(),
         },
+        None,
         None,
         None,
     );

@@ -261,5 +261,6 @@ fn unsafe_stored_identifiers_are_skipped_without_path_traversal() {
 }
 
 mod claims;
+mod history;
 mod resource_limits;
 mod scheduling;

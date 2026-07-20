@@ -38,6 +38,18 @@ pub(crate) async fn dispatch_request_with_error_kind(
         Request::Bump { id } => map_store_response(queue.bump(&id).await),
         Request::Bust { id } => map_store_response(queue.bust(&id).await),
         Request::Del { id } => map_store_response(queue.del(&id).await),
+        Request::Hist { limit } => match queue.history(limit).await {
+            Ok(records) => (
+                Response::history(
+                    records
+                        .into_iter()
+                        .map(|record| record.to_entry())
+                        .collect(),
+                ),
+                None,
+            ),
+            Err(error) => store_error_response(error),
+        },
     }
 }
 

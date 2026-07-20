@@ -361,3 +361,5 @@ fn is_safe_repository_component(component: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+mod history;
