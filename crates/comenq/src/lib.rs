@@ -8,7 +8,7 @@ mod client;
 mod output;
 
 pub use client::{ClientError, run};
-pub use output::{format_eta, one_line_summary};
+pub use output::{format_age, format_eta, one_line_summary};
 
 /// A GitHub repository slug in `owner/repo` format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -155,6 +155,12 @@ pub enum Command {
         /// Identifier printed by `put` and `list`.
         id: String,
     },
+    /// Show posted comments and failed attempts, oldest first.
+    Hist {
+        /// Show only the most recent LIMIT records.
+        #[arg(long, short = 'n', value_name = "LIMIT")]
+        limit: Option<usize>,
+    },
 }
 
 impl Command {
@@ -181,6 +187,7 @@ impl Command {
             Self::Bump { id } => Request::Bump { id: id.clone() },
             Self::Bust { id } => Request::Bust { id: id.clone() },
             Self::Del { id } => Request::Del { id: id.clone() },
+            Self::Hist { limit } => Request::Hist { limit: *limit },
         }
     }
 }
@@ -281,6 +288,22 @@ mod tests {
             | ("del", Command::Del { id }) => assert_eq!(id, "1a2b3c4d"),
             (name, other) => panic!("unexpected parse for {name}: {other:?}"),
         }
+    }
+
+    #[rstest]
+    #[case::bare(&["comenq", "hist"], None)]
+    #[case::long(&["comenq", "hist", "--limit", "5"], Some(5))]
+    #[case::short(&["comenq", "hist", "-n", "5"], Some(5))]
+    fn parses_hist_subcommand(#[case] argv: &[&str], #[case] expected: Option<usize>) {
+        let args = Args::try_parse_from(argv).expect("valid arguments should parse");
+        assert_eq!(
+            args.command.to_request(),
+            comenq_lib::protocol::Request::Hist { limit: expected }
+        );
+        let Command::Hist { limit } = args.command else {
+            panic!("expected hist command");
+        };
+        assert_eq!(limit, expected);
     }
 
     #[test]
