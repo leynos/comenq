@@ -347,10 +347,10 @@ handling, so `run` operates on validated data without rechecking it.
 
 ### 2.4. Client Subcommands and ETA Semantics
 
-The historical blueprint above shows a client that only enqueues a comment. The
-shipped client instead exposes five subcommands, one per protocol operation,
-all sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
-environment variable):
+The historical blueprint above shows a client that only enqueues a comment.
+The shipped client instead exposes six subcommands, one per protocol
+operation, all sharing a global `--socket` flag (also settable via the
+`COMENQ_SOCKET` environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
   prints its identifier and an approximate ETA, e.g.
@@ -371,9 +371,20 @@ environment variable):
 
 - `comenq del <id>`: removes the identified comment from the queue.
 
-Each subcommand maps directly to one variant of the `Request` enum (see §3.2
-for the store and §5 for the wire protocol) and prints a short confirmation, or
-the daemon's error message, once the single reply is received.
+- `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
+  first, one line per record: the identifier, the age of the attempt (e.g.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
+  `owner/repo#pr`, and the comment body collapsed to a single line of at most
+  60 characters. Failed attempts append a one-line, em-dash-separated
+  description of the error. Records are always shown in chronological order
+  (oldest first); `--limit` restricts the output to the most recent `N`
+  records without changing that ordering. If no attempts have been recorded,
+  the client prints `No posting history recorded.` instead of a table.
+
+Each subcommand maps directly to one variant of the `Request` enum (see
+§3.2 for the store and §5 for the wire protocol) and prints a short
+confirmation, or the daemon's error message, once the single reply is
+received.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -498,10 +509,12 @@ arbitrary entry, only to dequeue from the head. The daemon therefore uses a
 bespoke store, `comenqd::store::QueueStore`, built directly on plain files.
 
 `QueueStore` keeps one JSON file per pending comment under
-`<queue_path>/entries`, plus `<queue_path>/last_post` and
-`<queue_path>/last_attempt` files recording the most recent successful post and
-failed post attempt. The latter keeps retry ETAs paced across daemon restarts.
-Each entry (a `StoredEntry`) carries:
+`<queue_path>/entries`, plus a `<queue_path>/last_post` file recording the Unix
+time of the most recent successful post and a `<queue_path>/history.jsonl` file
+recording every posting attempt, successful or failed (see "The posting history
+log" below). A `<queue_path>/last_attempt` file records the most recent failed
+attempt and keeps retry ETAs paced across daemon restarts. Each entry (a
+`StoredEntry`) carries:
 
 - **A deterministic eight-character identifier.** This is the first eight hex
   digits of a 64-bit FNV-1a hash computed over the request's owner, repo, PR
@@ -575,6 +588,23 @@ motivated the original choice of `yaque`, without its append-only limitation.
 The queue is initialized at a configurable path (e.g., `/var/lib/comenq/queue`)
 and stores the `CommentRequest` struct defined in the shared library as part of
 each entry.
+
+**The posting history log.** Alongside `entries` and `last_post`, the store
+appends one JSON line per posting attempt to `<queue_path>/history.jsonl`
+(JSON Lines: append-only, one record per line). Each `HistoryRecord` carries
+the entry's `id` (the identifier it had while queued), `posted_at` (Unix
+seconds), `success`, an `error` description (present only when `success` is
+false), and the `request` that was posted or attempted. A successful post is
+recorded once, when `complete` removes the entry from the queue and updates
+`last_post`. A failed post is recorded on every retry attempt, since the
+entry stays queued and is retried after a cooldown rather than being removed;
+each attempt therefore contributes its own failure record. Writing the
+history record on the failure path can itself fail (e.g. a full disk); the
+worker logs that error but never lets it interrupt the retry loop, so a
+history-logging fault cannot stall comment posting. When the log is read
+back (to serve the `hist` protocol operation), a line that fails to
+deserialize is skipped with an error log rather than aborting the read, so
+one corrupt record cannot hide the rest of the history.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 

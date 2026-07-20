@@ -20,6 +20,12 @@ comenq \- enqueue a GitHub pull request comment for the comenqd daemon
 .br
 .B comenq del
 .I id
+.br
+.B comenq hist
+[
+.B -n
+.I limit
+]
 .SH DESCRIPTION
 The
 .B comenq
@@ -51,6 +57,24 @@ Move the identified comment to the tail of the queue.
 .TP
 .B del
 Remove the identified comment from the queue.
+.TP
+.B hist
+Print the posting-history log, oldest first: identifier, age, status (
+.I ok
+or
+.IR FAIL ),
+target
+.IR owner/repo#pr ,
+and the comment text collapsed to a single line of at most 60 characters.
+Failed attempts also show a one-line description of the error. If nothing
+has been recorded, prints a message saying so.
+.RS
+.TP
+.BR \-n ", " \-\-limit " " \fIlimit\fP
+Show only the most recent
+.I limit
+records, still printed oldest first. By default the whole log is printed.
+.RE
 .PP
 Use
 .B --socket
