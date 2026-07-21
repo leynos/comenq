@@ -384,13 +384,14 @@ operation, all sharing a global `--socket` flag (also settable via the
 
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
-  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
-  `owner/repo#pr`, and the comment body collapsed to a single line of at most
-  60 characters. Failed attempts append a one-line, em-dash-separated
-  description of the error. Records are always shown in chronological order
-  (oldest first); `--limit` restricts the output to the most recent `N`
-  records without changing that ordering. If no attempts have been recorded,
-  the client prints `No posting history recorded.` instead of a table.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
+  characters of the posting token's hash, the target `owner/repo#pr`, and the
+  comment body collapsed to a single line of at most 60 characters. Failed
+  attempts append a one-line, em-dash-separated description of the error.
+  Records are always shown in chronological order (oldest first); `--limit`
+  restricts the output to the most recent `N` records without changing that
+  ordering. If no attempts have been recorded, the client prints `No posting
+  history recorded.` instead of a table.
 
 Each subcommand maps directly to one variant of the `Request` enum (see
 §3.2 for the store and §5 for the wire protocol) and prints a short
@@ -562,8 +563,11 @@ appends one JSON line per posting attempt to `<queue_path>/history.jsonl`
 (JSON Lines: append-only, one record per line). Each `HistoryRecord` carries
 the entry's `id` (the identifier it had while queued), `posted_at` (Unix
 seconds), `success`, an `error` description (present only when `success` is
-false), and the `request` that was posted or attempted. A successful post is
-recorded once, when `complete` removes the entry from the queue and updates
+false), `token_hash` (the hex SHA-256 of the value of the token that made the
+attempt), and the `request` that was posted or attempted. Hashing rather than
+naming the token means rotation state (see below) survives token files being
+renamed, and the log never holds a secret. A successful post is recorded
+once, when `complete` removes the entry from the queue and updates
 `last_post`. A failed post is recorded on every retry attempt, since the
 entry stays queued and is retried after a cooldown rather than being removed;
 each attempt therefore contributes its own failure record. Writing the
@@ -573,6 +577,17 @@ history-logging fault cannot stall comment posting. When the log is read
 back (to serve the `hist` protocol operation), a line that fails to
 deserialize is skipped with an error log rather than aborting the read, so
 one corrupt record cannot hide the rest of the history.
+
+**Round-robin token selection.** When `github_token_files` configures more
+than one token, the worker picks the token for the next post from the
+history: it looks up the token whose hash matches the most recent history
+record and uses its successor, in configured order, wrapping back to the
+first token after the last. The first configured token is used when the
+history is empty or the last record's hash matches no configured token (for
+example, after the token files are reconfigured). With a single configured
+token (via `github_token`, `github_token_file`, or a one-element
+`github_token_files`), this always selects the same token, so rotation is a
+strict generalization of the single-token case.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -717,8 +732,9 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 
 | Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
 | ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                        | (none)                                                                                                         |
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| github_token_files       | Vec\<PathBuf\> | Optional array of paths, each containing one PAT. When non-empty, neither `github_token` nor `github_token_file` is required, and the daemon posts comments with these tokens in round-robin rotation (see §3.2). Each file is read and validated (must exist and hold a non-empty token) at startup. | (empty)                                                                                                        |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
 | queue_path               | PathBuf | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                    | /var/lib/comenq/queue                                                                                          |
 | log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
@@ -731,8 +747,9 @@ Configuration is loaded using the `ortho_config` crate. The daemon calls
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults, while an absent `github_token` or invalid TOML results in a
-configuration error.
+defaults, while a missing token (none of `github_token`, `github_token_file`,
+or `github_token_files` set), an unreadable or empty token file, or invalid
+TOML results in a configuration error.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
