@@ -16,6 +16,9 @@ pub use crate::queue::SharedQueue;
 
 /// Run the worker that drains the queue and talks to the GitHub API.
 pub use crate::worker::run_worker;
+/// A GitHub client paired with its token's name and hash, and the hash
+/// helper used to identify tokens in the posting history.
+pub use crate::worker::{TokenClient, token_hash};
 /// Control handle and lifecycle hooks for the worker task.
 pub use crate::worker::{WorkerControl, WorkerHooks};
 

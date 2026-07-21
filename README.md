@@ -46,7 +46,8 @@ comenq del 1a2b3c4d  # remove from the queue
 ```
 
 The daemon also keeps a posting-history log, recording every successful and
-failed posting attempt. `hist` prints it, oldest first:
+failed posting attempt. `hist` prints it, oldest first, including a short
+eight-character hash identifying which token made the attempt:
 
 ```bash
 comenq hist -n 20    # the twenty most recent posting attempts
@@ -72,3 +73,17 @@ supplied through systemd's credential system
 (`LoadCredential=token:%h/pandalump-token` with
 `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`), keeping the secret out
 of the unit file and process environment.
+
+### Rotating multiple GitHub tokens
+
+To spread posting across several personal access tokens, set
+`github_token_files` instead of `github_token`/`github_token_file`:
+
+```toml
+github_token_files = ["/home/user/pandalump-token", "/home/user/buzzybee-token"]
+```
+
+Each file must exist and hold a non-empty token; this is checked at startup.
+The daemon then posts each comment with the successor of whichever token
+posted last, wrapping back to the first token at the end of the list, so the
+configured tokens are used in round-robin rotation.

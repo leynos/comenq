@@ -48,6 +48,20 @@ environment, so a systemd unit using
 .B LoadCredential=token:...
 can reference \fB${CREDENTIALS_DIRECTORY}/token\fR.
 .PP
+Alternatively,
+.B github_token_files
+names an array of files, each holding one token, e.g.
+.BR github_token_files\ =\ ["/home/user/pandalump-token",\ "/home/user/buzzybee-token"] .
+When non-empty, neither
+.B github_token
+nor
+.B github_token_file
+is required, and the daemon posts comments with the listed tokens in
+round-robin rotation: each post uses the successor (in configured order,
+wrapping) of the token that made the most recent posting attempt. Every
+file is read and validated at startup; a missing file or an empty token
+prevents the daemon from starting.
+.PP
 The cooldown between comment posts is set by
 .B cooldown_period_seconds
 and may be lengthened by a random flutter of up to

@@ -261,3 +261,91 @@ fn converts_from_test_config(#[case] conv: fn(&test_support::daemon::TestConfig)
         test_cfg.github_api_timeout_secs
     );
 }
+
+#[rstest]
+#[serial_test::serial]
+fn token_files_form_the_rotation_pool() {
+    let dir = tempdir().expect("create tempdir");
+    let first = dir.path().join("pandalump-token");
+    let second = dir.path().join("buzzybee-token");
+    fs::write(&first, "alpha-token\n").expect("write first token");
+    fs::write(&second, "bravo-token\n").expect("write second token");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "github_token_files=['{}','{}']",
+            first.display(),
+            second.display()
+        ),
+    )
+    .expect("write config fixture");
+    let cfg = Config::from_file(&path).expect("load config");
+    let tokens = cfg.github_tokens().expect("resolve tokens");
+    let summary: Vec<(&str, &str)> = tokens
+        .iter()
+        .map(|named| (named.name.as_str(), named.token.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            ("pandalump-token", "alpha-token"),
+            ("buzzybee-token", "bravo-token"),
+        ]
+    );
+}
+
+#[rstest]
+#[serial_test::serial]
+fn token_files_suffice_without_an_inline_token() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("only-token");
+    fs::write(&file, "solo\n").expect("write token");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, format!("github_token_files=['{}']", file.display()))
+        .expect("write config fixture");
+    let cfg = Config::from_file(&path).expect("token files alone should satisfy validation");
+    assert!(cfg.github_token.is_empty());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn empty_rotation_token_file_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("empty-token");
+    fs::write(&file, "  \n").expect("write blank token");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, format!("github_token_files=['{}']", file.display()))
+        .expect("write config fixture");
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn missing_rotation_token_file_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "github_token_files=['{}']",
+            dir.path().join("nope-token").display()
+        ),
+    )
+    .expect("write config fixture");
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn single_inline_token_forms_a_default_pool() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token='abc'").expect("write config fixture");
+    let cfg = Config::from_file(&path).expect("load config");
+    let tokens = cfg.github_tokens().expect("resolve tokens");
+    assert_eq!(tokens.len(), 1);
+    let named = tokens.first().expect("single token");
+    assert_eq!(named.name, "default");
+    assert_eq!(named.token, "abc");
+}

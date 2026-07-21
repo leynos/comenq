@@ -86,16 +86,19 @@ pub fn format_age(seconds: u64) -> String {
 
 /// Render one `hist` line for a past posting attempt.
 ///
-/// `now` is the current Unix time, used to show the attempt's age. Failed
+/// `now` is the current Unix time, used to show the attempt's age. The
+/// posting token appears as the first eight characters of its hash. Failed
 /// attempts carry the failure description, collapsed to one line.
 pub(crate) fn render_history(entry: &HistoryEntry, now: u64) -> String {
     let age = format_age(now.saturating_sub(entry.posted_at));
     let status = if entry.success { "ok" } else { "FAIL" };
+    let token: String = entry.token_hash.chars().take(8).collect();
     let mut line = format!(
-        "{}  {:>11}  {:<4}  {}/{}#{}  {}",
+        "{}  {:>11}  {:<4}  {:<8}  {}/{}#{}  {}",
         entry.id,
         age,
         status,
+        token,
         entry.owner,
         entry.repo,
         entry.pr_number,
@@ -203,6 +206,7 @@ mod tests {
             posted_at: 1_000,
             success,
             error: error.map(str::to_owned),
+            token_hash: "cafe0123".repeat(8),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 7,
@@ -224,7 +228,7 @@ mod tests {
         let line = render_history(&history(true, None), 1_150);
         assert_eq!(
             line,
-            "1a2b3c4d   2m 30s ago  ok    octocat/hello-world#7  Hi there"
+            "1a2b3c4d   2m 30s ago  ok    cafe0123  octocat/hello-world#7  Hi there"
         );
     }
 
@@ -233,7 +237,7 @@ mod tests {
         let line = render_history(&history(false, Some("timeout\nafter 10s")), 1_045);
         assert_eq!(
             line,
-            "1a2b3c4d      45s ago  FAIL  octocat/hello-world#7  Hi there — timeout after 10s"
+            "1a2b3c4d      45s ago  FAIL  cafe0123  octocat/hello-world#7  Hi there — timeout after 10s"
         );
     }
 

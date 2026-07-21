@@ -9,6 +9,11 @@
 # environment, enabling systemd LoadCredential integration:
 # github_token_file = "${CREDENTIALS_DIRECTORY}/token"
 
+# Paths to files each containing one token. When non-empty, neither
+# github_token nor github_token_file is required, and the daemon posts
+# comments with these tokens in round-robin rotation:
+# github_token_files = ["/home/user/pandalump-token", "/home/user/buzzybee-token"]
+
 # Minimum log level to output
 # log_level = "info"
 

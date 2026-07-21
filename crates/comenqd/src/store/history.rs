@@ -24,31 +24,45 @@ pub struct HistoryRecord {
     /// Failure description when `success` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Hex SHA-256 of the token that made the attempt.
+    ///
+    /// The worker reads the latest record's hash to pick the next token in
+    /// the round-robin rotation.
+    pub token_hash: String,
     /// The comment that was posted (or attempted).
     pub request: CommentRequest,
 }
 
 impl HistoryRecord {
-    /// Record a successful post of `entry` at `posted_at`.
+    /// Record a successful post of `entry` by the token hashing to
+    /// `token_hash` at `posted_at`.
     #[must_use]
-    pub fn success(entry: &StoredEntry, posted_at: u64) -> Self {
+    pub fn success(entry: &StoredEntry, token_hash: &str, posted_at: u64) -> Self {
         Self {
             id: entry.id.clone(),
             posted_at,
             success: true,
             error: None,
+            token_hash: token_hash.to_owned(),
             request: entry.request.clone(),
         }
     }
 
-    /// Record a failed posting attempt of `entry` at `posted_at`.
+    /// Record a failed posting attempt of `entry` by the token hashing to
+    /// `token_hash` at `posted_at`.
     #[must_use]
-    pub fn failure(entry: &StoredEntry, posted_at: u64, error: impl Into<String>) -> Self {
+    pub fn failure(
+        entry: &StoredEntry,
+        token_hash: &str,
+        posted_at: u64,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             id: entry.id.clone(),
             posted_at,
             success: false,
             error: Some(error.into()),
+            token_hash: token_hash.to_owned(),
             request: entry.request.clone(),
         }
     }
@@ -61,6 +75,7 @@ impl HistoryRecord {
             posted_at: self.posted_at,
             success: self.success,
             error: self.error.clone(),
+            token_hash: self.token_hash.clone(),
             owner: self.request.owner.clone(),
             repo: self.request.repo.clone(),
             pr_number: self.request.pr_number,

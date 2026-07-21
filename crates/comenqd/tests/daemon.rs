@@ -5,7 +5,7 @@ mod util;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
-    SharedQueue, WorkerControl, WorkerHooks,
+    SharedQueue, TokenClient, WorkerControl, WorkerHooks,
     listener::{handle_client, prepare_listener, run_listener},
     run, run_worker,
 };
@@ -27,6 +27,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use util::{TestComplexity, TimeoutConfig, join_err, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 1;
+
+/// Wrap a mock-server client as the worker's single-token pool.
+fn single_client(octo: Arc<octocrab::Octocrab>) -> Arc<Vec<TokenClient>> {
+    Arc::new(vec![TokenClient::new("test-token", "t", octo)])
+}
 
 /// Convert a test configuration into the runtime `Config`.
 ///
@@ -308,7 +313,11 @@ mod worker_tests {
                 drained: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(DRAINED_NOTIFICATION, "worker idle notification", || {
             let idle = idle.clone();
@@ -368,7 +377,11 @@ mod worker_tests {
                 drained: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || {
             let enqueued = enqueued.clone();
@@ -426,7 +439,7 @@ mod worker_tests {
             hooks: WorkerHooks::default(),
         };
 
-        let h = tokio::spawn(run_worker(queue, octo, control));
+        let h = tokio::spawn(run_worker(queue, single_client(octo), control));
 
         // Give worker time to park on the change signal
         sleep(Duration::from_millis(50)).await;
@@ -489,7 +502,7 @@ mod worker_tests {
             },
         };
 
-        let h = tokio::spawn(run_worker(queue, octo, control));
+        let h = tokio::spawn(run_worker(queue, single_client(octo), control));
 
         // Wait for idle notification (first entry posted; worker now waits a
         // full cooldown before the second).
