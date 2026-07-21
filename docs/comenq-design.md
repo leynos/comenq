@@ -381,13 +381,14 @@ environment variable):
 
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
-  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
-  `owner/repo#pr`, and the comment body collapsed to a single line of at most
-  60 characters. Failed attempts append a one-line, em-dash-separated
-  description of the error. Records are always shown in chronological order
-  (oldest first); `--limit` restricts the output to the most recent `N` records
-  without changing that ordering. If no attempts have been recorded, the client
-  prints `No posting history recorded.` instead of a table.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
+  characters of the posting token's hash, the target `owner/repo#pr`, and the
+  comment body collapsed to a single line of at most 60 characters. Failed
+  attempts append a one-line, em-dash-separated description of the error.
+  Records are always shown in chronological order (oldest first); `--limit`
+  restricts the output to the most recent `N` records without changing that
+  ordering. If no attempts have been recorded, the client prints
+  `No posting history recorded.` instead of a table.
 
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
 for the store and §5 for the wire protocol). The client follows history cursors
@@ -602,9 +603,12 @@ each entry.
 appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
 Lines: append-only, one record per line). Each `HistoryRecord` carries the
 entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
-`success`, an `error` description (present only when `success` is false), and
-the `request` that was posted or attempted. Each record also has an attempt ID
-used to make successful completion recovery idempotent. A successful post is
+`success`, an `error` description (present only when `success` is false),
+`token_hash` (the hex SHA-256 of the token value that made the attempt), and the
+`request` that was posted or attempted. Hashing rather than naming the token
+means rotation state survives token-file renames, and the log never holds a
+secret. Each record also has an attempt ID used to make successful completion
+recovery idempotent. A successful post is
 recorded before `complete` removes the entry from the queue and updates
 `last_post`. A failed post is recorded on every retry attempt, since the entry
 stays queued and is retried after a cooldown rather than being removed; each
@@ -617,6 +621,13 @@ delimiter before the next record. When the log is read back (to serve the
 error log. Reads return bounded pages and use a fixed end offset so concurrent
 appends cannot change the records covered by an in-progress CLI request. The
 listener limits each encoded page to the 2 MiB protocol response cap.
+
+**Round-robin token selection.** When `github_token_files` configures multiple
+tokens, the worker reads the most recent history record and uses the successor
+of its token hash in configured order, wrapping to the first token after the
+last. Empty history or an unrecognized hash starts with the first token. With a
+single token from `github_token`, `github_token_file`, or a one-element
+`github_token_files`, the same selection rule always chooses that token.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -777,8 +788,9 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 
 | Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
 | ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                        | (none)                                                                                                         |
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| github_token_files       | Vec<PathBuf> | Optional ordered paths, each containing one PAT. When non-empty, neither single-token setting is required; the worker rotates among these tokens. Each file is read and validated at startup. | (empty)                                                                                                        |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
 | queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
 | cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
@@ -791,11 +803,13 @@ Configuration is loaded using the `ortho_config` crate. The daemon calls
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults. Configuration fails if neither a non-empty `github_token` nor
-`github_token_file` is available. When a token file is selected, it is read at
-startup and its trimmed contents take precedence over the configured token
-unless `--github-token` is supplied; an unreadable or empty selected file is an
-error. Invalid TOML also results in a configuration error.
+defaults. Configuration fails if neither a non-empty `github_token` nor a
+readable, non-empty token file is available. A non-empty `github_token_files`
+pool takes precedence over the single-token settings; every listed file is
+checked at startup. Otherwise, `github_token_file` is read at startup and its
+trimmed contents take precedence over the configured token unless
+`--github-token` is supplied. Invalid TOML also results in a configuration
+error.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background
