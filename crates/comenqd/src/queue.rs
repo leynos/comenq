@@ -63,23 +63,40 @@ impl SharedQueue {
     }
 
     /// Remove the posted entry, recording the posting time and a history
-    /// record of the success.
-    pub async fn complete(&self, entry: &StoredEntry) -> StoreResult<()> {
+    /// record of the success, tagged with the posting token's hash.
+    pub async fn complete(&self, entry: &StoredEntry, token_hash: &str) -> StoreResult<()> {
         let store = self.store.lock().await;
         let now = unix_now();
         store.complete(&entry.id, now)?;
-        store.append_history(&HistoryRecord::success(entry, now))
+        store.append_history(&HistoryRecord::success(entry, token_hash, now))
     }
 
-    /// Record a failed posting attempt in the history log.
+    /// Record a failed posting attempt in the history log, tagged with the
+    /// hash of the token that attempted it.
     ///
     /// The entry itself stays queued; the worker retries it after a
     /// cooldown.
-    pub async fn record_failure(&self, entry: &StoredEntry, error: &str) -> StoreResult<()> {
+    pub async fn record_failure(
+        &self,
+        entry: &StoredEntry,
+        token_hash: &str,
+        error: &str,
+    ) -> StoreResult<()> {
         self.store
             .lock()
             .await
-            .append_history(&HistoryRecord::failure(entry, unix_now(), error))
+            .append_history(&HistoryRecord::failure(
+                entry,
+                token_hash,
+                unix_now(),
+                error,
+            ))
+    }
+
+    /// Hash of the token used by the most recent posting attempt, when any.
+    pub async fn last_token_hash(&self) -> StoreResult<Option<String>> {
+        let history = self.store.lock().await.history()?;
+        Ok(history.last().map(|record| record.token_hash.clone()))
     }
 
     /// Execute a protocol request and produce the reply.

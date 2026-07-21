@@ -4,12 +4,18 @@
 //! posting time arrives. Cooldowns always run in full; each entry's random
 //! flutter was fixed when it was enqueued, so the projected schedule reported
 //! to clients matches what the worker executes.
+//!
+//! Posts rotate round-robin through the configured token pool: each post
+//! uses the successor of the token whose hash the most recent history
+//! record carries, so rotation survives restarts and redeployments.
 
 use crate::config::Config;
 use crate::queue::SharedQueue;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
+use sha2::{Digest as _, Sha256};
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -32,6 +38,63 @@ pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
     Octocrab::builder()
         .personal_token(token.to_string())
         .build()
+}
+
+/// Hex-encoded SHA-256 hash of a token value.
+///
+/// History records identify tokens by this hash rather than by name or
+/// value, so rotation state survives token files being renamed and the log
+/// never holds a secret.
+///
+/// # Examples
+///
+/// ```rust
+/// let hash = comenqd::daemon::token_hash("s3cret");
+/// assert_eq!(hash.len(), 64);
+/// assert_eq!(hash, comenqd::daemon::token_hash("s3cret"));
+/// ```
+#[must_use]
+pub fn token_hash(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// A GitHub client paired with its token's name and hash.
+#[derive(Clone)]
+pub struct TokenClient {
+    /// Token file name, used only for logging.
+    pub name: String,
+    /// Hex SHA-256 of the token value, recorded in the history.
+    pub hash: String,
+    /// Client authenticated with the token.
+    pub octocrab: Arc<Octocrab>,
+}
+
+impl TokenClient {
+    /// Pair `octocrab` (authenticated with `token`) with the token's
+    /// identifying name and hash.
+    #[must_use]
+    pub fn new(name: impl Into<String>, token: &str, octocrab: Arc<Octocrab>) -> Self {
+        Self {
+            name: name.into(),
+            hash: token_hash(token),
+            octocrab,
+        }
+    }
+}
+
+/// Index of the token to use for the next post.
+///
+/// The successor of the token whose hash matches `last_hash`; the first
+/// token when the history is empty or names a token no longer configured.
+fn next_token_index(clients: &[TokenClient], last_hash: Option<&str>) -> usize {
+    last_hash
+        .and_then(|hash| clients.iter().position(|client| client.hash == hash))
+        .map_or(0, |index| index.saturating_add(1) % clients.len().max(1))
 }
 
 async fn post_comment(
@@ -159,12 +222,17 @@ impl WorkerControl {
 ///
 /// The worker recomputes the head entry's due time on every iteration, so
 /// queue mutations (put, bump, bust, del) take effect immediately: the shared
-/// queue's change signal interrupts any wait.
+/// queue's change signal interrupts any wait. Each post rotates to the next
+/// token in `clients` after the one the latest history record names.
 pub async fn run_worker(
     queue: Arc<SharedQueue>,
-    octocrab: Arc<Octocrab>,
+    clients: Arc<Vec<TokenClient>>,
     mut control: WorkerControl,
 ) -> Result<()> {
+    anyhow::ensure!(
+        !clients.is_empty(),
+        "the worker needs at least one GitHub token"
+    );
     let hooks = &control.hooks;
     let shutdown = &mut control.shutdown;
     let config = queue.config().clone();
@@ -188,21 +256,28 @@ pub async fn run_worker(
             continue;
         }
         hooks.notify_enqueued();
-        match post_comment(&octocrab, &entry.request, &config).await {
+        let last_hash = queue.last_token_hash().await?;
+        let index = next_token_index(&clients, last_hash.as_deref());
+        let client = clients.get(index).context("token index in range")?;
+        match post_comment(&client.octocrab, &entry.request, &config).await {
             Ok(()) => {
-                queue.complete(&entry).await?;
+                queue.complete(&entry, &client.hash).await?;
             }
             Err(e) => {
                 tracing::error!(
                     error = %e,
                     id = %entry.id,
+                    token = %client.name,
                     owner = %entry.request.owner,
                     repo = %entry.request.repo,
                     pr = entry.request.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
                 // A history write failure must not stop the retry loop.
-                if let Err(log_error) = queue.record_failure(&entry, &e.to_string()).await {
+                if let Err(log_error) = queue
+                    .record_failure(&entry, &client.hash, &e.to_string())
+                    .await
+                {
                     tracing::error!(
                         error = %log_error,
                         id = %entry.id,

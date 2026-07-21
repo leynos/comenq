@@ -105,3 +105,63 @@ async fn notify_one_buffers_permit_when_no_waiters() {
         "second waiter should timeout with no remaining permit"
     );
 }
+
+mod token_rotation {
+    //! Tests for token hashing and round-robin selection.
+
+    use super::super::{TokenClient, build_octocrab, next_token_index, token_hash};
+    use rstest::rstest;
+    use std::sync::Arc;
+
+    fn clients() -> Vec<TokenClient> {
+        ["alpha-token", "bravo-token"]
+            .iter()
+            .map(|token| {
+                let octocrab = Arc::new(build_octocrab(token).expect("build octocrab"));
+                TokenClient::new(format!("{token}-file"), token, octocrab)
+            })
+            .collect()
+    }
+
+    #[rstest]
+    fn token_hash_is_deterministic_hex_sha256() {
+        let hash = token_hash("s3cret");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(hash, token_hash("s3cret"));
+        assert_ne!(hash, token_hash("other"));
+        // Known SHA-256 of "s3cret" pins the algorithm.
+        assert_eq!(
+            hash,
+            "1ec1c26b50d5d3c58d9583181af8076655fe00756bf7285940ba3670f99fcba0"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn empty_history_selects_the_first_token() {
+        assert_eq!(next_token_index(&clients(), None), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rotation_advances_past_the_last_used_token() {
+        let clients = clients();
+        let first_hash = token_hash("alpha-token");
+        assert_eq!(next_token_index(&clients, Some(&first_hash)), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rotation_wraps_from_the_last_token_to_the_first() {
+        let clients = clients();
+        let second_hash = token_hash("bravo-token");
+        assert_eq!(next_token_index(&clients, Some(&second_hash)), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unknown_hashes_fall_back_to_the_first_token() {
+        assert_eq!(next_token_index(&clients(), Some("not-a-hash")), 0);
+    }
+}

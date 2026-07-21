@@ -92,8 +92,13 @@ async fn worker_starts_and_stops_cleanly() {
     let queue = crate::queue::SharedQueue::open(cfg).expect("open shared queue");
     let octocrab =
         std::sync::Arc::new(crate::worker::build_octocrab("token").expect("build octocrab"));
+    let clients = std::sync::Arc::new(vec![crate::worker::TokenClient::new(
+        "test-token",
+        "token",
+        octocrab,
+    )]);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    let handle = super::spawn_worker(queue, octocrab, shutdown_rx);
+    let handle = super::spawn_worker(queue, clients, shutdown_rx);
     shutdown_tx.send(()).expect("signal shutdown");
 
     let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle)

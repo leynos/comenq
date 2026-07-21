@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod tokens;
+pub use tokens::NamedToken;
+
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// Default cooldown in seconds between comment posts.
@@ -41,6 +44,14 @@ pub struct Config {
     /// `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`.
     #[serde(default)]
     pub github_token_file: Option<PathBuf>,
+    /// Paths to files each containing one GitHub Personal Access Token.
+    ///
+    /// When non-empty, the daemon posts comments with these tokens in
+    /// round-robin rotation: each post uses the successor of the token whose
+    /// hash was recorded against the most recent history record. The files
+    /// are read at startup; each must hold a non-empty token.
+    #[serde(default)]
+    pub github_token_files: Vec<PathBuf>,
     /// Path to the Unix Domain Socket.
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
@@ -98,6 +109,7 @@ impl From<test_support::daemon::TestConfig> for Config {
         Self {
             github_token,
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path,
             queue_path,
             cooldown_period_seconds,
@@ -137,6 +149,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
         Self {
             github_token: value.github_token.clone(),
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
@@ -298,13 +311,31 @@ impl Config {
             }
             self.github_token = token.to_owned();
         }
-        if self.github_token.is_empty() {
-            return Err(ortho_config::OrthoError::Validation {
+        if !self.github_token_files.is_empty() {
+            // Fail fast: every rotation token must be readable at startup.
+            self.github_tokens()
+                .map(|_| ())
+                .map_err(|e| ortho_config::OrthoError::Validation {
+                    key: "github_token_files".into(),
+                    message: e.to_string(),
+                })
+        } else if self.github_token.is_empty() {
+            Err(ortho_config::OrthoError::Validation {
                 key: "github_token".into(),
-                message: "provide github_token or github_token_file".into(),
-            });
+                message: "provide github_token, github_token_file, or github_token_files".into(),
+            })
+        } else {
+            Ok(())
         }
-        Ok(())
+    }
+
+    /// The rotation pool of GitHub tokens, in configured order.
+    ///
+    /// Reads each path in [`Config::github_token_files`], naming the token
+    /// after its file. When no rotation files are configured, the single
+    /// [`Config::github_token`] forms a pool of one named `default`.
+    pub fn github_tokens(&self) -> io::Result<Vec<NamedToken>> {
+        tokens::resolve_pool(&self.github_token_files, &self.github_token)
     }
 }
 

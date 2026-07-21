@@ -293,8 +293,8 @@ fn history_records_round_trip_in_order() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1000).expect("put");
-    let success = HistoryRecord::success(&entry, 1600);
-    let failure = HistoryRecord::failure(&entry, 2200, "timeout");
+    let success = HistoryRecord::success(&entry, "hash-a", 1600);
+    let failure = HistoryRecord::failure(&entry, "hash-b", 2200, "timeout");
     store.append_history(&success).expect("append success");
     store.append_history(&failure).expect("append failure");
     let records = store.history().expect("read history");
@@ -316,14 +316,14 @@ fn history_skips_malformed_lines() {
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1000).expect("put");
     store
-        .append_history(&HistoryRecord::success(&entry, 1600))
+        .append_history(&HistoryRecord::success(&entry, "hash-a", 1600))
         .expect("append success");
     let log = dir.path().join("history.jsonl");
     let mut text = std::fs::read_to_string(&log).expect("read log");
     text.push_str("not json\n");
     std::fs::write(&log, text).expect("corrupt log");
     store
-        .append_history(&HistoryRecord::failure(&entry, 2200, "timeout"))
+        .append_history(&HistoryRecord::failure(&entry, "hash-b", 2200, "timeout"))
         .expect("append failure");
     let records = store.history().expect("read history");
     assert_eq!(records.len(), 2, "the corrupt line must not hide records");

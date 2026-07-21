@@ -5,7 +5,6 @@
 
 use crate::config::Config;
 use backon::{ExponentialBackoff, ExponentialBuilder};
-use octocrab::Octocrab;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +17,7 @@ use tokio::sync::watch;
 use crate::listener::run_listener;
 use crate::queue::SharedQueue;
 use crate::store::StoreError;
-use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
+use crate::worker::{TokenClient, WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -110,14 +109,22 @@ async fn supervise_task<F, B>(
 pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
-    let octocrab = Arc::new(build_octocrab(&config.github_token)?);
+    let mut clients = Vec::new();
+    for named in config.github_tokens()? {
+        clients.push(TokenClient::new(
+            named.name,
+            &named.token,
+            Arc::new(build_octocrab(&named.token)?),
+        ));
+    }
+    let clients = Arc::new(clients);
     let cfg = Arc::new(config);
     let queue = SharedQueue::open(cfg.clone())?;
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     // Initial task spawns and backoff builders.
     let listener = spawn_listener(queue.clone(), shutdown_rx.clone());
-    let worker = spawn_worker(queue.clone(), octocrab.clone(), shutdown_rx.clone());
+    let worker = spawn_worker(queue.clone(), clients.clone(), shutdown_rx.clone());
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let listener_backoff = backoff(min_delay);
     let worker_backoff = backoff(min_delay);
@@ -168,7 +175,7 @@ pub async fn run(config: Config) -> Result<()> {
             "worker",
             worker,
             worker_backoff,
-            || spawn_worker(queue.clone(), octocrab.clone(), shutdown_worker.clone()),
+            || spawn_worker(queue.clone(), clients.clone(), shutdown_worker.clone()),
             shutdown_worker.clone(),
             || backoff(min_delay),
         ),
@@ -186,11 +193,11 @@ fn spawn_listener(
 
 fn spawn_worker(
     queue: Arc<SharedQueue>,
-    octocrab: Arc<Octocrab>,
+    clients: Arc<Vec<TokenClient>>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let control = WorkerControl::new(shutdown, WorkerHooks::default());
-    tokio::spawn(run_worker(queue, octocrab, control))
+    tokio::spawn(run_worker(queue, clients, control))
 }
 
 /// Log any failure from a supervised task.

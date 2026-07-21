@@ -108,9 +108,25 @@ impl TestConfig {
 /// The error is boxed to keep the `Err` variant small
 /// (`clippy::result_large_err`).
 pub fn octocrab_for(server: &MockServer) -> Result<Arc<Octocrab>, Box<octocrab::Error>> {
+    octocrab_with_token(server, "t")
+}
+
+/// Construct an [`Octocrab`] client for a [`MockServer`] using `token`.
+///
+/// Like [`octocrab_for`], but authenticating with the supplied token so
+/// tests can distinguish requests made by different tokens.
+///
+/// # Errors
+///
+/// Returns an error when the mock server URI cannot be parsed or the client
+/// cannot be built.
+pub fn octocrab_with_token(
+    server: &MockServer,
+    token: &str,
+) -> Result<Arc<Octocrab>, Box<octocrab::Error>> {
     Ok(Arc::new(
         Octocrab::builder()
-            .personal_token(String::from("t"))
+            .personal_token(token.to_owned())
             .base_uri(server.uri())
             .map_err(Box::new)?
             .build()
