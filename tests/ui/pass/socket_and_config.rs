@@ -19,6 +19,7 @@ fn main() {
     let config = Config {
         github_token: "token".into(),
         github_token_file: Some(PathBuf::from("/run/credentials/comenqd/token")),
+        github_token_files: Vec::new(),
         socket_path: PathBuf::from("/run/user/1000/comenq/comenq.sock"),
         queue_path: PathBuf::from("/var/lib/comenq/queue"),
         cooldown_period_seconds: 960,

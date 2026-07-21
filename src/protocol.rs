@@ -94,6 +94,9 @@ pub struct HistoryEntry {
     /// Failure description when `success` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Hex SHA-256 of the token that made the attempt.
+    #[serde(default)]
+    pub token_hash: String,
     /// Repository owner.
     pub owner: String,
     /// Repository name.
@@ -207,6 +210,7 @@ mod tests {
             posted_at: 1_700_000_000,
             success: false,
             error: Some("timeout".into()),
+            token_hash: "ab".repeat(32),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 7,
@@ -289,6 +293,19 @@ mod tests {
                 serde_json::from_str(&json).unwrap_or_else(|e| panic!("deserialize: {e}"));
             assert_eq!(back, resp);
         }
+    }
+
+    #[test]
+    fn history_entries_without_token_hash_remain_readable() {
+        let mut value = serde_json::to_value(sample_history()).expect("serialize history");
+        value
+            .as_object_mut()
+            .expect("history object")
+            .remove("token_hash");
+
+        let entry: HistoryEntry = serde_json::from_value(value).expect("read legacy history");
+
+        assert!(entry.token_hash.is_empty());
     }
 
     #[test]

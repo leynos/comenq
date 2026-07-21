@@ -16,6 +16,10 @@ pub use crate::queue::SharedQueue;
 
 /// Control handle for the worker task.
 pub use crate::worker::WorkerControl;
+/// GitHub client metadata used by the worker's token rotation pool.
+pub use crate::worker::TokenClient;
+/// Hex-encoded SHA-256 token identifier used in posting history.
+pub use crate::worker::token_hash;
 /// Lifecycle hooks exposed to test and test-support builds.
 #[cfg(any(test, feature = "test-support"))]
 pub use crate::worker::WorkerHooks;

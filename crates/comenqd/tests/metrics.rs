@@ -104,6 +104,7 @@ async fn exporter_serves_listener_request_metrics() {
     let config = Arc::new(Config {
         github_token: "token".into(),
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: dir.path().join("comenq.sock"),
         queue_path: dir.path().join("queue"),
         cooldown_period_seconds: 0,
@@ -219,7 +220,7 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("claim entry for completion")
         .expect("queue has a due entry");
     queue
-        .complete(&claimed)
+        .complete(&claimed, "")
         .await
         .expect("complete posted entry");
     assert_queue_gauges(&dir.path().join("queue"), 1).await;
@@ -230,7 +231,7 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("queue still contains the failed entry");
     assert_eq!(failed_entry.id, second_entry.id);
     queue
-        .record_failure(&failed_entry, "timeout")
+        .record_failure(&failed_entry, "", "timeout")
         .await
         .expect("record failed attempt");
     let (mut history_client, history_server) =

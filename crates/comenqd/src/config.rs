@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+mod tokens;
+pub use tokens::NamedToken;
+
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
 /// Default cooldown in seconds between comment posts.
@@ -46,6 +49,13 @@ pub struct Config {
     /// `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`.
     #[serde(default)]
     pub github_token_file: Option<PathBuf>,
+    /// Ordered paths to files containing the GitHub token rotation pool.
+    ///
+    /// When non-empty, each file must contain one non-empty token and the
+    /// worker rotates through them in this order. This setting takes
+    /// precedence over the single-token settings.
+    #[serde(default)]
+    pub github_token_files: Vec<PathBuf>,
     /// Path to the Unix Domain Socket.
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
@@ -103,6 +113,7 @@ impl From<test_support::daemon::TestConfig> for Config {
         Self {
             github_token,
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path,
             queue_path,
             cooldown_period_seconds,
@@ -142,6 +153,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
         Self {
             github_token: value.github_token.clone(),
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
@@ -272,6 +284,7 @@ impl Config {
         }
         if let Some(file) = &cli.github_token_file {
             cfg.github_token_file = Some(file.clone());
+            cfg.github_token_files.clear();
         }
         if let Some(socket) = &cli.socket_path {
             cfg.socket_path = socket.clone();
@@ -295,7 +308,24 @@ impl Config {
         &mut self,
         has_cli_token: bool,
     ) -> Result<(), ortho_config::OrthoError> {
-        if !has_cli_token && let Some(file) = &self.github_token_file {
+        if has_cli_token {
+            // An explicit command-line token is the strongest credential
+            // override, including over a configured token pool.
+            self.github_token_file = None;
+            self.github_token_files.clear();
+            tracing::debug!(credential_source = "cli", "Using GitHub credential");
+            return self.validate_inline_token();
+        }
+        if !self.github_token_files.is_empty() {
+            self.github_tokens()
+                .map(|_| ())
+                .map_err(|error| ortho_config::OrthoError::Validation {
+                    key: "github_token_files".into(),
+                    message: error.to_string(),
+                })?;
+            return Ok(());
+        }
+        if let Some(file) = &self.github_token_file {
             let path = expand_env_prefix(file)?;
             tracing::debug!(
                 credential_source = "file",
@@ -311,21 +341,37 @@ impl Config {
                 });
             }
             self.github_token = token.to_owned();
-        } else if has_cli_token {
-            tracing::debug!(credential_source = "cli", "Using GitHub credential");
         } else {
             tracing::debug!(
                 credential_source = "configuration",
                 "Using GitHub credential"
             );
         }
+        self.validate_inline_token()
+    }
+
+    fn validate_inline_token(&self) -> Result<(), ortho_config::OrthoError> {
         if self.github_token.trim().is_empty() {
             return Err(ortho_config::OrthoError::Validation {
                 key: "github_token".into(),
-                message: "provide github_token or github_token_file".into(),
+                message: "provide github_token, github_token_file, or github_token_files".into(),
             });
         }
         Ok(())
+    }
+
+    /// Resolve the ordered rotation pool, falling back to the single token.
+    ///
+    /// Each configured token file is read and validated at startup. With no
+    /// token files, the existing inline or single-file token is a pool of one.
+    pub fn github_tokens(&self) -> io::Result<Vec<NamedToken>> {
+        if self.github_token_files.is_empty() && self.github_token.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GitHub token is empty",
+            ));
+        }
+        tokens::resolve_pool(&self.github_token_files, &self.github_token)
     }
 }
 

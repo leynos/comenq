@@ -13,7 +13,7 @@ use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
-    SharedQueue, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+    SharedQueue, TokenClient, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
 };
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
@@ -28,6 +28,10 @@ use wiremock::{Mock, MockServer, Request as WiremockRequest, Respond, ResponseTe
 /// Long enough that nothing is ever due during a test run, so listings are
 /// stable, and distinct entries have strictly increasing estimated times.
 const COOLDOWN_SECONDS: u64 = 600;
+
+fn client_pool(octocrab: Arc<octocrab::Octocrab>) -> Arc<Vec<TokenClient>> {
+    Arc::new(vec![TokenClient::new("default", "t", octocrab)])
+}
 
 #[derive(Default, World)]
 pub struct QueueWorld {
@@ -363,7 +367,7 @@ async fn worker_retries_after_cooldown(world: &mut QueueWorld) -> anyhow::Result
         },
     );
     let worker = tokio::spawn(async move {
-        let _ = run_worker(queue, octocrab, control).await;
+        let _ = run_worker(queue, client_pool(octocrab), control).await;
     });
     world.shutdown = Some(shutdown_tx);
     world.worker = Some(worker);

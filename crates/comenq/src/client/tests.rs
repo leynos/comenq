@@ -37,6 +37,7 @@ fn sample_history(success: bool, error: Option<&str>) -> HistoryEntry {
         posted_at: 1_000,
         success,
         error: error.map(str::to_owned),
+        token_hash: "0123456789abcdef".repeat(4),
         owner: "octocat".into(),
         repo: "hello-world".into(),
         pr_number: 1,

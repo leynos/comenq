@@ -166,6 +166,7 @@ fn history_entry(record: HistoryRecord) -> HistoryEntry {
         posted_at: record.posted_at,
         success: record.success,
         error: record.error,
+        token_hash: record.token_hash,
         owner: record.request.owner,
         repo: record.request.repo,
         pr_number: record.request.pr_number,
@@ -198,6 +199,7 @@ mod tests {
             posted_at: 1_700_000_000,
             success: false,
             error: Some("request timed out".into()),
+            token_hash: "ab".repeat(32),
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),

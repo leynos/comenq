@@ -2,7 +2,8 @@
 //! shutdown waits.
 
 use super::{
-    Notify, WorkerControl, WorkerHooks, retry_deadline, run_worker, wait_for_retry_deadline,
+    Notify, TokenClient, WorkerControl, WorkerHooks, retry_deadline, run_worker,
+    wait_for_retry_deadline,
 };
 use crate::config::Config;
 use crate::listener::dispatch_request;
@@ -13,6 +14,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+use octocrab::Octocrab;
 use tempfile::tempdir;
 use test_support::{octocrab_for, temp_config};
 use tokio::sync::watch;
@@ -22,6 +24,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod post_span;
 mod scheduling;
+mod token_rotation;
+
+pub(super) fn client_pool(octocrab: Arc<Octocrab>) -> Arc<Vec<TokenClient>> {
+    Arc::new(vec![TokenClient::new("default", "t", octocrab)])
+}
 
 #[test]
 fn overflowing_retry_cooldown_uses_a_far_future_deadline() {
@@ -154,7 +161,7 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {
@@ -232,7 +239,7 @@ async fn failed_post_retries_after_a_full_cooldown_when_history_is_unavailable()
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {
@@ -310,7 +317,7 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {

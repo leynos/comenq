@@ -18,13 +18,36 @@ impl SharedQueue {
     /// # use comenqd::daemon::SharedQueue;
     /// # use comenqd::store::StoredEntry;
     /// # async fn record(queue: &SharedQueue, entry: &StoredEntry) -> Result<(), Box<dyn std::error::Error>> {
-    /// queue.record_failure(entry, "request timed out").await?;
+    /// queue.record_failure(entry, "token-hash", "request timed out").await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn record_failure(&self, entry: &StoredEntry, error: &str) -> StoreResult<()> {
-        self.append_history(HistoryRecord::failure(entry, self.clock.unix_now(), error))
-            .await
+    pub async fn record_failure(
+        &self,
+        entry: &StoredEntry,
+        token_hash: &str,
+        error: &str,
+    ) -> StoreResult<()> {
+        self.append_history(HistoryRecord::failure(
+            entry,
+            token_hash,
+            self.clock.unix_now(),
+            error,
+        ))
+        .await
+    }
+
+    /// Hash of the token used by the most recent posting attempt, if present.
+    pub(crate) async fn last_token_hash(&self) -> StoreResult<Option<String>> {
+        self.with_store("latest_history_token", |store| {
+            let page = store.history_page(None, Some(1), 1)?;
+            Ok(page
+                .records
+                .into_iter()
+                .last()
+                .map(|item| item.record.token_hash))
+        })
+        .await
     }
 
     /// Return one bounded page in chronological order.

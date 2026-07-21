@@ -47,7 +47,7 @@ fn completion_recovery_records_success_history_before_clearing_its_marker() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
-    let history = HistoryRecord::success(&entry, 4242);
+    let history = HistoryRecord::success(&entry, "", 4242);
     let marker = serde_json::json!({
         "id": entry.id,
         "posted_at": 4242,
@@ -81,7 +81,7 @@ fn completion_recovery_does_not_duplicate_history_written_before_a_crash() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
-    let history = HistoryRecord::success(&entry, 4242);
+    let history = HistoryRecord::success(&entry, "", 4242);
     let marker = serde_json::json!({
         "id": entry.id,
         "posted_at": 4242,
