@@ -608,19 +608,19 @@ entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
 `request` that was posted or attempted. Hashing rather than naming the token
 means rotation state survives token-file renames, and the log never holds a
 secret. Each record also has an attempt ID used to make successful completion
-recovery idempotent. A successful post is
-recorded before `complete` removes the entry from the queue and updates
-`last_post`. A failed post is recorded on every retry attempt, since the entry
-stays queued and is retried after a cooldown rather than being removed; each
-attempt therefore contributes its own failure record. Writing the history
-record on the failure path can itself fail (e.g. a full disk); the worker logs
-that error but never lets it interrupt the retry loop, so a history-logging
-fault cannot stall comment posting. Appending repairs a missing final line
-delimiter before the next record. When the log is read back (to serve the
-`hist` protocol operation), malformed and oversized lines are skipped with an
-error log. Reads return bounded pages and use a fixed end offset so concurrent
-appends cannot change the records covered by an in-progress CLI request. The
-listener limits each encoded page to the 2 MiB protocol response cap.
+recovery idempotent. A successful post is recorded before `complete` removes
+the entry from the queue and updates `last_post`. A failed post is recorded on
+every retry attempt, since the entry stays queued and is retried after a
+cooldown rather than being removed; each attempt therefore contributes its own
+failure record. Writing the history record on the failure path can itself fail
+(e.g. a full disk); the worker logs that error but never lets it interrupt the
+retry loop, so a history-logging fault cannot stall comment posting. Appending
+repairs a missing final line delimiter before the next record. When the log is
+read back (to serve the `hist` protocol operation), malformed and oversized
+lines are skipped with an error log. Reads return bounded pages and use a fixed
+end offset so concurrent appends cannot change the records covered by an
+in-progress CLI request. The listener limits each encoded page to the 2 MiB
+protocol response cap.
 
 **Round-robin token selection.** When `github_token_files` configures multiple
 tokens, the worker reads the most recent history record and uses the successor
@@ -786,17 +786,17 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
-| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                        | (none)                                                                                                         |
-| github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
-| github_token_files       | Vec<PathBuf> | Optional ordered paths, each containing one PAT. When non-empty, neither single-token setting is required; the worker rotates among these tokens. Each file is read and validated at startup. | (empty)                                                                                                        |
-| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
-| cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
-| github_api_timeout_secs  | u64     | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
-| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
+| Parameter                | Type           | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
+| ------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String         | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                        | (none)                                                                                                         |
+| github_token_file        | PathBuf        | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| github_token_files       | `Vec<PathBuf>` | Optional ordered paths, each containing one PAT. When non-empty, neither single-token setting is required; the worker rotates among these tokens. Each file is read and validated at startup.                              | (empty)                                                                                                        |
+| socket_path              | PathBuf        | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf        | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
+| cooldown_period_seconds  | u64            | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
+| cooldown_flutter_seconds | u64            | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
+| github_api_timeout_secs  | u64            | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
+| restart_min_delay_ms     | u64            | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
