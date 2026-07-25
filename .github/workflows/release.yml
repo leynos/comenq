@@ -99,7 +99,7 @@ jobs:
           bin-name: ${{ matrix.bin }}
           manifest-path: crates/${{ matrix.bin }}/Cargo.toml
       - name: Package ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/linux-packages@cb06757ebba47bb018ac0ade84fa5dc9ffb95020
+        uses: leynos/shared-actions/.github/actions/linux-packages@4d696e72fff6db49f34302ccf119ba978f1032c9
         with:
           bin-name: ${{ matrix.bin }}
           package-name: ${{ matrix.bin }}
