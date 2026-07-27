@@ -112,8 +112,8 @@ Create a default `config.toml` file to be included in the packages. Place it at
 
 #### Step 3: Create Installation Scripts
 
-The `systemd` unit file requires a dedicated user. These scripts will create
-the `comenq` user and group upon installation.
+The `systemd` unit file requires a dedicated user. These scripts will create the
+`comenq` user and group upon installation.
 
 **packaging/linux/[preinstall.sh](http://preinstall.sh)**
 

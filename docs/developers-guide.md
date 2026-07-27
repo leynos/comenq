@@ -5,8 +5,8 @@
 Run `make spelling` to enforce en-GB-oxendict spelling in tracked Markdown
 prose. The target regenerates `typos.toml`, verifies that the generated file is
 tracked and unchanged, then runs the pinned `typos` release over tracked
-Markdown files. `make markdownlint` depends on this gate, and `make all` runs it
-with the repository's release build.
+Markdown files. `make markdownlint` depends on this gate, and `make all` runs
+it with the repository's release build.
 
 The generated configuration combines the shared estate dictionary bundled with
 the pinned `typos-config-builder` revision and the repository-specific
