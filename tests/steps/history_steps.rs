@@ -16,6 +16,9 @@ use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::temp_config;
 
+/// Token hash recorded against simulated posting attempts.
+const FIRST_TOKEN_HASH: &str = "feedbead0011";
+
 #[derive(Default, World)]
 pub struct HistoryWorld {
     dir: Option<TempDir>,
@@ -122,7 +125,11 @@ async fn three_comments_queued(
 #[when("the head comment is posted successfully")]
 async fn head_posted(world: &mut HistoryWorld) -> anyhow::Result<()> {
     let entry = world.head().await?;
-    world.queue()?.complete(&entry).await.context("complete")?;
+    world
+        .queue()?
+        .complete(&entry, FIRST_TOKEN_HASH)
+        .await
+        .context("complete")?;
     world.recorded.push(entry.id);
     Ok(())
 }
@@ -146,7 +153,7 @@ async fn head_fails(world: &mut HistoryWorld, error: String) -> anyhow::Result<(
     let entry = world.head().await?;
     world
         .queue()?
-        .record_failure(&entry, &error)
+        .record_failure(&entry, FIRST_TOKEN_HASH, &error)
         .await
         .context("record failure")?;
     world.recorded.push(entry.id);

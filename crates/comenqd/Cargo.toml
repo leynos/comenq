@@ -27,6 +27,7 @@ figment = { version = "0.10", default-features = false, features = ["env", "toml
 test-support = { workspace = true, optional = true }
 backon = { workspace = true }
 rand = { workspace = true }
+sha2 = "0.10"
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

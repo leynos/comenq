@@ -92,10 +92,10 @@ configuration, and a `tokio::sync::Notify` used to wake the worker promptly
 when the queue changes.
 
 - The listener executes each client request directly against the shared
-  queue (via `SharedQueue::execute`) and writes the reply before the
-  connection closes. A request is durably persisted to disk before the client
-  receives its acknowledgement, so there is no in-memory backlog that could be
-  lost if the daemon exits unexpectedly.
+  queue (via `SharedQueue::execute`) and writes the reply before the connection
+  closes. A request is durably persisted to disk before the client receives its
+  acknowledgement, so there is no in-memory backlog that could be lost if the
+  daemon exits unexpectedly.
 
 - Mutating operations (`put`, `bump`, `bust`, `del`) call `notify_one` on the
   shared `Notify` after the change is written, so the worker interrupts any
@@ -360,21 +360,22 @@ handling, so `run` operates on validated data without rechecking it.
 ### 2.4. Client Subcommands and ETA Semantics
 
 The illustrative blueprint above shows a client that only enqueues a comment.
-The shipped client instead exposes six subcommands, one per protocol
-operation, all sharing a global `--socket` flag (also settable via the
-`COMENQ_SOCKET` environment variable):
+The shipped client instead exposes six subcommands, one per protocol operation,
+all sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
+environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
-  prints its identifier and an approximate ETA, e.g. `Queued 1a2b3c4d for
-  octocat/hello-world#7 — posts in ~1h 01m`. By default the comment waits one
-  full cooldown (plus its flutter) from enqueue even when the queue is idle;
-  `--now` lifts that floor so the comment posts as soon as the queue allows.
+  prints its identifier and an approximate ETA, e.g.
+  `Queued 1a2b3c4d for octocat/hello-world#7 — posts in ~1h 01m`. By default
+  the comment waits one full cooldown (plus its flutter) from enqueue even when
+  the queue is idle; `--now` lifts that floor so the comment posts as soon as
+  the queue allows.
 
 - `comenq list`: prints one line per pending comment, in posting order, each
-  showing the identifier, the ETA, the target `owner/repo#pr`, and the
-  comment body collapsed to a single line of at most 60 characters (control
-  characters, including newlines, become spaces; longer bodies are truncated
-  with an ellipsis).
+  showing the identifier, the ETA, the target `owner/repo#pr`, and the comment
+  body collapsed to a single line of at most 60 characters (control characters,
+  including newlines, become spaces; longer bodies are truncated with an
+  ellipsis).
 
 - `comenq bump <id>`: moves the identified comment to the head of the queue.
 
@@ -384,18 +385,18 @@ operation, all sharing a global `--socket` flag (also settable via the
 
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
-  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
-  `owner/repo#pr`, and the comment body collapsed to a single line of at most
-  60 characters. Failed attempts append a one-line, em-dash-separated
-  description of the error. Records are always shown in chronological order
-  (oldest first); `--limit` restricts the output to the most recent `N`
-  records without changing that ordering. If no attempts have been recorded,
-  the client prints `No posting history recorded.` instead of a table.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
+  characters of the posting token's hash, the target `owner/repo#pr`, and the
+  comment body collapsed to a single line of at most 60 characters. Failed
+  attempts append a one-line, em-dash-separated description of the error.
+  Records are always shown in chronological order (oldest first); `--limit`
+  restricts the output to the most recent `N` records without changing that
+  ordering. If no attempts have been recorded, the client prints
+  `No posting history recorded.` instead of a table.
 
-Each subcommand maps directly to one variant of the `Request` enum (see
-§3.2 for the store and §5 for the wire protocol) and prints a short
-confirmation, or the daemon's error message, once the single reply is
-received.
+Each subcommand maps directly to one variant of the `Request` enum (see §3.2
+for the store and §5 for the wire protocol) and prints a short confirmation, or
+the daemon's error message, once the single reply is received.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -403,13 +404,13 @@ reflects three rules enforced by the daemon:
 - **Flutter is fixed at enqueue time.** When a comment is enqueued, a random
   flutter duration (up to `cooldown_flutter_seconds`) is sampled once and
   stored with the entry. It does not change on subsequent `list` calls, so the
-  reported ETA for a given entry only decreases as time passes; it never
-  jumps around.
+  reported ETA for a given entry only decreases as time passes; it never jumps
+  around.
 
 - **The cooldown always runs in full.** The daemon never shortens
-  `cooldown_period_seconds` to catch up; each entry's projected posting time
-  is its predecessor's projected posting time plus a full cooldown plus its
-  own flutter (or, for the head entry, the last successful post plus a full
+  `cooldown_period_seconds` to catch up; each entry's projected posting time is
+  its predecessor's projected posting time plus a full cooldown plus its own
+  flutter (or, for the head entry, the last successful post plus a full
   cooldown plus its own flutter). This keeps the reported ETA consistent with
   what the worker will actually do.
 
@@ -436,9 +437,9 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 
 1. **Listener** (`run_listener`): This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
-   `comenq` clients. For each connection it reads one JSON `Request`,
-   executes it directly against the shared queue, and writes back one JSON
-   `Response` before closing the connection.
+   `comenq` clients. For each connection it reads one JSON `Request`, executes
+   it directly against the shared queue, and writes back one JSON `Response`
+   before closing the connection.
 
 2. **Worker** (`run_worker`): This is the main worker task. It operates in a
    loop, recomputing the head entry's due time on every iteration, waiting
@@ -446,24 +447,24 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
    signalled), posting the comment to GitHub, and recording the post before
    moving on to the next entry.
 
-This concurrent design ensures that the daemon remains responsive to new
-client requests even while the worker task is in its long sleep phase. A
-request can be accepted, persisted, and acknowledged in milliseconds, while
-the worker task independently processes the queue at its own deliberate pace.
+This concurrent design ensures that the daemon remains responsive to new client
+requests even while the worker task is in its long sleep phase. A request can
+be accepted, persisted, and acknowledged in milliseconds, while the worker task
+independently processes the queue at its own deliberate pace.
 
-Both tasks share the queue through an `Arc<SharedQueue>` rather than a
-channel: there is no intermediate queue-writer task. The listener performs
-each mutation directly, and the worker is woken (via a `tokio::sync::Notify`)
-whenever a mutation occurs.
+Both tasks share the queue through an `Arc<SharedQueue>` rather than a channel:
+there is no intermediate queue-writer task. The listener performs each mutation
+directly, and the worker is woken (via a `tokio::sync::Notify`) whenever a
+mutation occurs.
 
 Both the listener and the worker are supervised. If either task exits
 unexpectedly, the daemon logs the failure, waits using an exponential backoff
 with jitter (via the `backon` crate) to avoid a tight restart loop, and then
 respawns the task. The minimum delay between restarts is configurable via
-`restart_min_delay_ms`. This keeps the service available without relying on
-an external process supervisor. Because both tasks operate on the same
-on-disk store rather than an in-memory buffer, restarting either task after a
-panic does not discard any pending request.
+`restart_min_delay_ms`. This keeps the service available without relying on an
+external process supervisor. Because both tasks operate on the same on-disk
+store rather than an in-memory buffer, restarting either task after a panic
+does not discard any pending request.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -516,9 +517,9 @@ bespoke store, `comenqd::store::QueueStore`, built directly on plain files.
 
 `QueueStore` keeps one JSON file per pending comment under
 `<queue_path>/entries`, plus a `<queue_path>/last_post` file recording the Unix
-time of the most recent successful post and a `<queue_path>/history.jsonl`
-file recording every posting attempt, successful or failed (see "The posting
-history log" below). Each entry (a `StoredEntry`) carries:
+time of the most recent successful post and a `<queue_path>/history.jsonl` file
+recording every posting attempt, successful or failed (see "The posting history
+log" below). Each entry (a `StoredEntry`) carries:
 
 - **A deterministic eight-character identifier.** This is the first eight hex
   digits of a 64-bit FNV-1a hash computed over the request's owner, repo, PR
@@ -528,10 +529,10 @@ history log" below). Each entry (a `StoredEntry`) carries:
   existing entry unchanged rather than creating a duplicate.
 
 - **An explicit integer ordering key.** New entries are appended after the
-  current tail. `bump` sets the key to one less than the current head's key
-  (or leaves it unchanged if the entry is already the head); `bust` sets it to
-  one more than the current tail's key. Repeated bumps or busts can drive the
-  key negative or arbitrarily large; entries are always read back sorted by
+  current tail. `bump` sets the key to one less than the current head's key (or
+  leaves it unchanged if the entry is already the head); `bust` sets it to one
+  more than the current tail's key. Repeated bumps or busts can drive the key
+  negative or arbitrarily large; entries are always read back sorted by
   `(order, enqueued_at, id)`.
 
 - **The flutter sampled at enqueue time.** A random duration up to
@@ -543,10 +544,10 @@ history log" below). Each entry (a `StoredEntry`) carries:
 - **The enqueue time**, used both as a tiebreaker for ordering and as an input
   to the identifier hash.
 
-Entries are written to a temporary sibling file and then renamed into place,
-so a reader never observes a half-written entry. `bump`, `bust`, and `del`
-mutate or remove a single entry file the same way. `complete` removes the
-posted entry and atomically rewrites `last_post` with the current Unix time.
+Entries are written to a temporary sibling file and then renamed into place, so
+a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
+or remove a single entry file the same way. `complete` removes the posted entry
+and atomically rewrites `last_post` with the current Unix time.
 
 Because an entry is only removed from disk after a successful post
 (`complete`), and a failed post simply leaves the entry in place for the next
@@ -558,21 +559,35 @@ and stores the `CommentRequest` struct defined in the shared library as part of
 each entry.
 
 **The posting history log.** Alongside `entries` and `last_post`, the store
-appends one JSON line per posting attempt to `<queue_path>/history.jsonl`
-(JSON Lines: append-only, one record per line). Each `HistoryRecord` carries
-the entry's `id` (the identifier it had while queued), `posted_at` (Unix
-seconds), `success`, an `error` description (present only when `success` is
-false), and the `request` that was posted or attempted. A successful post is
-recorded once, when `complete` removes the entry from the queue and updates
-`last_post`. A failed post is recorded on every retry attempt, since the
-entry stays queued and is retried after a cooldown rather than being removed;
-each attempt therefore contributes its own failure record. Writing the
-history record on the failure path can itself fail (e.g. a full disk); the
-worker logs that error but never lets it interrupt the retry loop, so a
-history-logging fault cannot stall comment posting. When the log is read
-back (to serve the `hist` protocol operation), a line that fails to
-deserialize is skipped with an error log rather than aborting the read, so
-one corrupt record cannot hide the rest of the history.
+appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
+Lines: append-only, one record per line). Each `HistoryRecord` carries the
+entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
+`success`, an `error` description (present only when `success` is false),
+`token_hash` (the hex SHA-256 of the value of the token that made the attempt),
+and the `request` that was posted or attempted. Hashing rather than naming the
+token means rotation state (see below) survives token files being renamed, and
+the log never holds a secret. A successful post is recorded once, when
+`complete` removes the entry from the queue and updates `last_post`. A failed
+post is recorded on every retry attempt, since the entry stays queued and is
+retried after a cooldown rather than being removed; each attempt therefore
+contributes its own failure record. Writing the history record on the failure
+path can itself fail (e.g. a full disk); the worker logs that error but never
+lets it interrupt the retry loop, so a history-logging fault cannot stall
+comment posting. When the log is read back (to serve the `hist` protocol
+operation), a line that fails to deserialize is skipped with an error log
+rather than aborting the read, so one corrupt record cannot hide the rest of
+the history.
+
+**Round-robin token selection.** When `github_token_files` configures more than
+one token, the worker picks the token for the next post from the history: it
+looks up the token whose hash matches the most recent history record and uses
+its successor, in configured order, wrapping back to the first token after the
+last. The first configured token is used when the history is empty or the last
+record's hash matches no configured token (for example, after the token files
+are reconfigured). With a single configured token (via `github_token`,
+`github_token_file`, or a one-element `github_token_files`), this always
+selects the same token, so rotation is a strict generalization of the
+single-token case.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -603,8 +618,8 @@ Its workflow is as follows:
    adjusted. It deserializes the received JSON into a `Request`, executes it
    directly against the shared queue (`SharedQueue::execute`), and writes the
    resulting `Response` back to the client before closing the connection. A
-   request that fails to deserialize receives an error `Response` rather than
-   a silently dropped connection.
+   request that fails to deserialize receives an error `Response` rather than a
+   silently dropped connection.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -634,9 +649,8 @@ sequenceDiagram
 
 ### 3.4. The GitHub Comment-Posting Worker (`run_worker`)
 
-This task implements the core business logic of the service. It runs in a
-loop, ensuring that comments are processed one by one with the required
-delay.
+This task implements the core business logic of the service. It runs in a loop,
+ensuring that comments are processed one by one with the required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
@@ -671,9 +685,9 @@ The worker task's loop consists of the following steps:
 2. **Wait until due:** If nothing is queued, the worker waits for the shared
    queue's change signal or a shutdown signal. If the head entry is not yet
    due, the worker sleeps for the remaining time, but the sleep is
-   interruptible: a queue change (e.g. a `bump` promoting a different entry)
-   or shutdown wakes it early, and it loops back to recompute the due entry
-   rather than blindly posting whichever entry it started waiting for.
+   interruptible: a queue change (e.g. a `bump` promoting a different entry) or
+   shutdown wakes it early, and it loops back to recompute the due entry rather
+   than blindly posting whichever entry it started waiting for.
 
 3. **Post Comment:** Once an entry is due, the worker constructs and sends the
    API request to GitHub using the `octocrab` client and the data from the
@@ -698,16 +712,16 @@ The worker task's loop consists of the following steps:
 **ETA projection.** The store computes, for each pending entry, an estimated
 number of seconds until it is posted (`schedule` in `QueueStore`). The head
 entry is due one full `cooldown_period_seconds` plus its own sampled flutter
-after the last successful post, or immediately if nothing has been posted
-yet. Each subsequent entry is due a further cooldown plus its own flutter
-after its predecessor's projected posting time. Because flutter is sampled
-once, at enqueue time, and the cooldown always runs in full, the ETA reported
-to a client by `put` or `list` matches what the worker will actually do, and
-does not drift as time passes.
+after the last successful post, or immediately if nothing has been posted yet.
+Each subsequent entry is due a further cooldown plus its own flutter after its
+predecessor's projected posting time. Because flutter is sampled once, at
+enqueue time, and the cooldown always runs in full, the ETA reported to a
+client by `put` or `list` matches what the worker will actually do, and does
+not drift as time passes.
 
 This workflow gives a highly resilient system that can tolerate both network
-failures and process crashes without losing data: an entry is only ever
-removed from the store once GitHub has confirmed the post.
+failures and process crashes without losing data: an entry is only ever removed
+from the store once GitHub has confirmed the post.
 
 ### 3.5. Daemon Configuration and Logging
 
@@ -715,24 +729,26 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
-| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
-| github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
-| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                    | /var/lib/comenq/queue                                                                                          |
-| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
-| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                 | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                               | 0                                                                                                              |
-| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
+| Parameter                | Type           | Description                                                                                                                                                                                                                                                                                           | Default Value                                                                                                  |
+| ------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String         | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                                                                                                   | (none)                                                                                                         |
+| github_token_file        | PathBuf        | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration.                                                                            | (none)                                                                                                         |
+| github_token_files       | Vec\<PathBuf\> | Optional array of paths, each containing one PAT. When non-empty, neither `github_token` nor `github_token_file` is required, and the daemon posts comments with these tokens in round-robin rotation (see §3.2). Each file is read and validated (must exist and hold a non-empty token) at startup. | (empty)                                                                                                        |
+| socket_path              | PathBuf        | The filesystem path for the Unix Domain Socket.                                                                                                                                                                                                                                                       | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf        | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                                                                                               | /var/lib/comenq/queue                                                                                          |
+| log_level                | String         | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                                                                                                     | info                                                                                                           |
+| cooldown_period_seconds  | u64            | The cooling-off period in seconds after each comment post.                                                                                                                                                                                                                                            | 960                                                                                                            |
+| cooldown_flutter_seconds | u64            | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                                                                                                          | 0                                                                                                              |
+| restart_min_delay_ms     | u64            | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                                                                                            | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults, while an absent `github_token` or invalid TOML results in a
-configuration error.
+defaults, while a missing token (none of `github_token`, `github_token_file`, or
+`github_token_files` set), an unreadable or empty token file, or invalid TOML
+results in a configuration error.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous

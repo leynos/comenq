@@ -13,10 +13,10 @@ use anyhow::Context as _;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{HistoryEntry, PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
+use comenqd::daemon::{SharedQueue, TokenClient, WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
-use test_support::{octocrab_for, temp_config};
+use test_support::{octocrab_with_token, temp_config};
 use tokio::sync::{Notify, watch};
 use tokio::time::timeout;
 use wiremock::matchers::{method, path};
@@ -32,11 +32,15 @@ fn coverage_timeout_multiplier() -> u32 {
     }
 }
 
+/// Token pool used when no rotation is configured: one anonymous token.
+const DEFAULT_TOKENS: [(&str, &str); 1] = [("test-token", "t")];
 #[derive(World, Default)]
 pub struct WorkerWorld {
     dir: Option<TempDir>,
-    queue: Option<Arc<SharedQueue>>,
-    server: Option<MockServer>,
+    pub(crate) queue: Option<Arc<SharedQueue>>,
+    pub(crate) server: Option<MockServer>,
+    /// Rotation pool (name, token value); empty means the single default.
+    pub(crate) tokens: Vec<(String, String)>,
     shutdown: Option<watch::Sender<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -59,7 +63,7 @@ impl Drop for WorkerWorld {
 }
 
 impl WorkerWorld {
-    async fn shutdown_and_join(&mut self) {
+    pub(crate) async fn shutdown_and_join(&mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
@@ -81,7 +85,7 @@ async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingE
 }
 
 /// Posting history as reported through the protocol.
-async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
+pub(crate) async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
     match queue.execute(Request::Hist { limit: None }).await {
         Response::Ok {
             history: Some(history),
@@ -91,29 +95,40 @@ async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryE
     }
 }
 
-#[given("a queued comment request")]
-async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
+async fn queue_with_entries(world: &mut WorkerWorld, bodies: &[&str]) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(0)));
     let queue = SharedQueue::open(cfg).context("open queue")?;
-    let response = queue
-        .execute(Request::Put {
-            request: CommentRequest {
-                owner: "o".into(),
-                repo: "r".into(),
-                pr_number: 1,
-                body: "b".into(),
-            },
-            immediate: true,
-        })
-        .await;
-    anyhow::ensure!(
-        matches!(response, Response::Ok { .. }),
-        "put should succeed, got {response:?}"
-    );
+    for body in bodies {
+        let response = queue
+            .execute(Request::Put {
+                request: CommentRequest {
+                    owner: "o".into(),
+                    repo: "r".into(),
+                    pr_number: 1,
+                    body: (*body).to_owned(),
+                },
+                immediate: true,
+            })
+            .await;
+        anyhow::ensure!(
+            matches!(response, Response::Ok { .. }),
+            "put should succeed, got {response:?}"
+        );
+    }
     world.dir = Some(dir);
     world.queue = Some(queue);
     Ok(())
+}
+
+#[given("a queued comment request")]
+async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    queue_with_entries(world, &["b"]).await
+}
+
+#[given("two queued comment requests")]
+async fn two_queued_requests(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    queue_with_entries(world, &["first", "second"]).await
 }
 
 #[given("GitHub returns success")]
@@ -145,8 +160,33 @@ async fn github_error(world: &mut WorkerWorld) {
     world.server = Some(server);
 }
 
-#[when("the worker runs briefly")]
-async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
+/// Which worker milestone a scenario waits for before asserting.
+enum WaitFor {
+    /// One processing pass has completed.
+    Idle,
+    /// The queue is empty and the worker is parked.
+    Drained,
+}
+
+fn token_clients(world: &WorkerWorld, server: &MockServer) -> anyhow::Result<Vec<TokenClient>> {
+    let pool: Vec<(String, String)> = if world.tokens.is_empty() {
+        DEFAULT_TOKENS
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    } else {
+        world.tokens.clone()
+    };
+    pool.into_iter()
+        .map(|(name, value)| {
+            let octocrab = octocrab_with_token(server, &value)
+                .context("octocrab client should build for the mock server")?;
+            Ok(TokenClient::new(name, &value, octocrab))
+        })
+        .collect()
+}
+
+async fn start_worker(world: &mut WorkerWorld, wait_for: WaitFor) -> anyhow::Result<()> {
     let queue = world
         .queue
         .as_ref()
@@ -156,34 +196,48 @@ async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
         .server
         .as_ref()
         .context("server should be initialized")?;
-    let octocrab =
-        octocrab_for(server).context("octocrab client should build for the mock server")?;
+    let clients = Arc::new(token_clients(world, server)?);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let idle = Arc::new(Notify::new());
-    let idle_for_wait = Arc::clone(&idle);
-    let idle_notified = idle_for_wait.notified();
-    let control = WorkerControl::new(
-        shutdown_rx,
-        WorkerHooks {
+    let milestone = Arc::new(Notify::new());
+    let milestone_for_wait = Arc::clone(&milestone);
+    let milestone_notified = milestone_for_wait.notified();
+    let hooks = match wait_for {
+        WaitFor::Idle => WorkerHooks {
             enqueued: None,
-            idle: Some(idle),
+            idle: Some(milestone),
             drained: None,
         },
-    );
+        WaitFor::Drained => WorkerHooks {
+            enqueued: None,
+            idle: None,
+            drained: Some(milestone),
+        },
+    };
+    let control = WorkerControl::new(shutdown_rx, hooks);
     let handle = tokio::spawn(async move {
-        let _ = run_worker(queue, octocrab, control).await;
+        let _ = run_worker(queue, clients, control).await;
     });
     timeout(
         Duration::from_secs(30 * u64::from(coverage_timeout_multiplier())),
-        idle_notified,
+        milestone_notified,
     )
     .await
-    .context("worker reached idle state within timeout")?;
+    .context("worker reached the awaited state within timeout")?;
 
     // Store handles in world for proper cleanup
     world.shutdown = Some(shutdown_tx);
     world.handle = Some(handle);
     Ok(())
+}
+
+#[when("the worker runs briefly")]
+async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    start_worker(world, WaitFor::Idle).await
+}
+
+#[when("the worker drains the queue")]
+async fn worker_drains(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    start_worker(world, WaitFor::Drained).await
 }
 
 #[then("the comment is posted")]

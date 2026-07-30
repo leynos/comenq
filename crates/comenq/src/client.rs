@@ -217,6 +217,7 @@ mod tests {
             posted_at: 1_000,
             success: true,
             error: None,
+            token_hash: "ab".repeat(32),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 1,

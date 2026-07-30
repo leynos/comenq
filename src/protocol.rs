@@ -75,6 +75,8 @@ pub struct HistoryEntry {
     /// Failure description when `success` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Hex SHA-256 of the token that made the attempt.
+    pub token_hash: String,
     /// Repository owner.
     pub owner: String,
     /// Repository name.
@@ -181,6 +183,7 @@ mod tests {
             posted_at: 1_700_000_000,
             success: false,
             error: Some("timeout".into()),
+            token_hash: "ab".repeat(32),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 7,
