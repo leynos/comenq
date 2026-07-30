@@ -1,12 +1,15 @@
 //! Queue worker for comenqd.
 //!
 //! Dequeues requests from the persistent queue and posts comments to GitHub
-//! while enforcing a fixed cooldown between attempts.
+//! while enforcing a cooldown between attempts. The cooldown always runs in
+//! full; an optional random flutter lengthens each wait to avoid a perfectly
+//! regular posting cadence.
 
 use crate::config::Config;
 use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -29,6 +32,21 @@ enum PostCommentError {
     /// The request timed out.
     #[error("timeout")]
     Timeout,
+}
+
+/// Seconds to wait after processing a request: the configured cooldown plus
+/// a fresh random flutter of up to `cooldown_flutter_seconds`.
+///
+/// Flutter only ever lengthens the wait — the full cooldown always elapses —
+/// so the posting cadence stays below GitHub's secondary rate limits while
+/// avoiding a perfectly regular interval.
+fn cooldown_with_flutter(config: &Config) -> u64 {
+    let flutter = config.cooldown_flutter_seconds;
+    if flutter == 0 {
+        return config.cooldown_period_seconds;
+    }
+    let jitter = rand::rng().random_range(0..=flutter);
+    config.cooldown_period_seconds.saturating_add(jitter)
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
@@ -201,7 +219,7 @@ pub async fn run_worker(
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+                if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
                     break;
                 }
                 continue;
@@ -234,7 +252,7 @@ pub async fn run_worker(
         hooks.notify_idle();
         #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+        if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
             break;
         }
     }
@@ -244,110 +262,4 @@ pub async fn run_worker(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-    use tokio::sync::watch;
-
-    #[tokio::test]
-    async fn wait_or_shutdown_returns_false_on_timeout() {
-        let (_tx, mut rx) = watch::channel(());
-        let start = Instant::now();
-        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
-        assert!(!result, "should return false when timeout expires");
-        assert!(
-            start.elapsed().as_millis() < 500,
-            "zero-second wait should return immediately"
-        );
-    }
-
-    #[tokio::test]
-    async fn wait_or_shutdown_returns_true_on_shutdown() {
-        let (tx, mut rx) = watch::channel(());
-        // Signal shutdown before waiting
-        tx.send(()).expect("send shutdown signal");
-        let result = WorkerHooks::wait_or_shutdown(60, &mut rx).await;
-        assert!(result, "should return true when shutdown is signalled");
-    }
-
-    #[tokio::test]
-    async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
-        let (tx, mut rx) = watch::channel(());
-        // Send shutdown signal
-        tx.send(()).expect("send shutdown signal");
-        // Even with zero timeout, shutdown should be detected due to biased select
-        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
-        assert!(result, "biased select should prioritize shutdown signal");
-    }
-
-    /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
-    ///
-    /// This validates the single-waiter semantics documented on WorkerHooks.
-    #[tokio::test]
-    async fn notify_one_wakes_exactly_one_waiter() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::time::Duration;
-
-        let notify = Arc::new(Notify::new());
-        let wake_count = Arc::new(AtomicUsize::new(0));
-
-        // Spawn three waiters
-        let mut handles = Vec::new();
-        for _ in 0..3 {
-            let n = notify.clone();
-            let count = wake_count.clone();
-            handles.push(tokio::spawn(async move {
-                // Wait with a timeout to avoid hanging the test
-                if tokio::time::timeout(Duration::from_millis(100), n.notified())
-                    .await
-                    .is_ok()
-                {
-                    count.fetch_add(1, Ordering::SeqCst);
-                }
-            }));
-        }
-
-        // Give waiters time to register
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Send exactly one notification
-        notify.notify_one();
-
-        // Wait for all tasks to complete (they'll timeout after 100ms)
-        for h in handles {
-            let _ = h.await;
-        }
-
-        // Only one waiter should have been woken
-        assert_eq!(
-            wake_count.load(Ordering::SeqCst),
-            1,
-            "notify_one should wake exactly one waiter"
-        );
-    }
-
-    /// Tests that notify_one buffers a permit when no waiters exist.
-    ///
-    /// This validates that the notification is not lost if sent before waiting.
-    #[tokio::test]
-    async fn notify_one_buffers_permit_when_no_waiters() {
-        let notify = Arc::new(Notify::new());
-
-        // Send notification before anyone is waiting
-        notify.notify_one();
-
-        // The first waiter should receive the buffered permit immediately
-        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-        assert!(
-            result.is_ok(),
-            "buffered permit should wake first waiter immediately"
-        );
-
-        // Second waiter should NOT receive a permit (it was consumed)
-        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-        assert!(
-            result.is_err(),
-            "second waiter should timeout with no remaining permit"
-        );
-    }
-}
+mod tests;

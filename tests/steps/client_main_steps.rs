@@ -22,7 +22,7 @@ fn base_args(socket: std::path::PathBuf) -> anyhow::Result<Args> {
         repo_slug: "octocat/hello-world".parse().context("slug")?,
         pr_number: 1,
         comment_body: "Hi".into(),
-        socket,
+        socket: Some(socket),
     })
 }
 

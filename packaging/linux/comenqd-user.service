@@ -1,0 +1,35 @@
+# Comenq daemon as a per-user service (systemd --user).
+#
+# Install to ~/.config/systemd/user/comenqd.service alongside a
+# configuration file at ~/.config/comenqd/config.toml (see
+# packaging/config/comenqd-user.toml for an example), then run:
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now comenqd.service
+#
+# The GitHub token is supplied through the systemd credential system:
+# LoadCredential exposes ~/pandalump-token to the daemon as
+# ${CREDENTIALS_DIRECTORY}/token, which the example configuration
+# references via github_token_file. Adjust the source path to taste.
+
+[Unit]
+Description=Comenq Daemon (user service)
+Documentation=https://github.com/leynos/comenq
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/comenqd --config %h/.config/comenqd/config.toml
+# Socket lives in $XDG_RUNTIME_DIR/comenq; RuntimeDirectory creates and
+# cleans it with the service.
+RuntimeDirectory=comenq
+# Persistent queue under ~/.local/state/comenq/queue (%S is the user state
+# directory for user units).
+StateDirectory=comenq
+Environment=COMENQD_QUEUE_PATH=%S/comenq/queue
+LoadCredential=token:%h/pandalump-token
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

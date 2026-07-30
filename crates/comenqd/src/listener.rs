@@ -36,6 +36,13 @@ use crate::supervisor::backoff;
 /// ```
 pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     let parent = path.parent().context("socket path missing parent")?;
+    // Create the socket directory when absent so a user-hosted daemon works
+    // without systemd's RuntimeDirectory= support. An empty parent means the
+    // path is relative to the working directory, which already exists.
+    if !parent.as_os_str().is_empty() {
+        stdfs::create_dir_all(parent)
+            .with_context(|| format!("creating socket directory {}", parent.display()))?;
+    }
     let file_name = path
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("socket path missing file name"))?;
@@ -168,6 +175,16 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn prepare_listener_creates_missing_parent_directory() {
+        let dir = tempdir().expect("create tempdir");
+        let sock = dir.path().join("missing/nested/comenq.sock");
+        let listener = prepare_listener(&sock).expect("prepare listener");
+        let meta = std::fs::symlink_metadata(&sock).expect("metadata");
+        assert!(meta.file_type().is_socket());
+        drop(listener);
+    }
 
     #[tokio::test]
     async fn prepare_listener_prevents_pre_bind_race() {

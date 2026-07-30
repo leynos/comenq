@@ -21,4 +21,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+serial_test = "2"
 tempfile = { workspace = true }
+test-support = { workspace = true }

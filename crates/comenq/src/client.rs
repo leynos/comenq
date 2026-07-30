@@ -6,6 +6,7 @@
 //! testable.
 
 use comenq_lib::CommentRequest;
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, net::UnixStream};
 use tracing::warn;
@@ -29,6 +30,29 @@ pub enum ClientError {
     Shutdown(#[source] std::io::Error),
 }
 
+/// Connect to the first candidate socket that accepts a connection.
+///
+/// A daemon that exits without unlinking its socket leaves a stale file
+/// behind; connecting to it fails (typically `ECONNREFUSED`), and the next
+/// candidate is tried, so a stale user socket never shadows a healthy
+/// system daemon. The last connection error is returned when every
+/// candidate fails.
+async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError> {
+    let mut last_error: Option<std::io::Error> = None;
+    for candidate in candidates {
+        match UnixStream::connect(candidate).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                warn!(socket = %candidate.display(), error = %e, "socket candidate refused");
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(ClientError::Connect(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no socket candidates to try")
+    })))
+}
+
 /// Send a `CommentRequest` to the daemon.
 ///
 /// # Examples
@@ -42,13 +66,14 @@ pub enum ClientError {
 ///     repo_slug: "owner/repo".parse().expect("slug"),
 ///     pr_number: 1,
 ///     comment_body: String::from("Hi"),
-///     socket: PathBuf::from(DEFAULT_SOCKET_PATH),
+///     socket: Some(PathBuf::from(DEFAULT_SOCKET_PATH)),
 /// };
 /// run(args).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
+    let candidates = args.socket_candidates();
     let request = CommentRequest {
         owner: args.repo_slug.owner().to_owned(),
         repo: args.repo_slug.repo().to_owned(),
@@ -58,9 +83,7 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 
     let payload = serde_json::to_vec(&request)?;
 
-    let mut stream = UnixStream::connect(&args.socket)
-        .await
-        .map_err(ClientError::Connect)?;
+    let mut stream = connect_first(&candidates).await?;
     stream
         .write_all(&payload)
         .await
@@ -98,7 +121,7 @@ mod tests {
             repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
-            socket: socket.clone(),
+            socket: Some(socket.clone()),
         };
 
         run(args).await.expect("run succeeds");
@@ -107,6 +130,39 @@ mod tests {
         assert_eq!(req.repo, "hello-world");
         assert_eq!(req.pr_number, 1);
         assert_eq!(req.body, "Hi");
+    }
+
+    /// A stale socket file (bound once, listener dropped, file left behind)
+    /// must not shadow a live daemon later in the candidate list.
+    #[tokio::test]
+    async fn connect_first_skips_stale_sockets() {
+        let dir = tempdir().expect("temp dir");
+        let stale = dir.path().join("stale.sock");
+        drop(UnixListener::bind(&stale).expect("bind stale socket"));
+        assert!(stale.exists(), "stale socket file should remain on disk");
+
+        let live = dir.path().join("live.sock");
+        let listener = UnixListener::bind(&live).expect("bind live socket");
+
+        let stream = super::connect_first(&[stale.clone(), live.clone()])
+            .await
+            .expect("should fall back to the live socket");
+        drop(stream);
+        drop(listener);
+    }
+
+    /// Every candidate failing yields the connection error.
+    #[tokio::test]
+    async fn connect_first_reports_failure_when_all_candidates_fail() {
+        let dir = tempdir().expect("temp dir");
+        let stale = dir.path().join("stale.sock");
+        drop(UnixListener::bind(&stale).expect("bind stale socket"));
+        let missing = dir.path().join("missing.sock");
+
+        let err = super::connect_first(&[stale, missing])
+            .await
+            .expect_err("all candidates should fail");
+        assert!(matches!(err, ClientError::Connect(_)));
     }
 
     #[tokio::test]
@@ -118,7 +174,7 @@ mod tests {
             repo_slug: "octocat/hello-world".parse().expect("slug"),
             pr_number: 1,
             comment_body: "Hi".into(),
-            socket: socket.clone(),
+            socket: Some(socket.clone()),
         };
 
         let err = run(args).await.expect_err("should error");

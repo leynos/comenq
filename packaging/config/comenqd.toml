@@ -1,8 +1,13 @@
 # Default configuration for comenqd
 
 # GitHub Personal Access Token used for authentication.
-# If left empty, GitHub integration is disabled.
+# Provide either github_token or github_token_file.
 # github_token = ""
+
+# Path to a file containing the token. Read at startup; overrides
+# github_token. A leading ${VAR} placeholder is expanded from the
+# environment, enabling systemd LoadCredential integration:
+# github_token_file = "${CREDENTIALS_DIRECTORY}/token"
 
 # Minimum log level to output
 # log_level = "info"
@@ -15,3 +20,8 @@
 
 # Cooldown period between posting comments in seconds
 # cooldown_period_seconds = 960
+
+# Maximum random flutter added to each cooldown in seconds. The full
+# cooldown always elapses; a fresh random duration up to this value is
+# added on top. Zero (the default) disables flutter.
+# cooldown_flutter_seconds = 0

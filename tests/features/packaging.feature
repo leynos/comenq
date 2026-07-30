@@ -8,3 +8,7 @@ Feature: Packaging configuration
   Scenario: service unit hardening
     Given the systemd unit file
     Then it includes hardening directives
+
+  Scenario: user service unit
+    Given the user systemd unit file
+    Then it targets the user session

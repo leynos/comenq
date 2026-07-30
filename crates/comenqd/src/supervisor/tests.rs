@@ -78,3 +78,36 @@ fn logs_failures(
         }
     }
 }
+
+/// The worker must start while the queue writer holds the sender.
+///
+/// Regression test for the daemon's startup topology: the writer owns the
+/// queue's `yaque::Sender` and the worker must open only the `Receiver`.
+/// Opening a full `channel()` on both sides contends for yaque's per-side
+/// lock files and left the worker in a permanent restart loop.
+#[rstest]
+#[tokio::test]
+async fn worker_starts_while_writer_holds_the_sender() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let cfg: std::sync::Arc<crate::config::Config> =
+        std::sync::Arc::new(test_support::temp_config(&dir).into());
+    super::ensure_queue_dir(&cfg.queue_path)
+        .await
+        .expect("create queue dir");
+    let _sender = yaque::Sender::open(&cfg.queue_path).expect("open queue sender");
+
+    let octocrab =
+        std::sync::Arc::new(crate::worker::build_octocrab("token").expect("build octocrab"));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let handle = super::spawn_worker(cfg, octocrab, shutdown_rx);
+    shutdown_tx.send(()).expect("signal shutdown");
+
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("worker should exit promptly")
+        .expect("worker task should not panic");
+    assert!(
+        res.is_ok(),
+        "worker must open the queue receiver while the sender is held: {res:?}"
+    );
+}
