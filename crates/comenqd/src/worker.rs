@@ -190,7 +190,7 @@ pub async fn run_worker(
         hooks.notify_enqueued();
         match post_comment(&octocrab, &entry.request, &config).await {
             Ok(()) => {
-                queue.complete(&entry.id).await?;
+                queue.complete(&entry).await?;
             }
             Err(e) => {
                 tracing::error!(
@@ -201,6 +201,14 @@ pub async fn run_worker(
                     pr = entry.request.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
+                // A history write failure must not stop the retry loop.
+                if let Err(log_error) = queue.record_failure(&entry, &e.to_string()).await {
+                    tracing::error!(
+                        error = %log_error,
+                        id = %entry.id,
+                        "Failed to record the posting failure in the history log",
+                    );
+                }
                 hooks.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.
                 if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {

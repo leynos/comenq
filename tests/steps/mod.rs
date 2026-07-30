@@ -7,6 +7,8 @@ pub mod comment_steps;
 pub use comment_steps::CommentWorld;
 pub mod config_steps;
 pub use config_steps::ConfigWorld;
+pub mod history_steps;
+pub use history_steps::HistoryWorld;
 pub mod listener_steps;
 pub use listener_steps::ListenerWorld;
 pub mod packaging_steps;

@@ -14,7 +14,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::output::{render_entry, render_put};
+use crate::output::{render_entry, render_history, render_put};
 use crate::{Args, Command};
 
 /// Errors that can occur when interacting with the daemon.
@@ -102,9 +102,13 @@ async fn transact(candidates: &[PathBuf], request: &Request) -> Result<Response,
 pub async fn run(args: Args) -> Result<(), ClientError> {
     let request = args.command.to_request();
     let response = transact(&args.socket_candidates(), &request).await?;
-    let (entry, entries) = match response {
+    let (entry, entries, history) = match response {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
-        Response::Ok { entry, entries } => (entry, entries),
+        Response::Ok {
+            entry,
+            entries,
+            history,
+        } => (entry, entries, history),
     };
     match &args.command {
         Command::Put { .. } => {
@@ -124,6 +128,19 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
         Command::Bump { id } => println!("Moved {id} to the head of the queue."),
         Command::Bust { id } => println!("Moved {id} to the tail of the queue."),
         Command::Del { id } => println!("Removed {id} from the queue."),
+        Command::Hist { .. } => {
+            let history = history.ok_or(ClientError::UnexpectedResponse)?;
+            if history.is_empty() {
+                println!("No posting history recorded.");
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                for record in &history {
+                    println!("{}", render_history(record, now));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -188,6 +205,32 @@ mod tests {
         assert_eq!(request.pr_number, 1);
         assert_eq!(request.body, "Hi");
         assert!(!immediate, "put must default to deferred posting");
+    }
+
+    #[tokio::test]
+    async fn run_sends_hist_request_and_accepts_reply() {
+        let dir = tempdir().expect("temp dir");
+        let socket = dir.path().join("sock");
+        let listener = UnixListener::bind(&socket).expect("bind socket");
+        let reply = Response::history(vec![comenq_lib::protocol::HistoryEntry {
+            id: "1a2b3c4d".into(),
+            posted_at: 1_000,
+            success: true,
+            error: None,
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 1,
+            body: "Hi".into(),
+        }]);
+        let accept = spawn_daemon(listener, reply);
+
+        let args = Args {
+            socket: Some(socket),
+            command: Command::Hist { limit: Some(2) },
+        };
+        run(args).await.expect("run succeeds");
+        let request = accept.await.expect("join");
+        assert_eq!(request, Request::Hist { limit: Some(2) });
     }
 
     #[tokio::test]

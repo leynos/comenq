@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::{PendingEntry, Request, Response};
+use comenq_lib::protocol::{HistoryEntry, PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
@@ -77,6 +77,17 @@ async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingE
             ..
         } => Ok(entries),
         other => anyhow::bail!("expected list reply, got {other:?}"),
+    }
+}
+
+/// Posting history as reported through the protocol.
+async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
+    match queue.execute(Request::Hist { limit: None }).await {
+        Response::Ok {
+            history: Some(history),
+            ..
+        } => Ok(history),
+        other => anyhow::bail!("expected hist reply, got {other:?}"),
     }
 }
 
@@ -194,6 +205,42 @@ async fn comment_posted(world: &mut WorkerWorld) -> anyhow::Result<()> {
         "posted entry should leave the queue"
     );
     world.shutdown_and_join().await;
+    Ok(())
+}
+
+#[then("the posting history records the success")]
+async fn history_records_success(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    assert_eq!(history.len(), 1, "one post should yield one record");
+    let record = history.first().context("history should hold a record")?;
+    assert!(record.success, "the record should mark a success");
+    assert_eq!(record.error, None);
+    assert_eq!(record.owner, "o");
+    assert_eq!(record.repo, "r");
+    assert_eq!(record.pr_number, 1);
+    Ok(())
+}
+
+#[then("the posting history records the failure")]
+async fn history_records_failure(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    anyhow::ensure!(
+        !history.is_empty(),
+        "a failed attempt should be recorded in the history"
+    );
+    for record in &history {
+        assert!(!record.success, "every record should mark a failure");
+        let error = record
+            .error
+            .as_deref()
+            .context("failure carries an error")?;
+        anyhow::ensure!(
+            !error.is_empty(),
+            "the error description should not be empty"
+        );
+    }
     Ok(())
 }
 

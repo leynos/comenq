@@ -12,7 +12,7 @@ use comenq_lib::protocol::{Request, Response};
 use tokio::sync::{Mutex, Notify};
 
 use crate::config::Config;
-use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
+use crate::store::{HistoryRecord, PutOptions, QueueStore, Result as StoreResult, StoredEntry};
 
 /// Current Unix time in whole seconds.
 ///
@@ -62,9 +62,24 @@ impl SharedQueue {
             .next_due(self.cfg.cooldown_period_seconds, unix_now())
     }
 
-    /// Remove the posted entry and record the posting time.
-    pub async fn complete(&self, id: &str) -> StoreResult<()> {
-        self.store.lock().await.complete(id, unix_now())
+    /// Remove the posted entry, recording the posting time and a history
+    /// record of the success.
+    pub async fn complete(&self, entry: &StoredEntry) -> StoreResult<()> {
+        let store = self.store.lock().await;
+        let now = unix_now();
+        store.complete(&entry.id, now)?;
+        store.append_history(&HistoryRecord::success(entry, now))
+    }
+
+    /// Record a failed posting attempt in the history log.
+    ///
+    /// The entry itself stays queued; the worker retries it after a
+    /// cooldown.
+    pub async fn record_failure(&self, entry: &StoredEntry, error: &str) -> StoreResult<()> {
+        self.store
+            .lock()
+            .await
+            .append_history(&HistoryRecord::failure(entry, unix_now(), error))
     }
 
     /// Execute a protocol request and produce the reply.
@@ -106,6 +121,19 @@ impl SharedQueue {
             Request::Bump { id } => (store.bump(&id).map(|()| Response::ok()), true),
             Request::Bust { id } => (store.bust(&id).map(|()| Response::ok()), true),
             Request::Del { id } => (store.del(&id).map(|()| Response::ok()), true),
+            Request::Hist { limit } => {
+                let outcome = store.history().map(|records| {
+                    let skip = limit.map_or(0, |n| records.len().saturating_sub(n));
+                    Response::history(
+                        records
+                            .into_iter()
+                            .skip(skip)
+                            .map(|record| record.to_entry())
+                            .collect(),
+                    )
+                });
+                (outcome, false)
+            }
         };
         drop(store);
         match response {

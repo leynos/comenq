@@ -38,6 +38,12 @@ pub enum Request {
         /// Identifier printed by `list` and `put`.
         id: String,
     },
+    /// Report past posting attempts in chronological order.
+    Hist {
+        /// Most recent records to return; `None` returns them all.
+        #[serde(default)]
+        limit: Option<usize>,
+    },
 }
 
 /// A pending queue entry as reported by the daemon.
@@ -47,6 +53,28 @@ pub struct PendingEntry {
     pub id: String,
     /// Approximate seconds until the comment is posted.
     pub eta_seconds: u64,
+    /// Repository owner.
+    pub owner: String,
+    /// Repository name.
+    pub repo: String,
+    /// Pull request number.
+    pub pr_number: u64,
+    /// Full comment body; consumers truncate for display.
+    pub body: String,
+}
+
+/// A past posting attempt as reported by the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// Identifier the entry carried while queued.
+    pub id: String,
+    /// Unix time the posting attempt finished, in seconds.
+    pub posted_at: u64,
+    /// Whether GitHub accepted the comment.
+    pub success: bool,
+    /// Failure description when `success` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// Repository owner.
     pub owner: String,
     /// Repository name.
@@ -69,6 +97,9 @@ pub enum Response {
         /// Pending entries, returned by `list`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entries: Option<Vec<PendingEntry>>,
+        /// Past posting attempts, returned by `hist`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        history: Option<Vec<HistoryEntry>>,
     },
     /// The request failed; `message` explains why.
     Error {
@@ -84,6 +115,7 @@ impl Response {
         Self::Ok {
             entry: None,
             entries: None,
+            history: None,
         }
     }
 
@@ -93,6 +125,7 @@ impl Response {
         Self::Ok {
             entry: Some(entry),
             entries: None,
+            history: None,
         }
     }
 
@@ -102,6 +135,17 @@ impl Response {
         Self::Ok {
             entry: None,
             entries: Some(entries),
+            history: None,
+        }
+    }
+
+    /// Successful reply for `hist`.
+    #[must_use]
+    pub fn history(history: Vec<HistoryEntry>) -> Self {
+        Self::Ok {
+            entry: None,
+            entries: None,
+            history: Some(history),
         }
     }
 
@@ -117,13 +161,26 @@ impl Response {
 #[cfg(test)]
 mod tests {
     //! Serialization round-trip tests for the client-daemon protocol.
-    use super::{PendingEntry, Request, Response};
+    use super::{HistoryEntry, PendingEntry, Request, Response};
     use crate::CommentRequest;
 
     fn sample_entry() -> PendingEntry {
         PendingEntry {
             id: "0011aabb".into(),
             eta_seconds: 120,
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 7,
+            body: "Hi".into(),
+        }
+    }
+
+    fn sample_history() -> HistoryEntry {
+        HistoryEntry {
+            id: "0011aabb".into(),
+            posted_at: 1_700_000_000,
+            success: false,
+            error: Some("timeout".into()),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 7,
@@ -162,6 +219,8 @@ mod tests {
             Request::Del {
                 id: "0011aabb".into(),
             },
+            Request::Hist { limit: None },
+            Request::Hist { limit: Some(20) },
         ] {
             let json = serde_json::to_string(&req).unwrap_or_else(|e| panic!("serialize: {e}"));
             let back: Request =
@@ -176,6 +235,7 @@ mod tests {
             Response::ok(),
             Response::entry(sample_entry()),
             Response::entries(vec![sample_entry()]),
+            Response::history(vec![sample_history()]),
             Response::error("nope"),
         ] {
             let json = serde_json::to_string(&resp).unwrap_or_else(|e| panic!("serialize: {e}"));
@@ -199,6 +259,13 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn hist_defaults_to_no_limit() {
+        let req: Request =
+            serde_json::from_str(r#"{"op":"hist"}"#).unwrap_or_else(|e| panic!("parse: {e}"));
+        assert_eq!(req, Request::Hist { limit: None });
     }
 
     #[test]

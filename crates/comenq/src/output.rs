@@ -1,9 +1,9 @@
 //! Human-readable rendering of daemon replies.
 //!
-//! Formats estimated posting times and one-line comment summaries for the
-//! `put` and `list` subcommands.
+//! Formats estimated posting times, past-attempt ages, and one-line comment
+//! summaries for the `put`, `list`, and `hist` subcommands.
 
-use comenq_lib::protocol::PendingEntry;
+use comenq_lib::protocol::{HistoryEntry, PendingEntry};
 
 /// Maximum characters of comment text shown by `list`.
 const SUMMARY_LIMIT: usize = 60;
@@ -67,6 +67,47 @@ pub fn one_line_summary(body: &str) -> String {
     truncated
 }
 
+/// Render how long ago something happened as a compact human duration.
+///
+/// # Examples
+///
+/// ```rust
+/// assert_eq!(comenq::format_age(0), "just now");
+/// assert_eq!(comenq::format_age(45), "45s ago");
+/// assert_eq!(comenq::format_age(3_720), "1h 02m ago");
+/// ```
+#[must_use]
+pub fn format_age(seconds: u64) -> String {
+    if seconds == 0 {
+        return "just now".to_owned();
+    }
+    format!("{} ago", format_eta(seconds))
+}
+
+/// Render one `hist` line for a past posting attempt.
+///
+/// `now` is the current Unix time, used to show the attempt's age. Failed
+/// attempts carry the failure description, collapsed to one line.
+pub(crate) fn render_history(entry: &HistoryEntry, now: u64) -> String {
+    let age = format_age(now.saturating_sub(entry.posted_at));
+    let status = if entry.success { "ok" } else { "FAIL" };
+    let mut line = format!(
+        "{}  {:>11}  {:<4}  {}/{}#{}  {}",
+        entry.id,
+        age,
+        status,
+        entry.owner,
+        entry.repo,
+        entry.pr_number,
+        one_line_summary(&entry.body)
+    );
+    if let Some(error) = &entry.error {
+        line.push_str(" — ");
+        line.push_str(&one_line_summary(error));
+    }
+    line
+}
+
 /// Render the `put` confirmation line.
 pub(crate) fn render_put(entry: &PendingEntry) -> String {
     format!(
@@ -94,9 +135,11 @@ pub(crate) fn render_entry(entry: &PendingEntry) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests for ETA and summary rendering.
-    use super::{format_eta, one_line_summary, render_entry, render_put};
-    use comenq_lib::protocol::PendingEntry;
+    //! Unit tests for ETA, age, and summary rendering.
+    use super::{
+        format_age, format_eta, one_line_summary, render_entry, render_history, render_put,
+    };
+    use comenq_lib::protocol::{HistoryEntry, PendingEntry};
     use rstest::rstest;
 
     fn entry(body: &str, eta: u64) -> PendingEntry {
@@ -151,6 +194,46 @@ mod tests {
         assert_eq!(
             line,
             "Queued 1a2b3c4d for octocat/hello-world#7 — posts in ~1h 01m"
+        );
+    }
+
+    fn history(success: bool, error: Option<&str>) -> HistoryEntry {
+        HistoryEntry {
+            id: "1a2b3c4d".into(),
+            posted_at: 1_000,
+            success,
+            error: error.map(str::to_owned),
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 7,
+            body: "Hi there".into(),
+        }
+    }
+
+    #[rstest]
+    #[case(0, "just now")]
+    #[case(45, "45s ago")]
+    #[case(150, "2m 30s ago")]
+    #[case(3_720, "1h 02m ago")]
+    fn formats_age(#[case] seconds: u64, #[case] expected: &str) {
+        assert_eq!(format_age(seconds), expected);
+    }
+
+    #[rstest]
+    fn renders_successful_history_line() {
+        let line = render_history(&history(true, None), 1_150);
+        assert_eq!(
+            line,
+            "1a2b3c4d   2m 30s ago  ok    octocat/hello-world#7  Hi there"
+        );
+    }
+
+    #[rstest]
+    fn renders_failed_history_line_with_error() {
+        let line = render_history(&history(false, Some("timeout\nafter 10s")), 1_045);
+        assert_eq!(
+            line,
+            "1a2b3c4d      45s ago  FAIL  octocat/hello-world#7  Hi there — timeout after 10s"
         );
     }
 

@@ -5,6 +5,8 @@
 //! be moved to the head (`bump`) or tail (`bust`) of the queue, or removed
 //! (`del`). The Unix timestamp of the most recent successful post is kept in
 //! `<queue_path>/last_post` so estimated posting times survive restarts.
+//! Every posting attempt, successful or not, is appended as one JSON line to
+//! `<queue_path>/history.jsonl` so past activity can be reported.
 //!
 //! The store itself holds no in-memory state; callers serialize mutations
 //! (the daemon wraps it in a `tokio::sync::Mutex`). Files are written to a
@@ -23,6 +25,11 @@ use std::path::{Path, PathBuf};
 const ENTRIES_DIR: &str = "entries";
 /// File recording the Unix time of the most recent successful post.
 const LAST_POST_FILE: &str = "last_post";
+/// Append-only JSON Lines log of posting attempts.
+const HISTORY_FILE: &str = "history.jsonl";
+
+mod history;
+pub use history::HistoryRecord;
 
 /// A queued comment with its scheduling metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +104,7 @@ pub struct PutOptions {
 pub struct QueueStore {
     entries_dir: PathBuf,
     last_post_path: PathBuf,
+    history_path: PathBuf,
 }
 
 /// Compute the deterministic eight-character identifier for an entry.
@@ -134,6 +142,7 @@ impl QueueStore {
         Ok(Self {
             entries_dir,
             last_post_path: queue_path.join(LAST_POST_FILE),
+            history_path: queue_path.join(HISTORY_FILE),
         })
     }
 
@@ -254,6 +263,16 @@ impl QueueStore {
         self.del(id)?;
         self.write_atomic(&self.last_post_path, now.to_string().as_bytes())?;
         Ok(())
+    }
+
+    /// Append `record` to the posting history log.
+    pub fn append_history(&self, record: &HistoryRecord) -> Result<()> {
+        history::append(&self.history_path, record)
+    }
+
+    /// All recorded posting attempts in chronological order.
+    pub fn history(&self) -> Result<Vec<HistoryRecord>> {
+        history::read(&self.history_path)
     }
 
     /// Pending entries paired with their estimated seconds-until-post.

@@ -6,8 +6,8 @@
 mod steps;
 use cucumber::World as _;
 use steps::{
-    CliWorld, ClientWorld, CommentWorld, ConfigWorld, ListenerWorld, PackagingWorld, QueueWorld,
-    ReleaseWorld, WorkerWorld,
+    CliWorld, ClientWorld, CommentWorld, ConfigWorld, HistoryWorld, ListenerWorld, PackagingWorld,
+    QueueWorld, ReleaseWorld, WorkerWorld,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<()> {
             ClientWorld::run("tests/features/client_main.feature"),
             CommentWorld::run("tests/features/comment_request.feature"),
             ConfigWorld::run("tests/features/config.feature"),
+            HistoryWorld::run("tests/features/history.feature"),
             ListenerWorld::run("tests/features/listener.feature"),
             PackagingWorld::run("tests/features/packaging.feature"),
             QueueWorld::run("tests/features/queue.feature"),
