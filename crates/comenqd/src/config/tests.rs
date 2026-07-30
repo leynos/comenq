@@ -1,8 +1,8 @@
 //! Tests for daemon configuration loading, overrides, and defaults.
 
 use super::{
-    CliArgs, Config, DEFAULT_CLIENT_CHANNEL_CAPACITY, DEFAULT_COOLDOWN,
-    DEFAULT_GITHUB_API_TIMEOUT_SECS, DEFAULT_RESTART_MIN_DELAY_MS,
+    CliArgs, Config, DEFAULT_COOLDOWN, DEFAULT_GITHUB_API_TIMEOUT_SECS,
+    DEFAULT_RESTART_MIN_DELAY_MS,
 };
 use rstest::rstest;
 use std::fs;
@@ -86,7 +86,6 @@ fn defaults_are_applied() {
     assert_eq!(cfg.cooldown_flutter_seconds, 0);
     assert_eq!(cfg.restart_min_delay_ms, DEFAULT_RESTART_MIN_DELAY_MS);
     assert_eq!(cfg.github_api_timeout_secs, DEFAULT_GITHUB_API_TIMEOUT_SECS);
-    assert_eq!(cfg.client_channel_capacity, DEFAULT_CLIENT_CHANNEL_CAPACITY);
 }
 
 #[rstest]
@@ -260,9 +259,5 @@ fn converts_from_test_config(#[case] conv: fn(&test_support::daemon::TestConfig)
     assert_eq!(
         cfg.github_api_timeout_secs,
         test_cfg.github_api_timeout_secs
-    );
-    assert_eq!(
-        cfg.client_channel_capacity,
-        test_cfg.client_channel_capacity
     );
 }

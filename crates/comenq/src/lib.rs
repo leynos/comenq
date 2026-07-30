@@ -1,12 +1,14 @@
 //! Library utilities for the `comenq` CLI.
 
-use clap::{Parser, builder::ValueHint};
+use clap::{Parser, Subcommand, builder::ValueHint};
 use std::{fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
 mod client;
+mod output;
 
 pub use client::{ClientError, run};
+pub use output::{format_eta, one_line_summary};
 
 /// A GitHub repository slug in `owner/repo` format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -92,17 +94,8 @@ impl fmt::Display for RepoSlug {
 
 /// Command line arguments for the `comenq` client.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "comenq", about = "Enqueue a GitHub PR comment")]
+#[command(name = "comenq", about = "Queue and manage GitHub PR comments")]
 pub struct Args {
-    /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
-    pub repo_slug: RepoSlug,
-
-    /// The pull request number to comment on.
-    pub pr_number: u64,
-
-    /// The body of the comment. It is recommended to quote this argument.
-    pub comment_body: String,
-
     /// Path to the daemon's Unix Domain Socket.
     ///
     /// When omitted, the client tries the per-user runtime path
@@ -114,8 +107,82 @@ pub struct Args {
     // The candidates are resolved at connect time rather than through
     // clap's `default_value_os_t`, which caches the computed value in a
     // process-wide static and would ignore later environment changes.
-    #[arg(long, value_hint = ValueHint::FilePath, env = "COMENQ_SOCKET")]
+    #[arg(long, global = true, value_hint = ValueHint::FilePath, env = "COMENQ_SOCKET")]
     pub socket: Option<PathBuf>,
+
+    /// Queue operation to perform.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// Queue operations offered by the client.
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Enqueue a comment and print its identifier and approximate ETA.
+    ///
+    /// By default the comment waits one full cooldown (plus its flutter)
+    /// from enqueue even when the queue is idle; pass `--now` to post as
+    /// soon as the queue allows.
+    Put {
+        /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
+        repo_slug: RepoSlug,
+
+        /// The pull request number to comment on.
+        pr_number: u64,
+
+        /// The body of the comment. It is recommended to quote this argument.
+        comment_body: String,
+
+        /// Post as soon as the queue allows instead of waiting a full
+        /// cooldown from enqueue.
+        #[arg(long)]
+        now: bool,
+    },
+    /// List pending comments with identifiers and ETAs.
+    List,
+    /// Move the identified comment to the head of the queue.
+    Bump {
+        /// Identifier printed by `put` and `list`.
+        id: String,
+    },
+    /// Move the identified comment to the tail of the queue.
+    Bust {
+        /// Identifier printed by `put` and `list`.
+        id: String,
+    },
+    /// Remove the identified comment from the queue.
+    Del {
+        /// Identifier printed by `put` and `list`.
+        id: String,
+    },
+}
+
+impl Command {
+    /// The protocol request this command performs.
+    #[must_use]
+    pub fn to_request(&self) -> comenq_lib::protocol::Request {
+        use comenq_lib::protocol::Request;
+        match self {
+            Self::Put {
+                repo_slug,
+                pr_number,
+                comment_body,
+                now,
+            } => Request::Put {
+                request: comenq_lib::CommentRequest {
+                    owner: repo_slug.owner().to_owned(),
+                    repo: repo_slug.repo().to_owned(),
+                    pr_number: *pr_number,
+                    body: comment_body.clone(),
+                },
+                immediate: *now,
+            },
+            Self::List => Request::List,
+            Self::Bump { id } => Request::Bump { id: id.clone() },
+            Self::Bust { id } => Request::Bust { id: id.clone() },
+            Self::Del { id } => Request::Del { id: id.clone() },
+        }
+    }
 }
 
 impl Args {
@@ -134,6 +201,7 @@ impl Args {
     ///
     /// let args = Args::try_parse_from([
     ///     "comenq",
+    ///     "put",
     ///     "octocat/hello-world",
     ///     "1",
     ///     "Hi",
@@ -156,7 +224,7 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, RepoSlug, RepoSlugParseError};
+    use super::{Args, Command, RepoSlug, RepoSlugParseError};
     use clap::Parser;
     use rstest::rstest;
     use std::path::PathBuf;
@@ -164,14 +232,60 @@ mod tests {
 
     #[rstest]
     #[case("octocat/hello-world", 1, "Hi")]
-    fn parses_valid_arguments(#[case] slug: &str, #[case] pr: u64, #[case] body: &str) {
+    fn parses_valid_put_arguments(#[case] slug: &str, #[case] pr: u64, #[case] body: &str) {
         let pr_str = pr.to_string();
-        let args = Args::try_parse_from(["comenq", slug, &pr_str, body]);
+        let args = Args::try_parse_from(["comenq", "put", slug, &pr_str, body]);
         let args = args.expect("valid arguments should parse");
         let expected: RepoSlug = slug.parse().expect("slug parses");
-        assert_eq!(args.repo_slug, expected);
-        assert_eq!(args.pr_number, pr);
-        assert_eq!(args.comment_body, body);
+        let Command::Put {
+            repo_slug,
+            pr_number,
+            comment_body,
+            now,
+        } = args.command
+        else {
+            panic!("expected put command");
+        };
+        assert_eq!(repo_slug, expected);
+        assert_eq!(pr_number, pr);
+        assert_eq!(comment_body, body);
+        assert!(!now, "put must default to deferred posting");
+    }
+
+    #[test]
+    fn put_accepts_the_now_flag() {
+        let args =
+            Args::try_parse_from(["comenq", "put", "--now", "octocat/hello-world", "1", "Hi"])
+                .expect("valid arguments should parse");
+        let Command::Put { now, .. } = args.command else {
+            panic!("expected put command");
+        };
+        assert!(now);
+        let comenq_lib::protocol::Request::Put { immediate, .. } = args.command.to_request() else {
+            panic!("expected put request");
+        };
+        assert!(immediate);
+    }
+
+    #[rstest]
+    #[case::list(&["comenq", "list"])]
+    #[case::bump(&["comenq", "bump", "1a2b3c4d"])]
+    #[case::bust(&["comenq", "bust", "1a2b3c4d"])]
+    #[case::del(&["comenq", "del", "1a2b3c4d"])]
+    fn parses_queue_management_subcommands(#[case] argv: &[&str]) {
+        let args = Args::try_parse_from(argv).expect("valid arguments should parse");
+        match (argv[1], args.command) {
+            ("list", Command::List) => {}
+            ("bump", Command::Bump { id })
+            | ("bust", Command::Bust { id })
+            | ("del", Command::Del { id }) => assert_eq!(id, "1a2b3c4d"),
+            (name, other) => panic!("unexpected parse for {name}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_subcommand_is_rejected() {
+        assert!(Args::try_parse_from(["comenq"]).is_err());
     }
 
     #[rstest]
@@ -180,7 +294,7 @@ mod tests {
     #[case("owner/")]
     #[case("owner/repo/extra")]
     fn rejects_invalid_slug(#[case] slug: &str) {
-        let result = Args::try_parse_from(["comenq", slug, "1", "Hi"]);
+        let result = Args::try_parse_from(["comenq", "put", slug, "1", "Hi"]);
         // Ensure the CLI surfaces the canonical repo format error.
         // This guards regressions in the Display of the parse error
         // as rendered through clap's error handling.
@@ -222,7 +336,7 @@ mod tests {
     fn socket_defaults_to_system_path_without_runtime_dir() {
         let _socket_guard = EnvVarGuard::remove("COMENQ_SOCKET");
         let _xdg_guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
-        let args = Args::try_parse_from(["comenq", "octocat/hello-world", "1", "Hi"])
+        let args = Args::try_parse_from(["comenq", "put", "octocat/hello-world", "1", "Hi"])
             .expect("valid arguments should parse");
         assert_eq!(args.socket, None);
         assert_eq!(
@@ -240,7 +354,7 @@ mod tests {
             "XDG_RUNTIME_DIR",
             dir.path().to_str().expect("tempdir path is UTF-8"),
         );
-        let args = Args::try_parse_from(["comenq", "octocat/hello-world", "1", "Hi"])
+        let args = Args::try_parse_from(["comenq", "put", "octocat/hello-world", "1", "Hi"])
             .expect("valid arguments should parse");
         assert_eq!(args.socket, None);
         assert_eq!(
@@ -256,8 +370,7 @@ mod tests {
     #[test]
     fn socket_env_var_overrides_default() {
         let _socket_guard = EnvVarGuard::set("COMENQ_SOCKET", "/tmp/custom.sock");
-        let args = Args::try_parse_from(["comenq", "octocat/hello-world", "1", "Hi"])
-            .expect("valid arguments should parse");
+        let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
         assert_eq!(args.socket, Some(PathBuf::from("/tmp/custom.sock")));
         assert_eq!(
             args.socket_candidates(),
@@ -271,6 +384,7 @@ mod tests {
         let _socket_guard = EnvVarGuard::set("COMENQ_SOCKET", "/tmp/env.sock");
         let args = Args::try_parse_from([
             "comenq",
+            "put",
             "octocat/hello-world",
             "1",
             "Hi",

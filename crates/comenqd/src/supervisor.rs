@@ -1,7 +1,7 @@
 //! Task orchestration for comenqd.
 //!
-//! Coordinates the listener, queue writer, and worker tasks, applying
-//! exponential backoff on failure and handling graceful shutdown.
+//! Coordinates the listener and worker tasks, applying exponential backoff on
+//! failure and handling graceful shutdown.
 
 use crate::config::Config;
 use backon::{ExponentialBackoff, ExponentialBuilder};
@@ -13,10 +13,11 @@ use thiserror::Error;
 use tokio::fs;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, watch};
-use yaque::{Receiver, Sender};
+use tokio::sync::watch;
 
 use crate::listener::run_listener;
+use crate::queue::SharedQueue;
+use crate::store::StoreError;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
 #[derive(Debug, Error)]
@@ -25,6 +26,8 @@ pub enum SupervisorError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Octocrab(#[from] octocrab::Error),
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 pub type Result<T> = std::result::Result<T, SupervisorError>;
@@ -103,125 +106,21 @@ async fn supervise_task<F, B>(
     }
 }
 
-async fn supervise_writer<B>(
-    mut handle: tokio::task::JoinHandle<mpsc::Receiver<Vec<u8>>>,
-    mut backoff: ExponentialBackoff,
-    mut backoff_builder: B,
-    cfg: Arc<Config>,
-    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
-    shutdown_tx: watch::Sender<()>,
-    mut shutdown: watch::Receiver<()>,
-) where
-    B: FnMut() -> ExponentialBackoff,
-{
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                let grace = tokio::time::sleep(Duration::from_millis(100));
-                tokio::select! {
-                    _ = &mut handle => {}
-                    _ = grace => handle.abort(),
-                }
-                break;
-            }
-            res = &mut handle => {
-                let rx = match res {
-                    Ok(r) => r,
-                    Err(e) => {
-                        // Only log join failures here; queue_writer logs enqueue errors.
-                        log_task_failure::<(), _>("writer", &Err(e));
-                        let pair = mpsc::channel(cfg.client_channel_capacity);
-                        *client_tx.lock().await = pair.0;
-                        pair.1
-                    }
-                };
-                let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
-                if sleep_or_shutdown(&mut shutdown, delay).await {
-                    break;
-                }
-                backoff = backoff_builder();
-                // Open only the sender: the worker holds the queue's receiver,
-                // and yaque permits one live handle per side.
-                match Sender::open(&cfg.queue_path) {
-                    Ok(queue_tx) => {
-                        handle = tokio::spawn(queue_writer(queue_tx, rx));
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Queue sender creation failed");
-                        let _ = shutdown_tx.send(());
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Forward bytes from a channel into the persistent queue.
-///
-/// The queue writer decouples the listener from the queue, ensuring a
-/// single writer for the `yaque` queue. It reads raw JSON payloads from the
-/// provided [`mpsc::Receiver`] and attempts to enqueue each item
-/// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
-/// loop terminates so a supervising task can recreate the sender.
-///
-/// When the loop terminates the receiver is returned so a supervising task can
-/// resume consumption without losing any buffered requests.
-///
-/// # Examples
-/// ```rust,no_run
-/// use yaque::channel;
-/// use tokio::sync::mpsc;
-/// # async fn docs() -> anyhow::Result<()> {
-/// let (queue_tx, _rx) = channel("/tmp/q")?;
-/// let (tx, rx) = mpsc::channel(1);
-/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
-/// tx.send(Vec::new())
-///     .await
-///     .expect("send on docs channel failed");
-/// # Ok(())
-/// # }
-/// ```
-pub async fn queue_writer(
-    mut sender: Sender,
-    mut rx: mpsc::Receiver<Vec<u8>>,
-) -> mpsc::Receiver<Vec<u8>> {
-    while let Some(bytes) = rx.recv().await {
-        if let Err(e) = sender.send(bytes).await {
-            tracing::error!(error = %e, "Queue enqueue failed");
-            break;
-        }
-    }
-    rx
-}
-
 /// Start the daemon with the provided configuration.
 pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
-    // Open only the sender here; the worker opens the matching receiver.
-    // Opening a full channel() in both places would contend for yaque's
-    // per-side lock files and leave the worker in a permanent restart loop.
-    let queue_tx = Sender::open(&config.queue_path)?;
-    let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
-    let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
+    let queue = SharedQueue::open(cfg.clone())?;
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     // Initial task spawns and backoff builders.
-    let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let listener_tx = client_tx.clone();
-    let listener = spawn_listener(
-        cfg.clone(),
-        listener_tx.lock().await.clone(),
-        shutdown_rx.clone(),
-    );
-    let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+    let listener = spawn_listener(queue.clone(), shutdown_rx.clone());
+    let worker = spawn_worker(queue.clone(), octocrab.clone(), shutdown_rx.clone());
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let listener_backoff = backoff(min_delay);
     let worker_backoff = backoff(min_delay);
-    let writer_backoff = backoff(min_delay);
 
     // Convert SIGINT and SIGTERM into a shutdown signal.
     #[cfg(unix)]
@@ -253,23 +152,15 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     // Supervise tasks concurrently.
-    let client_tx_clone = client_tx.clone();
     let shutdown_listener = shutdown_rx.clone();
-    let shutdown_worker = shutdown_rx.clone();
+    let shutdown_worker = shutdown_rx;
+    let listener_queue = queue.clone();
     tokio::join!(
         supervise_task(
             "listener",
             listener,
             listener_backoff,
-            || {
-                let cfg = cfg.clone();
-                let client_tx = client_tx_clone.clone();
-                let shutdown_listener = shutdown_listener.clone();
-                tokio::spawn(async move {
-                    let tx = client_tx.lock().await.clone();
-                    run_listener(cfg, tx, shutdown_listener).await
-                })
-            },
+            || spawn_listener(listener_queue.clone(), shutdown_listener.clone()),
             shutdown_listener.clone(),
             || backoff(min_delay),
         ),
@@ -277,18 +168,9 @@ pub async fn run(config: Config) -> Result<()> {
             "worker",
             worker,
             worker_backoff,
-            || spawn_worker(cfg.clone(), octocrab.clone(), shutdown_worker.clone()),
+            || spawn_worker(queue.clone(), octocrab.clone(), shutdown_worker.clone()),
             shutdown_worker.clone(),
             || backoff(min_delay),
-        ),
-        supervise_writer(
-            writer,
-            writer_backoff,
-            || backoff(min_delay),
-            cfg.clone(),
-            client_tx,
-            shutdown_tx.clone(),
-            shutdown_rx,
         ),
     );
 
@@ -296,25 +178,19 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 fn spawn_listener(
-    cfg: Arc<Config>,
-    tx: mpsc::Sender<Vec<u8>>,
+    queue: Arc<SharedQueue>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run_listener(cfg, tx, shutdown))
+    tokio::spawn(run_listener(queue, shutdown))
 }
 
 fn spawn_worker(
-    cfg: Arc<Config>,
+    queue: Arc<SharedQueue>,
     octocrab: Arc<Octocrab>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    let cfg_clone = cfg.clone();
-    tokio::spawn(async move {
-        // Open only the receiver; the queue writer owns the sender side.
-        let rx = Receiver::open(&cfg_clone.queue_path)?;
-        let control = WorkerControl::new(shutdown, WorkerHooks::default());
-        run_worker(cfg_clone, rx, octocrab, control).await
-    })
+    let control = WorkerControl::new(shutdown, WorkerHooks::default());
+    tokio::spawn(run_worker(queue, octocrab, control))
 }
 
 /// Log any failure from a supervised task.
