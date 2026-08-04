@@ -105,12 +105,13 @@ pub struct Args {
 
     /// Path to the daemon's Unix Domain Socket.
     ///
-    /// When omitted, the client tries the per-user runtime path
+    /// When omitted and `XDG_RUNTIME_DIR` is set to a non-empty absolute path,
+    /// the client tries the per-user runtime path
     /// (`$XDG_RUNTIME_DIR/comenq/comenq.sock`) and then the system path,
-    /// connecting to the first socket that accepts, so a user-hosted daemon
-    /// is found automatically and a stale socket file never shadows a
-    /// healthy daemon. May be overridden with the `COMENQ_SOCKET`
-    /// environment variable or this flag.
+    /// connecting to the first socket that accepts. Otherwise, it falls back
+    /// to the system socket. This finds a user-hosted daemon automatically
+    /// without letting a stale socket file shadow a healthy daemon. May be
+    /// overridden with the `COMENQ_SOCKET` environment variable or this flag.
     // The candidates are resolved at connect time rather than through
     // clap's `default_value_os_t`, which caches the computed value in a
     // process-wide static and would ignore later environment changes.

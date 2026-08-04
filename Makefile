@@ -1,4 +1,4 @@
-.PHONY: help all clean test test-cov test-cov-lcov test-workflow-contracts build release lint fmt check-fmt markdownlint nixie spelling spelling-config spelling-config-write spelling-phrase-check spelling-helper-test
+.PHONY: help all clean test test-cov test-cov-lcov test-workflow-contracts build release lint typecheck fmt check-fmt markdownlint nixie spelling spelling-config spelling-config-write spelling-phrase-check spelling-helper-test
 
 APP ?= comenq
 CARGO ?= cargo
@@ -79,6 +79,9 @@ target/%/$(APP): ## Build binary in debug or release mode
 lint: ## Run Clippy and the Whitaker Dylint suite with warnings denied
 	$(CARGO) clippy $(CLIPPY_FLAGS)
 	RUSTFLAGS="-D warnings" $(WHITAKER) --all -- --all-targets --all-features
+
+typecheck: ## Check all Rust targets and features
+	RUSTFLAGS="-D warnings" $(CARGO) check --workspace --all-targets --all-features $(BUILD_JOBS)
 
 fmt: ## Format Rust and Markdown sources
 	$(CARGO) fmt --all

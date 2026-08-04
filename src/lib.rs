@@ -20,8 +20,8 @@ const SOCKET_RELATIVE_PATH: &str = "comenq/comenq.sock";
 
 /// Socket path within the per-user runtime directory, when one is available.
 ///
-/// Returns `None` when `XDG_RUNTIME_DIR` is unset or empty, which is the
-/// case for system services and non-session processes.
+/// Returns `None` when `XDG_RUNTIME_DIR` is unset, empty, or relative. A
+/// user runtime directory must be an absolute path.
 ///
 /// # Examples
 ///
@@ -34,7 +34,9 @@ const SOCKET_RELATIVE_PATH: &str = "comenq/comenq.sock";
 pub fn user_socket_path() -> Option<PathBuf> {
     env::var_os(XDG_RUNTIME_DIR)
         .filter(|dir| !dir.is_empty())
-        .map(|dir| PathBuf::from(dir).join(SOCKET_RELATIVE_PATH))
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(SOCKET_RELATIVE_PATH))
 }
 
 /// Default socket path for the current execution context.
@@ -144,10 +146,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "tests should fail loudly when fixture setup fails"
-    )]
     mod socket_path {
 
         //! Unit tests for socket path resolution and discovery.
@@ -173,6 +171,13 @@ mod tests {
 
         #[serial_test::serial]
         #[test]
+        fn user_socket_path_ignores_relative_runtime_dir() {
+            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "relative");
+            assert_eq!(user_socket_path(), None);
+        }
+
+        #[serial_test::serial]
+        #[test]
         fn default_socket_path_prefers_runtime_dir() {
             let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/run/user/1000");
             assert_eq!(
@@ -190,6 +195,10 @@ mod tests {
 
         #[serial_test::serial]
         #[test]
+        #[expect(
+            clippy::expect_used,
+            reason = "tests should fail loudly when fixture setup fails"
+        )]
         fn socket_candidates_prefer_the_user_socket() {
             let dir = tempfile::tempdir().expect("create tempdir");
             let _guard = EnvVarGuard::set(
@@ -218,15 +227,11 @@ mod tests {
         #[serial_test::serial]
         #[test]
         fn socket_candidates_deduplicate_identical_paths() {
-            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/run/comenq");
-            // Contrived: the user path resolves inside /run/comenq, but the
-            // system path must not be listed twice if they ever coincide.
-            let candidates = socket_candidates();
-            let system_count = candidates
-                .iter()
-                .filter(|p| **p == PathBuf::from(DEFAULT_SOCKET_PATH))
-                .count();
-            assert!(system_count <= 1);
+            let _guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/run");
+            assert_eq!(
+                socket_candidates(),
+                vec![PathBuf::from(DEFAULT_SOCKET_PATH)]
+            );
         }
     }
 }

@@ -59,9 +59,24 @@ fn the_user_systemd_file(world: &mut PackagingWorld) -> anyhow::Result<()> {
 #[then("it targets the user session")]
 fn targets_user_session(world: &mut PackagingWorld) -> anyhow::Result<()> {
     let text = world.content.take().context("service loaded")?;
-    assert!(text.contains("WantedBy=default.target"));
-    assert!(text.contains("RuntimeDirectory=comenq"));
-    assert!(text.contains("LoadCredential=token:"));
-    assert!(text.contains("%h/.config/comenqd/config.toml"));
+    let section = |name: &str| {
+        let heading = format!("[{name}]");
+        text.lines()
+            .skip_while(|line| *line != heading)
+            .skip(1)
+            .take_while(|line| !line.starts_with('['))
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+    };
+    let service = section("Service");
+    let install = section("Install");
+
+    assert!(install.contains(&"WantedBy=default.target"));
+    assert!(service.contains(&"RuntimeDirectory=comenq"));
+    assert!(service.contains(&"LoadCredential=token:%h/pandalump-token"));
+    assert!(
+        service
+            .contains(&"ExecStart=%h/.local/bin/comenqd --config %h/.config/comenqd/config.toml")
+    );
     Ok(())
 }

@@ -49,21 +49,14 @@ fn env_vars_override_file() {
 }
 
 #[rstest]
+#[case::invalid_toml("github_token='abc' this is not toml")]
+#[case::missing_token("socket_path='/tmp/s.sock'")]
+#[case::missing_token_file("github_token_file='/nonexistent/token'")]
 #[serial_test::serial]
-fn error_with_invalid_toml() {
+fn invalid_configuration_errors(#[case] contents: &str) {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
-    fs::write(&path, "github_token='abc' this is not toml").expect("write invalid toml");
-    let res = Config::from_file(&path);
-    assert!(res.is_err());
-}
-
-#[rstest]
-#[serial_test::serial]
-fn error_when_missing_token() {
-    let dir = tempdir().expect("create tempdir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "socket_path='/tmp/s.sock'").expect("write config without token");
+    fs::write(&path, contents).expect("write invalid config fixture");
     let res = Config::from_file(&path);
     assert!(res.is_err());
 }
@@ -149,6 +142,33 @@ fn cli_overrides_cooldown() {
 
 #[rstest]
 #[serial_test::serial]
+fn cli_token_overrides_token_file() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "file-token").expect("write token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token_file='{}'", token_path.display()),
+    )
+    .expect("write config fixture");
+    let cli = CliArgs {
+        config: path.clone(),
+        github_token: Some("cli-token".into()),
+        github_token_file: Some(token_path),
+        socket_path: None,
+        queue_path: None,
+        cooldown_period_seconds: None,
+        github_api_timeout_secs: None,
+    };
+
+    let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
+
+    assert_eq!(cfg.github_token, "cli-token");
+}
+
+#[rstest]
+#[serial_test::serial]
 fn token_file_overrides_inline_token() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -180,15 +200,6 @@ fn token_file_alone_suffices() {
     .expect("write config fixture");
     let cfg = Config::from_file(&path).expect("load config");
     assert_eq!(cfg.github_token, "s3cret");
-}
-
-#[rstest]
-#[serial_test::serial]
-fn missing_token_file_errors() {
-    let dir = tempdir().expect("create tempdir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "github_token_file='/nonexistent/token'").expect("write config fixture");
-    assert!(Config::from_file(&path).is_err());
 }
 
 #[rstest]

@@ -588,24 +588,24 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
-| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
-| github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
-| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                    | /var/lib/comenq/queue                                                                                          |
-| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
-| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                 | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                               | 0                                                                                                              |
-| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
+| Parameter                | Type    | Description                                                                                                                                                                                                                              | Default Value                                                                                                  |
+| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                              | (none)                                                                                                         |
+| github_token_file        | PathBuf | Optional path to a file containing the PAT. When no CLI token is supplied, its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                                          | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                                  | /var/lib/comenq/queue                                                                                          |
+| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                                        | info                                                                                                           |
+| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                               | 960                                                                                                            |
+| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                                             | 0                                                                                                              |
+| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                               | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults, while an absent `github_token` or invalid TOML results in a
-configuration error.
+defaults. Startup reports a configuration error when both `github_token` and
+`github_token_file` are absent, or when the TOML is invalid.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
@@ -768,8 +768,9 @@ The daemon also runs unprivileged under `systemd --user`, using the
 configuration `packaging/config/comenqd-user.toml`:
 
 - The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`;
-  `RuntimeDirectory=comenq` provisions the directory, and the client discovers
-  whichever socket (user or system) exists.
+  `RuntimeDirectory=comenq` provisions the directory. The client probes the
+  user socket first, then falls back to the system socket when the connection
+  fails.
 - The queue lives in `~/.local/state/comenq/queue`, provided through
   `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
   the unit.

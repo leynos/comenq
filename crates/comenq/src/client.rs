@@ -9,7 +9,7 @@ use comenq_lib::CommentRequest;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, net::UnixStream};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::Args;
 
@@ -43,7 +43,14 @@ async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError
         match UnixStream::connect(candidate).await {
             Ok(stream) => return Ok(stream),
             Err(e) => {
-                warn!(socket = %candidate.display(), error = %e, "socket candidate refused");
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) {
+                    debug!(socket = %candidate.display(), error = %e, "socket candidate unavailable");
+                } else {
+                    warn!(socket = %candidate.display(), error = %e, "socket candidate failed");
+                }
                 last_error = Some(e);
             }
         }
@@ -162,7 +169,10 @@ mod tests {
         let err = super::connect_first(&[stale, missing])
             .await
             .expect_err("all candidates should fail");
-        assert!(matches!(err, ClientError::Connect(_)));
+        let ClientError::Connect(source) = err else {
+            panic!("expected connection error, got {err:?}");
+        };
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[tokio::test]

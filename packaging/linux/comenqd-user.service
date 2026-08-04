@@ -28,6 +28,10 @@ StateDirectory=comenq
 Environment=COMENQD_QUEUE_PATH=%S/comenq/queue
 LoadCredential=token:%h/pandalump-token
 NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=read-only
+ReadWritePaths=%S/comenq %t/comenq
 Restart=on-failure
 RestartSec=5s
 

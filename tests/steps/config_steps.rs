@@ -115,11 +115,11 @@ fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
     world.env_guard = Some(EnvVarGuard::set(&key, &value));
 }
 
+#[given(regex = r#"^environment variable \"(.+)\" is unset$"#)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "cucumber requires owned values"
 )]
-#[given(regex = r#"^environment variable \"(.+)\" is unset$"#)]
 fn unset_env_var(world: &mut ConfigWorld, key: String) {
     world.env_guard = Some(EnvVarGuard::remove(&key));
 }

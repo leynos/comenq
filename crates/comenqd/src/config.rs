@@ -286,15 +286,18 @@ impl Config {
         if let Some(secs) = cli.github_api_timeout_secs {
             cfg.github_api_timeout_secs = secs;
         }
-        cfg.resolve_github_token()?;
+        cfg.resolve_github_token(cli.github_token.is_some())?;
         Ok(cfg)
     }
 
     /// Resolve the effective GitHub token, reading `github_token_file` when
     /// set and validating that a non-empty token is available.
     #[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-    fn resolve_github_token(&mut self) -> Result<(), ortho_config::OrthoError> {
-        if let Some(file) = &self.github_token_file {
+    fn resolve_github_token(
+        &mut self,
+        has_cli_token: bool,
+    ) -> Result<(), ortho_config::OrthoError> {
+        if !has_cli_token && let Some(file) = &self.github_token_file {
             let path = expand_env_prefix(file)?;
             let token =
                 std::fs::read_to_string(&path).map_err(|e| ortho_config::OrthoError::File {
