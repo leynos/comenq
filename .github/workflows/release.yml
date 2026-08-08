@@ -53,13 +53,13 @@ jobs:
           fetch-depth: 0
       - name: Determine release modes
         id: release_modes
-        uses: leynos/shared-actions/.github/actions/determine-release-modes@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/determine-release-modes@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           dry-run: ${{ inputs.dry-run }}
           publish: ${{ inputs.publish }}
       - name: Read package version
         id: ensure_version
-        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           check-tag: ${{ fromJSON(steps.release_modes.outputs.should-publish) }}
 
@@ -93,13 +93,13 @@ jobs:
       - name: Clean dist directory
         run: rm -rf dist
       - name: Build ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/rust-build-release@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/rust-build-release@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
           manifest-path: crates/${{ matrix.bin }}/Cargo.toml
       - name: Package ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/linux-packages@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/linux-packages@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           bin-name: ${{ matrix.bin }}
           package-name: ${{ matrix.bin }}
@@ -149,7 +149,7 @@ jobs:
           path: dist
       - id: upload_comenq
         name: Upload comenq artefacts
-        uses: leynos/shared-actions/.github/actions/upload-release-assets@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/upload-release-assets@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           release-tag: ${{ github.ref_name }}
           bin-name: comenq
@@ -159,7 +159,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - id: upload_comenqd
         name: Upload comenqd artefacts
-        uses: leynos/shared-actions/.github/actions/upload-release-assets@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/upload-release-assets@1014f0ce1621506ca5fa66b596ed88ec30774cce
         with:
           release-tag: ${{ github.ref_name }}
           bin-name: comenqd
