@@ -32,6 +32,11 @@ extend-exclude = [
 [default]
 locale = "en-gb"
 extend-ignore-re = [
+    "-fuse-ld=mold",
+    "mold linker",
+    "Cranelift \\+ mold",
+    "Cranelift and mold",
+    "`mold`",
     "\"ises\"",
     "(?m)^        if: fromJSON\\(needs\\.metadata\\.outputs\\.should_upload_workflow_artifacts\\) \\|\\| fromJSON\\(needs\\.metadata\\.outputs\\.should_publish\\)$",
     "(?m)^        value: \\$\\{\\{ jobs\\.metadata\\.outputs\\.should_upload_workflow_artifacts \\}\\}$",
@@ -1495,7 +1500,6 @@ extend-ignore-re = [
 "modularizers" = "modularizers"
 "modularizes" = "modularizes"
 "modularizing" = "modularizing"
-"mold" = "mold"
 "monetisable" = "monetizable"
 "monetisably" = "monetizably"
 "monetisation" = "monetization"
