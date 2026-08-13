@@ -12,3 +12,9 @@ target/
 .uv-tools/
 .typos-oxendict-base.json
 .typos-oxendict-base.toml
+.vtcode/
+.claude/
+.memdb/
+.grepai/
+*.swp
+*.swo
