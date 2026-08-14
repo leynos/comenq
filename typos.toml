@@ -38,6 +38,9 @@ extend-ignore-re = [
     "(?m)^      should_upload_workflow_artifacts: \\$\\{\\{ steps\\.release_modes\\.outputs\\.should-upload-workflow-artifacts \\}\\}$",
     "(?m)^      should_upload_workflow_artifacts:$",
     "(?s)```.*?```",
+    "-fuse-ld=mold",
+    "Cranelift \\+ mold",
+    "Cranelift and mold",
     "\\bCARGO_TERM_COLOR\\b",
     "\\bcolor_eyre\\b",
     "\\bfn is_metadata_file_recognises_metadata\\b",
@@ -46,7 +49,9 @@ extend-ignore-re = [
     "\\bfn wait_or_shutdown_prioritises_shutdown_over_timeout\\b",
     "\\brust-analyzer\\b",
     "`[^`\\n]+`",
+    "`mold`",
     "it is serialised",
+    "mold linker",
     "types: \\[[^]]*\\blabeled\\b",
 ]
 
