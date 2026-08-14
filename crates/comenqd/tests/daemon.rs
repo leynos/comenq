@@ -43,9 +43,11 @@ fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
 fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
     Config {
         github_token: cfg.github_token,
+        github_token_file: None,
         socket_path: cfg.socket_path,
         queue_path: cfg.queue_path,
         cooldown_period_seconds: cfg.cooldown_period_seconds,
+        cooldown_flutter_seconds: 0,
         restart_min_delay_ms: cfg.restart_min_delay_ms,
         github_api_timeout_secs: cfg.github_api_timeout_secs,
         client_channel_capacity: cfg.client_channel_capacity,

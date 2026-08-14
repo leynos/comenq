@@ -99,7 +99,7 @@ async fn worker_starts_while_writer_holds_the_sender() {
     let octocrab =
         std::sync::Arc::new(crate::worker::build_octocrab("token").expect("build octocrab"));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    let handle = super::spawn_worker(cfg, octocrab, shutdown_rx);
+    let handle = super::spawn_worker(cfg, octocrab, shutdown_rx, 0);
     shutdown_tx.send(()).expect("signal shutdown");
 
     let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle)

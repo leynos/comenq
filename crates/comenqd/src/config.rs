@@ -293,12 +293,18 @@ impl Config {
     /// Resolve the effective GitHub token, reading `github_token_file` when
     /// set and validating that a non-empty token is available.
     #[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
+    #[tracing::instrument(skip(self))]
     fn resolve_github_token(
         &mut self,
         has_cli_token: bool,
     ) -> Result<(), ortho_config::OrthoError> {
         if !has_cli_token && let Some(file) = &self.github_token_file {
             let path = expand_env_prefix(file)?;
+            tracing::debug!(
+                credential_source = "file",
+                path = %path.display(),
+                "Loading GitHub credential",
+            );
             let token =
                 std::fs::read_to_string(&path).map_err(|e| ortho_config::OrthoError::File {
                     path: path.clone(),
@@ -312,6 +318,13 @@ impl Config {
                 });
             }
             self.github_token = token.to_owned();
+        } else if has_cli_token {
+            tracing::debug!(credential_source = "cli", "Using GitHub credential");
+        } else {
+            tracing::debug!(
+                credential_source = "configuration",
+                "Using GitHub credential"
+            );
         }
         if self.github_token.is_empty() {
             return Err(ortho_config::OrthoError::Validation {

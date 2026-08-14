@@ -37,19 +37,25 @@ pub enum ClientError {
 /// candidate is tried, so a stale user socket never shadows a healthy
 /// system daemon. The last connection error is returned when every
 /// candidate fails.
+#[tracing::instrument(skip(candidates), fields(candidate_count = candidates.len()))]
 async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError> {
     let mut last_error: Option<std::io::Error> = None;
-    for candidate in candidates {
+    for (index, candidate) in candidates.iter().enumerate() {
+        let attempt = index + 1;
+        debug!(attempt, socket = %candidate.display(), "probing socket candidate");
         match UnixStream::connect(candidate).await {
-            Ok(stream) => return Ok(stream),
+            Ok(stream) => {
+                debug!(attempt, socket = %candidate.display(), "socket candidate selected");
+                return Ok(stream);
+            }
             Err(e) => {
                 if matches!(
                     e.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
                 ) {
-                    debug!(socket = %candidate.display(), error = %e, "socket candidate unavailable");
+                    debug!(attempt, socket = %candidate.display(), error_kind = ?e.kind(), error = %e, "socket candidate unavailable");
                 } else {
-                    warn!(socket = %candidate.display(), error = %e, "socket candidate failed");
+                    warn!(attempt, socket = %candidate.display(), error_kind = ?e.kind(), error = %e, "socket candidate failed");
                 }
                 last_error = Some(e);
             }

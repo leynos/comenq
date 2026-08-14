@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 comenq-lib = { path = "../.." }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

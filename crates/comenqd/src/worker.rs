@@ -46,7 +46,32 @@ fn cooldown_with_flutter(config: &Config) -> u64 {
         return config.cooldown_period_seconds;
     }
     let jitter = rand::rng().random_range(0..=flutter);
-    config.cooldown_period_seconds.saturating_add(jitter)
+    cooldown_with_jitter(config.cooldown_period_seconds, jitter)
+}
+
+/// Add a selected flutter duration without overflowing the cooldown.
+fn cooldown_with_jitter(cooldown: u64, jitter: u64) -> u64 {
+    cooldown.saturating_add(jitter)
+}
+
+#[tracing::instrument(
+    skip(config, shutdown),
+    fields(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+    )
+)]
+async fn wait_for_cooldown(config: &Config, shutdown: &mut watch::Receiver<()>) -> bool {
+    let wait_seconds = cooldown_with_flutter(config);
+    tracing::debug!(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+        wait_seconds,
+        "Waiting before the next queue attempt",
+    );
+    WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
@@ -219,7 +244,7 @@ pub async fn run_worker(
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
+                if wait_for_cooldown(&config, shutdown).await {
                     break;
                 }
                 continue;
@@ -252,7 +277,7 @@ pub async fn run_worker(
         hooks.notify_idle();
         #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        if WorkerHooks::wait_or_shutdown(cooldown_with_flutter(&config), shutdown).await {
+        if wait_for_cooldown(&config, shutdown).await {
             break;
         }
     }

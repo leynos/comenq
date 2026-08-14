@@ -1,6 +1,7 @@
 //! Tests for the queue worker's cooldown, flutter, and notification hooks.
 
-use super::{Config, Notify, WorkerHooks, cooldown_with_flutter};
+use super::{Config, Notify, WorkerHooks, cooldown_with_flutter, cooldown_with_jitter};
+use proptest::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -29,6 +30,26 @@ fn flutter_only_lengthens_the_cooldown() {
             (60..=300).contains(&wait),
             "wait {wait} outside [cooldown, cooldown + flutter]"
         );
+    }
+}
+
+#[test]
+fn non_zero_flutter_can_exceed_the_base_cooldown() {
+    assert_eq!(cooldown_with_jitter(60, 240), 300);
+}
+
+proptest! {
+    #[test]
+    fn flutter_wait_stays_within_saturating_bounds(
+        (cooldown, flutter, jitter) in (any::<u64>(), any::<u64>())
+            .prop_flat_map(|(cooldown, flutter)| {
+                (Just(cooldown), Just(flutter), 0..=flutter)
+            })
+    ) {
+        let wait = cooldown_with_jitter(cooldown, jitter);
+        prop_assert_eq!(wait, cooldown.saturating_add(jitter));
+        prop_assert!(wait >= cooldown);
+        prop_assert!(wait <= cooldown.saturating_add(flutter));
     }
 }
 

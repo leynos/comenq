@@ -57,6 +57,7 @@ serde_yaml = "0.9"
 tempfile = "3.10"
 regex = "1"
 rstest = "0.18.0"
+proptest = "1"
 wiremock = "0.6"
 test-support = { path = "test-support" }
 backon = "1.5.2"

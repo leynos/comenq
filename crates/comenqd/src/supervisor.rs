@@ -19,6 +19,10 @@ use yaque::{Receiver, Sender};
 use crate::listener::run_listener;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
+mod observability;
+
+use observability::log_task_failure;
+
 #[derive(Debug, Error)]
 pub enum SupervisorError {
     #[error(transparent)]
@@ -65,6 +69,7 @@ async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> b
 }
 
 /// Supervise a task that returns `Result<()>` and respawn it on failure.
+#[tracing::instrument(skip_all, fields(task = name))]
 async fn supervise_task<F, B>(
     name: &str,
     mut handle: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -73,9 +78,10 @@ async fn supervise_task<F, B>(
     mut shutdown: watch::Receiver<()>,
     mut backoff_builder: B,
 ) where
-    F: FnMut() -> tokio::task::JoinHandle<anyhow::Result<()>>,
+    F: FnMut(u64) -> tokio::task::JoinHandle<anyhow::Result<()>>,
     B: FnMut() -> ExponentialBackoff,
 {
+    let mut restart_attempt = 0_u64;
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -92,17 +98,30 @@ async fn supervise_task<F, B>(
                     break;
                 }
                 log_task_failure(name, &res);
+                restart_attempt = restart_attempt.saturating_add(1);
                 let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
+                tracing::warn!(
+                    task = name,
+                    attempt = restart_attempt,
+                    delay_ms = delay.as_millis(),
+                    "Scheduling task restart",
+                );
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
                 backoff = backoff_builder();
-                handle = spawn_fn();
+                handle = spawn_fn(restart_attempt);
+                tracing::debug!(
+                    task = name,
+                    attempt = restart_attempt,
+                    "Task restarted",
+                );
             }
         }
     }
 }
 
+#[tracing::instrument(skip_all, fields(task = "writer", queue = %cfg.queue_path.display()))]
 async fn supervise_writer<B>(
     mut handle: tokio::task::JoinHandle<mpsc::Receiver<Vec<u8>>>,
     mut backoff: ExponentialBackoff,
@@ -114,6 +133,7 @@ async fn supervise_writer<B>(
 ) where
     B: FnMut() -> ExponentialBackoff,
 {
+    let mut restart_attempt = 0_u64;
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -135,7 +155,15 @@ async fn supervise_writer<B>(
                         pair.1
                     }
                 };
+                restart_attempt = restart_attempt.saturating_add(1);
                 let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
+                tracing::warn!(
+                    task = "writer",
+                    attempt = restart_attempt,
+                    delay_ms = delay.as_millis(),
+                    queue = %cfg.queue_path.display(),
+                    "Scheduling task restart",
+                );
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
@@ -144,10 +172,24 @@ async fn supervise_writer<B>(
                 // and yaque permits one live handle per side.
                 match Sender::open(&cfg.queue_path) {
                     Ok(queue_tx) => {
+                        tracing::debug!(
+                            task = "writer",
+                            attempt = restart_attempt,
+                            side = "sender",
+                            queue = %cfg.queue_path.display(),
+                            "Queue side reopened",
+                        );
                         handle = tokio::spawn(queue_writer(queue_tx, rx));
                     }
                     Err(e) => {
-                        tracing::error!(error = %e, "Queue sender creation failed");
+                        tracing::error!(
+                            task = "writer",
+                            attempt = restart_attempt,
+                            side = "sender",
+                            queue = %cfg.queue_path.display(),
+                            error = %e,
+                            "Queue sender creation failed",
+                        );
                         let _ = shutdown_tx.send(());
                         break;
                     }
@@ -196,6 +238,7 @@ pub async fn queue_writer(
 }
 
 /// Start the daemon with the provided configuration.
+#[tracing::instrument(skip(config), fields(queue = %config.queue_path.display()))]
 pub async fn run(config: Config) -> Result<()> {
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
@@ -204,6 +247,13 @@ pub async fn run(config: Config) -> Result<()> {
     // Opening a full channel() in both places would contend for yaque's
     // per-side lock files and leave the worker in a permanent restart loop.
     let queue_tx = Sender::open(&config.queue_path)?;
+    tracing::debug!(
+        task = "writer",
+        attempt = 0,
+        side = "sender",
+        queue = %config.queue_path.display(),
+        "Queue side opened",
+    );
     let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
     let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
     let cfg = Arc::new(config);
@@ -217,7 +267,7 @@ pub async fn run(config: Config) -> Result<()> {
         listener_tx.lock().await.clone(),
         shutdown_rx.clone(),
     );
-    let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone());
+    let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone(), 0);
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let listener_backoff = backoff(min_delay);
     let worker_backoff = backoff(min_delay);
@@ -261,7 +311,7 @@ pub async fn run(config: Config) -> Result<()> {
             "listener",
             listener,
             listener_backoff,
-            || {
+            |_| {
                 let cfg = cfg.clone();
                 let client_tx = client_tx_clone.clone();
                 let shutdown_listener = shutdown_listener.clone();
@@ -277,7 +327,14 @@ pub async fn run(config: Config) -> Result<()> {
             "worker",
             worker,
             worker_backoff,
-            || spawn_worker(cfg.clone(), octocrab.clone(), shutdown_worker.clone()),
+            |attempt| {
+                spawn_worker(
+                    cfg.clone(),
+                    octocrab.clone(),
+                    shutdown_worker.clone(),
+                    attempt,
+                )
+            },
             shutdown_worker.clone(),
             || backoff(min_delay),
         ),
@@ -307,41 +364,22 @@ fn spawn_worker(
     cfg: Arc<Config>,
     octocrab: Arc<Octocrab>,
     shutdown: watch::Receiver<()>,
+    attempt: u64,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let cfg_clone = cfg.clone();
     tokio::spawn(async move {
         // Open only the receiver; the queue writer owns the sender side.
         let rx = Receiver::open(&cfg_clone.queue_path)?;
+        tracing::debug!(
+            task = "worker",
+            attempt,
+            side = "receiver",
+            queue = %cfg_clone.queue_path.display(),
+            "Queue side opened",
+        );
         let control = WorkerControl::new(shutdown, WorkerHooks::default());
         run_worker(cfg_clone, rx, octocrab, control).await
     })
-}
-
-/// Log any failure from a supervised task.
-///
-/// Accepts the task name and the result yielded when awaiting its
-/// [`JoinHandle`](tokio::task::JoinHandle). This is a no-op when the task
-/// completes successfully. On failure it logs the error and tags it with
-/// `kind` to distinguish an `inner_error` from a `join_error`.
-fn log_task_failure<T, E>(task: &str, res: &std::result::Result<anyhow::Result<T>, E>)
-where
-    E: std::fmt::Display,
-{
-    match res {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => tracing::error!(
-            task = task,
-            kind = "inner_error",
-            error = %e,
-            "Task failed"
-        ),
-        Err(e) => tracing::error!(
-            task = task,
-            kind = "join_error",
-            error = %e,
-            "Task failed"
-        ),
-    }
 }
 
 #[cfg(test)]

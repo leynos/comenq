@@ -47,9 +47,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now comenqd.service
 ```
 
-The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` and the client
-discovers whichever daemon (user or system) is running. The GitHub token is
-supplied through systemd's credential system
-(`LoadCredential=token:%h/pandalump-token` with
+The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`. The client probes
+the user socket first and falls back to `/run/comenq/comenq.sock` when the
+connection fails. The GitHub token is supplied through systemd's credential
+system (`LoadCredential=token:%h/pandalump-token` with
 `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`), keeping the secret out
 of the unit file and process environment.
+
+See the [users' guide](docs/users-guide.md) for complete setup and
+configuration details.

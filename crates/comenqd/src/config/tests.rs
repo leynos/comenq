@@ -4,12 +4,30 @@ use super::{
     CliArgs, Config, DEFAULT_CLIENT_CHANNEL_CAPACITY, DEFAULT_COOLDOWN,
     DEFAULT_GITHUB_API_TIMEOUT_SECS, DEFAULT_RESTART_MIN_DELAY_MS,
 };
+use clap::Parser as _;
 use rstest::rstest;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
 use test_support::EnvVarGuard;
+
+#[test]
+fn github_token_file_cli_option_parses() {
+    let args = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        "/tmp/config.toml",
+        "--github-token-file",
+        "/run/credentials/comenqd/token",
+    ])
+    .expect("parse daemon CLI options");
+
+    assert_eq!(
+        args.github_token_file,
+        Some(PathBuf::from("/run/credentials/comenqd/token"))
+    );
+}
 
 #[rstest]
 #[serial_test::serial]
