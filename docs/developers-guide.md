@@ -41,6 +41,18 @@ Run repository gates through the Makefile. The principal code gates are
 `make check-fmt`, `make lint`, `make typecheck`, and `make test`; documentation
 changes additionally require `make markdownlint` and `make nixie`.
 
+## Automated packaging
+
+`make release` builds a local optimized binary and requires the Rust toolchain.
+The tag-triggered [release workflow](../.github/workflows/release.yml) uses the
+pinned shared release actions to provision each Rust target, stage generated
+man pages, and produce `.deb` and `.rpm` artefacts. It also uploads the
+transient `nfpm.yaml` manifest for each target so package contents are
+inspectable. Run the Makefile gates before a release; the workflow then
+validates its generated packages during the build-and-package jobs. See the
+[automated packaging guide](automated-cross-platform-packaging.md) for the
+release topology and system-package details.
+
 The `test-support` workspace crate owns helpers shared by unit, integration,
 and behavioural tests, including temporary daemon configuration, environment
 guards, logging capture, socket polling, and mock GitHub clients. The `comenqd`

@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use comenq_lib::CommentRequest;
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -40,19 +40,7 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     // without systemd's RuntimeDirectory= support. An empty parent means the
     // path is relative to the working directory, which already exists.
     if !parent.as_os_str().is_empty() {
-        let created_parent = !parent.exists();
-        stdfs::create_dir_all(parent)
-            .with_context(|| format!("creating socket directory {}", parent.display()))?;
-        if created_parent {
-            stdfs::set_permissions(parent, stdfs::Permissions::from_mode(0o700)).with_context(
-                || {
-                    format!(
-                        "setting permissions on socket directory {}",
-                        parent.display()
-                    )
-                },
-            )?;
-        }
+        create_socket_parent(parent)?;
     }
     let file_name = path
         .file_name()
@@ -83,6 +71,33 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o660))
         .with_context(|| format!("setting permissions on {}", path.display()))?;
     Ok(listener)
+}
+
+/// Create missing socket-parent components without changing existing modes.
+fn create_socket_parent(parent: &Path) -> Result<()> {
+    let mut component_path = PathBuf::new();
+    for component in parent.components() {
+        component_path.push(component.as_os_str());
+        let created_by_this_process = match stdfs::create_dir(&component_path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("creating socket directory {}", component_path.display())
+                });
+            }
+        };
+        if created_by_this_process {
+            stdfs::set_permissions(&component_path, stdfs::Permissions::from_mode(0o700))
+                .with_context(|| {
+                    format!(
+                        "setting permissions on socket directory {}",
+                        component_path.display()
+                    )
+                })?;
+        }
+    }
+    Ok(())
 }
 
 /// Listen on the Unix socket and spawn a handler for each client.
@@ -198,6 +213,10 @@ mod tests {
         let parent = sock.parent().expect("socket parent");
         let parent_meta = std::fs::symlink_metadata(parent).expect("parent metadata");
         assert_eq!(parent_meta.permissions().mode() & 0o777, 0o700);
+        let nested_parent = parent.parent().expect("nested socket parent");
+        let nested_parent_meta =
+            std::fs::symlink_metadata(nested_parent).expect("nested parent metadata");
+        assert_eq!(nested_parent_meta.permissions().mode() & 0o777, 0o700);
         drop(listener);
     }
 

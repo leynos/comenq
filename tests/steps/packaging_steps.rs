@@ -74,6 +74,10 @@ fn targets_user_session(world: &mut PackagingWorld) -> anyhow::Result<()> {
     assert!(install.contains(&"WantedBy=default.target"));
     assert!(service.contains(&"RuntimeDirectory=comenq"));
     assert!(service.contains(&"LoadCredential=token:%h/pandalump-token"));
+    assert!(service.contains(&"ProtectSystem=strict"));
+    assert!(service.contains(&"PrivateTmp=true"));
+    assert!(service.contains(&"ProtectHome=read-only"));
+    assert!(service.contains(&"ReadWritePaths=%S/comenq %t/comenq"));
     assert!(
         service
             .contains(&"ExecStart=%h/.local/bin/comenqd --config %h/.config/comenqd/config.toml")
