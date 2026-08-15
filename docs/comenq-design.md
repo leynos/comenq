@@ -86,14 +86,19 @@ paced, directly addressing the primary goal of avoiding API rate limits.
 
 ### Channels and buffering
 
-The daemon sends client requests via an unbounded channel. The channel sender
-is recreated whenever the writer task restarts, preserving the existing
-receiver when possible.
+The listener sends client requests through a bounded Tokio `mpsc` channel. The
+listener holds its sender, while the queue writer owns the receiver and the
+`yaque::Sender` that persists bytes to disk. The worker owns the matching
+`yaque::Receiver`; each queue side is opened exactly once by its owning task.
 
-- Operational warning: the channel is unbounded. During writer downtime, the
-  in-memory backlog can grow until the supervisor respawns the writer. Deploy
-  with external backpressure (e.g., rate-limiting clients) if this risk is
-  unacceptable.
+The supervisor opens the `yaque::Sender` at startup and whenever it restarts
+the writer. Each worker start opens a `yaque::Receiver`. This avoids yaque's
+per-side lock contention while allowing the listener, writer, and worker to
+restart independently.
+
+- Operational warning: the bounded channel applies backpressure while the
+  writer is unavailable. Its capacity is configured by
+  `client_channel_capacity`.
 
 - Lossy path: If the writer task panics, the old receiver is dropped and any
   buffered items in that channel are lost. This is the only scenario where
@@ -384,14 +389,15 @@ All daemon tasks—the listener, worker, and queue writer—are supervised. If a
 task exits unexpectedly, the daemon logs the failure, waits using an
 exponential backoff with jitter (via the `backon` crate) to avoid a tight
 restart loop, and then respawns the task. The minimum delay between restarts is
-configurable via `restart_min_delay_ms`. This keeps the service available
-without relying on an external process supervisor. Restarting the writer
-recreates the listener→writer channel and restarts the listener to attach a
-fresh sender, preserving single-writer semantics. When the writer exits
-cleanly, the supervisor reuses the existing receiver, so buffered bytes are
-preserved. If the writer panics and the receiver is lost, a new channel is
-created, and any bytes buffered in the discarded channel that were not
-persisted to the queue are lost.
+configurable via `restart_min_delay_ms`. Restart instrumentation records the
+task, attempt, queue path, and scheduled delay.
+
+When the writer returns its `mpsc` receiver, the supervisor preserves that
+receiver, opens a fresh `yaque::Sender`, and restarts the writer. If the writer
+task panics, its receiver is unavailable; the supervisor replaces the
+listener-to-writer channel, and a listener restart obtains the new sender. Any
+bytes buffered only in the discarded receiver can then be lost. Worker restarts
+open a fresh `yaque::Receiver` while the writer continues to own the sender.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -407,10 +413,10 @@ sequenceDiagram
   participant YQ as YaQue
 
   Sup->>Sup: ensure_queue_dir()
-  Sup->>YQ: init Sender
+  Sup->>YQ: open queue sender
   Sup->>QW: spawn queue_writer(rx)
   Sup->>L: spawn run_listener(tx, shutdown)
-  Sup->>W: spawn run_worker(yaque_rx, octocrab, control)
+  Sup->>W: spawn worker and open queue receiver
 
   par Normal flow
     L->>QW: tx.send(bytes)
@@ -422,9 +428,10 @@ sequenceDiagram
     L--x Sup: accept error
     Sup->>L: restart after backoff
     QW--x Sup: enqueue error
-    Sup->>QW: restart after backoff
+    Sup->>YQ: open queue sender after backoff
+    Sup->>QW: restart with preserved mpsc receiver
     W--x Sup: fatal error
-    Sup->>W: restart after backoff
+    Sup->>W: restart and open queue receiver after backoff
   end
 
   OS-->>Sup: SIGINT/SIGTERM
@@ -588,16 +595,16 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter                | Type    | Description                                                                                                                                                                                                                              | Default Value                                                                                                  |
-| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                              | (none)                                                                                                         |
-| github_token_file        | PathBuf | Optional path to a file containing the PAT. When no CLI token is supplied, its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
-| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                                          | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                                  | /var/lib/comenq/queue                                                                                          |
-| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                                        | info                                                                                                           |
-| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                               | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                                             | 0                                                                                                              |
-| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                               | 100                                                                                                            |
+| Parameter                | Type    | Description                                                                                                                                                                                                                                                                                                                   | Default Value                                                                                                  |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                                                                                                                   | (none)                                                                                                         |
+| github_token_file        | PathBuf | Optional path to a file containing the PAT. When no CLI token is supplied, its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. An unreadable, whitespace-only, or larger-than-64-KiB file is a configuration error. | (none)                                                                                                         |
+| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                                                                                                                               | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                                                                                                                       | /var/lib/comenq/queue                                                                                          |
+| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                                                                                                                             | info                                                                                                           |
+| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                                                                                                                    | 960                                                                                                            |
+| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                                                                                                                                  | 0                                                                                                              |
+| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                                                                                                                    | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
@@ -605,7 +612,8 @@ Configuration is loaded using the `ortho_config` crate. The daemon calls
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
 defaults. Startup reports a configuration error when both `github_token` and
-`github_token_file` are absent, or when the TOML is invalid.
+`github_token_file` are absent, when the selected token file is unreadable or
+empty after trimming, exceeds 64 KiB, or when the TOML is invalid.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
@@ -1048,15 +1056,13 @@ because the notifier may fire before the waiter starts listening.
 
 The repository initializes the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix socket
-listener and queue worker as described above. Structured logging is initialized
-using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
-environment variable. The queue directory is created asynchronously on start if
-it does not already exist before `yaque` opens it. Incoming requests are
-forwarded from the listener to a dedicated queue writer task over a bounded
-Tokio `mpsc` channel sized by `client_channel_capacity`. This task serializes
-writes to the `yaque::Sender`, preserving single-writer semantics without
-per-connection locking.
+derives both `Serialize` and `Deserialize`. The daemon starts a Unix socket
+listener, queue writer, and queue worker as described above. Structured logging
+is initialized using `tracing_subscriber` with JSON output controlled by the
+`RUST_LOG` environment variable. The queue directory is created asynchronously
+before `yaque` opens it. Incoming requests flow over a bounded Tokio `mpsc`
+channel sized by `client_channel_capacity`; the writer alone owns the
+`yaque::Sender`, and each worker starts with its own `yaque::Receiver`.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds` and
 defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's

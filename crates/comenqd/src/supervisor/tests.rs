@@ -1,11 +1,13 @@
 //! Tests for task supervision and failure logging.
 
-use super::log_task_failure;
+use super::{log_task_failure, supervise_task};
 use anyhow::anyhow;
 use rstest::rstest;
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinError;
 
 /// In-memory writer used to capture JSON-formatted tracing events.
@@ -77,6 +79,65 @@ fn logs_failures(
             assert_eq!(fields["message"], "Task failed");
         }
     }
+}
+
+/// Consecutive failures must advance the same backoff iterator.
+#[tokio::test]
+async fn consecutive_failures_use_increasing_restart_delays() {
+    struct RecordingBackoff {
+        delays: Vec<Duration>,
+        observed: Arc<Mutex<Vec<Duration>>>,
+    }
+
+    impl Iterator for RecordingBackoff {
+        type Item = Duration;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let delay = self.delays.pop()?;
+            self.observed.lock().expect("record delay").push(delay);
+            Some(delay)
+        }
+    }
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let spawned_twice = Arc::new(Notify::new());
+    let respawn_shutdown = shutdown_rx.clone();
+    let respawn_signal = Arc::clone(&spawned_twice);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let supervisor = tokio::spawn(supervise_task(
+        "test",
+        tokio::spawn(async { Err(anyhow!("first failure")) }),
+        RecordingBackoff {
+            delays: vec![Duration::from_millis(2), Duration::from_millis(1)],
+            observed: Arc::clone(&observed),
+        },
+        move |attempt| {
+            let mut shutdown = respawn_shutdown.clone();
+            let signal = Arc::clone(&respawn_signal);
+            tokio::spawn(async move {
+                if attempt == 1 {
+                    Err(anyhow!("second failure"))
+                } else {
+                    signal.notify_one();
+                    let _ = shutdown.changed().await;
+                    Ok(())
+                }
+            })
+        },
+        shutdown_rx,
+    ));
+
+    tokio::time::timeout(Duration::from_secs(1), spawned_twice.notified())
+        .await
+        .expect("task should restart twice");
+    shutdown_tx.send(()).expect("signal shutdown");
+    supervisor.await.expect("join supervisor");
+
+    let delays = observed.lock().expect("read delays");
+    assert_eq!(
+        delays.as_slice(),
+        &[Duration::from_millis(1), Duration::from_millis(2)]
+    );
 }
 
 /// The worker must start while the queue writer holds the sender.

@@ -1,7 +1,9 @@
-//! Shared types for the Comenq project.
+//! Shared protocol types and socket discovery for Comenq.
 //!
-//! This library defines data structures exchanged between the client
-//! and daemon.
+//! This library defines data structures exchanged between the client and daemon
+//! and resolves their shared per-user and system socket paths. Discovery orders
+//! a valid `$XDG_RUNTIME_DIR` socket before the system fallback so both
+//! binaries apply the same transport policy.
 
 use serde::{Deserialize, Serialize};
 use std::env;

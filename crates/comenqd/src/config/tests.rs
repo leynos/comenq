@@ -2,7 +2,7 @@
 
 use super::{
     CliArgs, Config, DEFAULT_CLIENT_CHANNEL_CAPACITY, DEFAULT_COOLDOWN,
-    DEFAULT_GITHUB_API_TIMEOUT_SECS, DEFAULT_RESTART_MIN_DELAY_MS,
+    DEFAULT_GITHUB_API_TIMEOUT_SECS, DEFAULT_RESTART_MIN_DELAY_MS, MAX_GITHUB_TOKEN_FILE_BYTES,
 };
 use clap::Parser as _;
 use rstest::rstest;
@@ -127,12 +127,8 @@ fn cli_overrides_env_and_file() {
     let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
     let cli = CliArgs {
         config: path.clone(),
-        github_token: None,
-        github_token_file: None,
         socket_path: Some(PathBuf::from("/tmp/cli.sock")),
-        queue_path: None,
-        cooldown_period_seconds: None,
-        github_api_timeout_secs: None,
+        ..CliArgs::default()
     };
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
     assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
@@ -147,12 +143,8 @@ fn cli_overrides_cooldown() {
         .expect("write config fixture");
     let cli = CliArgs {
         config: path.clone(),
-        github_token: None,
-        github_token_file: None,
-        socket_path: None,
-        queue_path: None,
         cooldown_period_seconds: Some(30),
-        github_api_timeout_secs: None,
+        ..CliArgs::default()
     };
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
     assert_eq!(cfg.cooldown_period_seconds, 30);
@@ -232,6 +224,23 @@ fn empty_token_file_errors() {
         format!("github_token_file='{}'", token_path.display()),
     )
     .expect("write config fixture");
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn oversized_token_file_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let token_path = dir.path().join("token");
+    fs::write(&token_path, "x".repeat(MAX_GITHUB_TOKEN_FILE_BYTES + 1))
+        .expect("write oversized token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!("github_token_file='{}'", token_path.display()),
+    )
+    .expect("write config fixture");
+
     assert!(Config::from_file(&path).is_err());
 }
 

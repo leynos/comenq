@@ -40,8 +40,9 @@ the unit and process environment.
 An explicit `--github-token` value has the highest precedence. Without that
 option, the trimmed contents of `github_token_file` override a `github_token`
 value supplied by the environment or configuration file. Startup fails when no
-token source is configured, or when the selected token file cannot provide a
-non-empty token.
+token source is configured, when the selected token file cannot be read, or
+when its trimmed contents are empty (including a whitespace-only file). Token
+files larger than 64 KiB are also rejected.
 
 ## Connect the client
 
@@ -72,4 +73,5 @@ wait; zero disables it. Configure flutter in the TOML file or through
 `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
-[Comenq design](comenq-design.md).
+[Comenq design](comenq-design.md). For an existing deployment, see
+[Migrate to 0.1.0](migration-0.1.0.md).

@@ -40,8 +40,19 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     // without systemd's RuntimeDirectory= support. An empty parent means the
     // path is relative to the working directory, which already exists.
     if !parent.as_os_str().is_empty() {
+        let created_parent = !parent.exists();
         stdfs::create_dir_all(parent)
             .with_context(|| format!("creating socket directory {}", parent.display()))?;
+        if created_parent {
+            stdfs::set_permissions(parent, stdfs::Permissions::from_mode(0o700)).with_context(
+                || {
+                    format!(
+                        "setting permissions on socket directory {}",
+                        parent.display()
+                    )
+                },
+            )?;
+        }
     }
     let file_name = path
         .file_name()
@@ -170,7 +181,7 @@ pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Res
 mod tests {
     use super::*;
     use std::fs::OpenOptions;
-    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
@@ -183,6 +194,24 @@ mod tests {
         let listener = prepare_listener(&sock).expect("prepare listener");
         let meta = std::fs::symlink_metadata(&sock).expect("metadata");
         assert!(meta.file_type().is_socket());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o660);
+        let parent = sock.parent().expect("socket parent");
+        let parent_meta = std::fs::symlink_metadata(parent).expect("parent metadata");
+        assert_eq!(parent_meta.permissions().mode() & 0o777, 0o700);
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn prepare_listener_preserves_existing_parent_permissions() {
+        let dir = tempdir().expect("create tempdir");
+        let parent = dir.path().join("existing");
+        std::fs::create_dir(&parent).expect("create parent");
+        std::fs::set_permissions(&parent, stdfs::Permissions::from_mode(0o755))
+            .expect("set parent permissions");
+
+        let listener = prepare_listener(&parent.join("comenq.sock")).expect("prepare listener");
+        let metadata = std::fs::symlink_metadata(&parent).expect("parent metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
         drop(listener);
     }
 

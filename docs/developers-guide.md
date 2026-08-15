@@ -11,6 +11,19 @@ design is maintained in [Comenq design](comenq-design.md), especially
 and
 [Source code for `comenqd`](comenq-design.md#55-source-code-for-comenqd-daemon).
 
+`user_socket_path()` returns a per-user socket only when `XDG_RUNTIME_DIR` is a
+non-empty absolute path. `default_socket_path()` selects that path for a daemon
+or the system default otherwise. `socket_candidates()` returns the user path
+first, then `/run/comenq/comenq.sock`, without duplicates. The client probes
+those candidates by connecting rather than checking for socket files. An
+explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate.
+
+The supervisor owns the `yaque::Sender` used by the queue writer; it opens that
+side at startup and whenever the writer restarts. Each worker start opens only
+the matching `yaque::Receiver`. This one-side-per-task topology avoids yaque's
+per-side lock contention. Restart tracing includes the task name, attempt,
+queue path, queue side, and backoff delay where applicable.
+
 The worker uses `rand` to choose a new uniformly distributed flutter for each
 cooldown. Flutter is added to the complete base cooldown and never shortens it.
 Keep this operational rule aligned across configuration, worker tests, the
@@ -19,7 +32,8 @@ Keep this operational rule aligned across configuration, worker tests, the
 Structured tracing records socket probes, the selected credential source (but
 never the token value), queue-side opens and task restarts, and each effective
 cooldown wait. Operators and developers can select the emitted detail through
-`RUST_LOG`.
+`RUST_LOG`. The credential reader rejects files larger than 64 KiB before
+trimming their contents.
 
 ## Testing support
 

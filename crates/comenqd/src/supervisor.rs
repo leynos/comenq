@@ -70,16 +70,15 @@ async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> b
 
 /// Supervise a task that returns `Result<()>` and respawn it on failure.
 #[tracing::instrument(skip_all, fields(task = name))]
-async fn supervise_task<F, B>(
+async fn supervise_task<F, I>(
     name: &str,
     mut handle: tokio::task::JoinHandle<anyhow::Result<()>>,
-    mut backoff: ExponentialBackoff,
+    mut backoff: I,
     mut spawn_fn: F,
     mut shutdown: watch::Receiver<()>,
-    mut backoff_builder: B,
 ) where
     F: FnMut(u64) -> tokio::task::JoinHandle<anyhow::Result<()>>,
-    B: FnMut() -> ExponentialBackoff,
+    I: Iterator<Item = Duration>,
 {
     let mut restart_attempt = 0_u64;
     loop {
@@ -109,7 +108,6 @@ async fn supervise_task<F, B>(
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
-                backoff = backoff_builder();
                 handle = spawn_fn(restart_attempt);
                 tracing::debug!(
                     task = name,
@@ -122,17 +120,14 @@ async fn supervise_task<F, B>(
 }
 
 #[tracing::instrument(skip_all, fields(task = "writer", queue = %cfg.queue_path.display()))]
-async fn supervise_writer<B>(
+async fn supervise_writer(
     mut handle: tokio::task::JoinHandle<mpsc::Receiver<Vec<u8>>>,
     mut backoff: ExponentialBackoff,
-    mut backoff_builder: B,
     cfg: Arc<Config>,
     client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
     shutdown_tx: watch::Sender<()>,
     mut shutdown: watch::Receiver<()>,
-) where
-    B: FnMut() -> ExponentialBackoff,
-{
+) {
     let mut restart_attempt = 0_u64;
     loop {
         tokio::select! {
@@ -167,7 +162,6 @@ async fn supervise_writer<B>(
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
-                backoff = backoff_builder();
                 // Open only the sender: the worker holds the queue's receiver,
                 // and yaque permits one live handle per side.
                 match Sender::open(&cfg.queue_path) {
@@ -321,7 +315,6 @@ pub async fn run(config: Config) -> Result<()> {
                 })
             },
             shutdown_listener.clone(),
-            || backoff(min_delay),
         ),
         supervise_task(
             "worker",
@@ -336,12 +329,10 @@ pub async fn run(config: Config) -> Result<()> {
                 )
             },
             shutdown_worker.clone(),
-            || backoff(min_delay),
         ),
         supervise_writer(
             writer,
             writer_backoff,
-            || backoff(min_delay),
             cfg.clone(),
             client_tx,
             shutdown_tx.clone(),
@@ -366,19 +357,18 @@ fn spawn_worker(
     shutdown: watch::Receiver<()>,
     attempt: u64,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    let cfg_clone = cfg.clone();
     tokio::spawn(async move {
         // Open only the receiver; the queue writer owns the sender side.
-        let rx = Receiver::open(&cfg_clone.queue_path)?;
+        let rx = Receiver::open(&cfg.queue_path)?;
         tracing::debug!(
             task = "worker",
             attempt,
             side = "receiver",
-            queue = %cfg_clone.queue_path.display(),
+            queue = %cfg.queue_path.display(),
             "Queue side opened",
         );
         let control = WorkerControl::new(shutdown, WorkerHooks::default());
-        run_worker(cfg_clone, rx, octocrab, control).await
+        run_worker(cfg, rx, octocrab, control).await
     })
 }
 

@@ -1,11 +1,18 @@
 //! Tests for the queue worker's cooldown, flutter, and notification hooks.
 
-use super::{Config, Notify, WorkerHooks, cooldown_with_flutter, cooldown_with_jitter};
+use super::{
+    Config, Notify, WorkerControl, WorkerHooks, build_octocrab, cooldown_with_flutter,
+    cooldown_with_flutter_using, cooldown_with_selected_flutter, run_worker,
+};
 use proptest::prelude::*;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::watch;
+use yaque::{Receiver, Sender};
 
 /// Build a minimal config with the given cooldown and flutter.
 fn config_with_flutter(cooldown: u64, flutter: u64) -> Config {
@@ -35,7 +42,8 @@ fn flutter_only_lengthens_the_cooldown() {
 
 #[test]
 fn non_zero_flutter_can_exceed_the_base_cooldown() {
-    assert_eq!(cooldown_with_jitter(60, 240), 300);
+    let cfg = config_with_flutter(60, 240);
+    assert_eq!(cooldown_with_flutter_using(&cfg, |_| 240), 300);
 }
 
 proptest! {
@@ -46,11 +54,53 @@ proptest! {
                 (Just(cooldown), Just(flutter), 0..=flutter)
             })
     ) {
-        let wait = cooldown_with_jitter(cooldown, jitter);
+        let config = config_with_flutter(cooldown, flutter);
+        let wait = cooldown_with_selected_flutter(&config, jitter);
         prop_assert_eq!(wait, cooldown.saturating_add(jitter));
         prop_assert!(wait >= cooldown);
         prop_assert!(wait <= cooldown.saturating_add(flutter));
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_worker_waits_for_the_selected_flutter() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let mut config = config_with_flutter(60, 240);
+    config.queue_path = dir.path().join("queue");
+    crate::supervisor::ensure_queue_dir(&config.queue_path)
+        .await
+        .expect("create queue directory");
+    let mut sender = Sender::open(&config.queue_path).expect("open queue sender");
+    sender
+        .send(b"not valid JSON".to_vec())
+        .await
+        .expect("enqueue malformed request");
+    let receiver = Receiver::open(&config.queue_path).expect("open queue receiver");
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let cooldown_complete = Arc::new(AtomicBool::new(false));
+    let idle = Arc::new(Notify::new());
+    let hooks = WorkerHooks {
+        idle: Some(Arc::clone(&idle)),
+        cooldown_complete: Some(Arc::clone(&cooldown_complete)),
+        ..WorkerHooks::default()
+    };
+    let control = WorkerControl::new(shutdown_rx, hooks).with_test_flutter(240);
+    let octocrab = Arc::new(build_octocrab("token").expect("build Octocrab"));
+    let worker = tokio::spawn(run_worker(Arc::new(config), receiver, octocrab, control));
+
+    idle.notified().await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(299)).await;
+    assert!(!cooldown_complete.load(Ordering::SeqCst));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert!(cooldown_complete.load(Ordering::SeqCst));
+
+    shutdown_tx.send(()).expect("signal shutdown");
+    worker
+        .await
+        .expect("join worker")
+        .expect("worker should exit cleanly");
 }
 
 #[test]

@@ -10,7 +10,10 @@ use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use rand::Rng;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Notify, watch};
@@ -41,17 +44,25 @@ enum PostCommentError {
 /// so the posting cadence stays below GitHub's secondary rate limits while
 /// avoiding a perfectly regular interval.
 fn cooldown_with_flutter(config: &Config) -> u64 {
+    cooldown_with_flutter_using(config, |range| rand::rng().random_range(range))
+}
+
+/// Calculate the cooldown using a supplied flutter selection.
+fn cooldown_with_flutter_using<F>(config: &Config, select_flutter: F) -> u64
+where
+    F: FnOnce(RangeInclusive<u64>) -> u64,
+{
     let flutter = config.cooldown_flutter_seconds;
     if flutter == 0 {
         return config.cooldown_period_seconds;
     }
-    let jitter = rand::rng().random_range(0..=flutter);
-    cooldown_with_jitter(config.cooldown_period_seconds, jitter)
+    let jitter = select_flutter(0..=flutter);
+    cooldown_with_selected_flutter(config, jitter)
 }
 
-/// Add a selected flutter duration without overflowing the cooldown.
-fn cooldown_with_jitter(cooldown: u64, jitter: u64) -> u64 {
-    cooldown.saturating_add(jitter)
+/// Apply a selected flutter duration without overflowing the cooldown.
+fn cooldown_with_selected_flutter(config: &Config, jitter: u64) -> u64 {
+    config.cooldown_period_seconds.saturating_add(jitter)
 }
 
 #[tracing::instrument(
@@ -62,6 +73,7 @@ fn cooldown_with_jitter(cooldown: u64, jitter: u64) -> u64 {
         flutter_seconds = config.cooldown_flutter_seconds,
     )
 )]
+#[cfg(not(test))]
 async fn wait_for_cooldown(config: &Config, shutdown: &mut watch::Receiver<()>) -> bool {
     let wait_seconds = cooldown_with_flutter(config);
     tracing::debug!(
@@ -72,6 +84,31 @@ async fn wait_for_cooldown(config: &Config, shutdown: &mut watch::Receiver<()>) 
         "Waiting before the next queue attempt",
     );
     WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await
+}
+
+#[cfg(test)]
+async fn wait_for_cooldown(
+    config: &Config,
+    shutdown: &mut watch::Receiver<()>,
+    hooks: &WorkerHooks,
+    test_flutter: Option<u64>,
+) -> bool {
+    let wait_seconds = test_flutter.map_or_else(
+        || cooldown_with_flutter(config),
+        |jitter| cooldown_with_flutter_using(config, |_| jitter),
+    );
+    tracing::debug!(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+        wait_seconds,
+        "Waiting before the next queue attempt",
+    );
+    let interrupted = WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await;
+    if !interrupted {
+        hooks.notify_cooldown_complete();
+    }
+    interrupted
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
@@ -114,6 +151,9 @@ pub struct WorkerHooks {
     ///
     /// Only one waiter is supported; additional waiters will not be notified.
     pub drained: Option<Arc<Notify>>,
+    /// Records completion of a cooldown wait in unit tests.
+    #[cfg(test)]
+    pub cooldown_complete: Option<Arc<AtomicBool>>,
 }
 
 impl WorkerHooks {
@@ -126,6 +166,13 @@ impl WorkerHooks {
     fn notify_idle(&self) {
         if let Some(n) = &self.idle {
             n.notify_one();
+        }
+    }
+
+    #[cfg(test)]
+    fn notify_cooldown_complete(&self) {
+        if let Some(completed) = &self.cooldown_complete {
+            completed.store(true, Ordering::SeqCst);
         }
     }
 
@@ -192,6 +239,8 @@ pub struct WorkerControl {
     pub shutdown: watch::Receiver<()>,
     /// Hooks for observing worker progress during tests.
     pub hooks: WorkerHooks,
+    #[cfg(test)]
+    test_flutter: Option<u64>,
 }
 
 impl WorkerControl {
@@ -208,7 +257,18 @@ impl WorkerControl {
     /// let control = WorkerControl::new(rx, hooks);
     /// ```
     pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
-        Self { shutdown, hooks }
+        Self {
+            shutdown,
+            hooks,
+            #[cfg(test)]
+            test_flutter: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_test_flutter(mut self, flutter: u64) -> Self {
+        self.test_flutter = Some(flutter);
+        self
     }
 }
 
@@ -219,6 +279,8 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
+    #[cfg(test)]
+    let test_flutter = control.test_flutter;
     let hooks = &mut control.hooks;
     let shutdown = &mut control.shutdown;
     loop {
@@ -244,7 +306,11 @@ pub async fn run_worker(
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                if wait_for_cooldown(&config, shutdown).await {
+                #[cfg(test)]
+                let interrupted = wait_for_cooldown(&config, shutdown, hooks, test_flutter).await;
+                #[cfg(not(test))]
+                let interrupted = wait_for_cooldown(&config, shutdown).await;
+                if interrupted {
                     break;
                 }
                 continue;
@@ -277,7 +343,11 @@ pub async fn run_worker(
         hooks.notify_idle();
         #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        if wait_for_cooldown(&config, shutdown).await {
+        #[cfg(test)]
+        let interrupted = wait_for_cooldown(&config, shutdown, hooks, test_flutter).await;
+        #[cfg(not(test))]
+        let interrupted = wait_for_cooldown(&config, shutdown).await;
+        if interrupted {
             break;
         }
     }

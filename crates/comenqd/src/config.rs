@@ -6,7 +6,7 @@
 use clap::Parser;
 use figment::providers::Env;
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// Default queue directory when none is provided.
@@ -24,6 +24,8 @@ const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
 /// Default capacity for the listener channel buffering client requests.
 const DEFAULT_CLIENT_CHANNEL_CAPACITY: usize = 1024;
+/// Largest credential file accepted at daemon startup, in bytes.
+const MAX_GITHUB_TOKEN_FILE_BYTES: usize = 64 * 1024;
 
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
@@ -305,11 +307,7 @@ impl Config {
                 path = %path.display(),
                 "Loading GitHub credential",
             );
-            let token =
-                std::fs::read_to_string(&path).map_err(|e| ortho_config::OrthoError::File {
-                    path: path.clone(),
-                    source: Box::new(e),
-                })?;
+            let token = read_github_token_file(&path)?;
             let token = token.trim();
             if token.is_empty() {
                 return Err(ortho_config::OrthoError::Validation {
@@ -334,6 +332,32 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// Read a GitHub credential without allowing an unbounded startup allocation.
+#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
+fn read_github_token_file(path: &Path) -> Result<String, ortho_config::OrthoError> {
+    let file = std::fs::File::open(path).map_err(|source| ortho_config::OrthoError::File {
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    })?;
+    let mut contents = String::with_capacity(MAX_GITHUB_TOKEN_FILE_BYTES);
+    file.take((MAX_GITHUB_TOKEN_FILE_BYTES + 1) as u64)
+        .read_to_string(&mut contents)
+        .map_err(|source| ortho_config::OrthoError::File {
+            path: path.to_path_buf(),
+            source: Box::new(source),
+        })?;
+    if contents.len() > MAX_GITHUB_TOKEN_FILE_BYTES {
+        return Err(ortho_config::OrthoError::Validation {
+            key: "github_token_file".into(),
+            message: format!(
+                "token file {} exceeds {MAX_GITHUB_TOKEN_FILE_BYTES} bytes",
+                path.display()
+            ),
+        });
+    }
+    Ok(contents)
 }
 
 /// Expand a leading `${VAR}` placeholder in `path` from the environment.
