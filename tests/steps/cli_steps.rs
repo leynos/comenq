@@ -9,6 +9,7 @@ use clap::Parser;
 use cucumber::{World, given, then, when};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use test_support::EnvVarGuard;
 
 use comenq::Args;
 
@@ -16,10 +17,12 @@ use comenq::Args;
 pub struct CliWorld {
     args: Option<Vec<OsString>>,
     result: Option<Result<Args, clap::Error>>,
+    socket_guard: Option<EnvVarGuard>,
 }
 
 #[given("valid CLI arguments")]
 fn valid_cli_arguments(world: &mut CliWorld) {
+    world.socket_guard = Some(EnvVarGuard::remove("COMENQ_SOCKET"));
     world.args = Some(vec![
         OsString::from("comenq"),
         OsString::from("octocat/hello-world"),
