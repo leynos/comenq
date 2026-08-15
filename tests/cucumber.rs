@@ -1,7 +1,7 @@
 //! Cucumber test entry point.
 //!
-//! This module spawns all test worlds concurrently so scenarios run in
-//! parallel.
+//! This module runs independent worlds concurrently and serializes worlds
+//! that mutate process-wide environment variables.
 
 mod steps;
 use cucumber::World as _;
@@ -23,13 +23,16 @@ fn main() -> anyhow::Result<()> {
         tokio::join!(
             CliWorld::run("tests/features/cli.feature"),
             ReleaseWorld::run("tests/features/release.feature"),
-            ClientWorld::run("tests/features/client_main.feature"),
             CommentWorld::run("tests/features/comment_request.feature"),
-            ConfigWorld::run("tests/features/config.feature"),
             ListenerWorld::run("tests/features/listener.feature"),
             PackagingWorld::run("tests/features/packaging.feature"),
             WorkerWorld::run("tests/features/worker.feature"),
         );
+
+        // Both worlds temporarily set XDG_RUNTIME_DIR, which is process-wide.
+        // Run them separately so their socket-discovery assertions cannot race.
+        ClientWorld::run("tests/features/client_main.feature").await;
+        ConfigWorld::run("tests/features/config.feature").await;
     });
     Ok(())
 }

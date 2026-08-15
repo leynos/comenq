@@ -37,12 +37,25 @@ credential available as `${CREDENTIALS_DIRECTORY}/token`, which the example
 configuration selects through `github_token_file`. This keeps the PAT out of
 the unit and process environment.
 
-An explicit `--github-token` value has the highest precedence. Without that
-option, the trimmed contents of `github_token_file` override a `github_token`
-value supplied by the environment or configuration file. Startup fails when no
-token source is configured, when the selected token file cannot be read, or
-when its trimmed contents are empty (including a whitespace-only file). Token
-files larger than 64 KiB are also rejected.
+Credential values follow the daemon's configuration precedence. An explicit
+`--github-token` value wins over every other source. If that option is absent,
+`--github-token-file` overrides the `github_token_file` path supplied by
+`COMENQD_GITHUB_TOKEN_FILE` or the configuration file; the selected file's
+trimmed contents then override `github_token`. If no file is selected, the
+inline token from the CLI, environment, or configuration file is used. Startup
+fails when no token source is configured, when the selected token file cannot
+be read, or when its trimmed contents are empty (including a whitespace-only
+file). Token files larger than 64 KiB are also rejected.
+
+To select a token file explicitly, use the `--github-token-file FILE` form:
+
+```bash
+comenqd --config /etc/comenqd/config.toml \
+  --github-token-file /run/credentials/comenqd/token
+```
+
+The file path overrides any configured token-file path; `--github-token` still
+wins if both options are supplied.
 
 ## Connect the client
 

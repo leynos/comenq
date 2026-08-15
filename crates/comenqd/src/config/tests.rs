@@ -31,6 +31,81 @@ fn github_token_file_cli_option_parses() {
 
 #[rstest]
 #[serial_test::serial]
+fn parsed_cli_options_override_environment_and_file() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        concat!(
+            "github_token='file-token'\n",
+            "socket_path='/tmp/file.sock'\n",
+            "queue_path='/tmp/file-queue'\n",
+            "cooldown_period_seconds=10\n",
+            "github_api_timeout_secs=20\n",
+        ),
+    )
+    .expect("write config fixture");
+    let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        path.to_str().expect("temp path is UTF-8"),
+        "--github-token",
+        "cli-token",
+        "--socket-path",
+        "/tmp/cli.sock",
+        "--queue-path",
+        "/tmp/cli-queue",
+        "--cooldown-period-seconds",
+        "30",
+        "--github-api-timeout-secs",
+        "40",
+    ])
+    .expect("parse daemon CLI options");
+
+    let cfg = Config::from_file_with_cli(&cli.config, &cli).expect("load config");
+
+    assert_eq!(cfg.github_token, "cli-token");
+    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+    assert_eq!(cfg.queue_path, PathBuf::from("/tmp/cli-queue"));
+    assert_eq!(cfg.cooldown_period_seconds, 30);
+    assert_eq!(cfg.github_api_timeout_secs, 40);
+}
+
+#[rstest]
+#[serial_test::serial]
+fn parsed_cli_token_file_overrides_toml_token_file() {
+    let dir = tempdir().expect("create tempdir");
+    let toml_token = dir.path().join("toml-token");
+    let cli_token = dir.path().join("cli-token");
+    fs::write(&toml_token, "toml-token").expect("write TOML token file");
+    fs::write(&cli_token, "cli-token").expect("write CLI token file");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "github_token='inline-token'\ngithub_token_file='{}'",
+            toml_token.display()
+        ),
+    )
+    .expect("write config fixture");
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        path.to_str().expect("temp path is UTF-8"),
+        "--github-token-file",
+        cli_token.to_str().expect("temp path is UTF-8"),
+    ])
+    .expect("parse daemon CLI token file option");
+
+    let cfg = Config::from_file_with_cli(&cli.config, &cli).expect("load config");
+
+    assert_eq!(cfg.github_token, "cli-token");
+    assert_eq!(cfg.github_token_file, Some(cli_token));
+}
+
+#[rstest]
+#[serial_test::serial]
 fn loads_from_file() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -125,11 +200,14 @@ fn cli_overrides_env_and_file() {
     fs::write(&path, "github_token='abc'\nsocket_path='/tmp/file.sock'")
         .expect("write config fixture");
     let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
-    let cli = CliArgs {
-        config: path.clone(),
-        socket_path: Some(PathBuf::from("/tmp/cli.sock")),
-        ..CliArgs::default()
-    };
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        path.to_str().expect("temp path is UTF-8"),
+        "--socket-path",
+        "/tmp/cli.sock",
+    ])
+    .expect("parse daemon CLI socket option");
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
     assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
 }
@@ -141,11 +219,14 @@ fn cli_overrides_cooldown() {
     let path = dir.path().join("config.toml");
     fs::write(&path, "github_token='abc'\ncooldown_period_seconds=10")
         .expect("write config fixture");
-    let cli = CliArgs {
-        config: path.clone(),
-        cooldown_period_seconds: Some(30),
-        ..CliArgs::default()
-    };
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        path.to_str().expect("temp path is UTF-8"),
+        "--cooldown-period-seconds",
+        "30",
+    ])
+    .expect("parse daemon CLI cooldown option");
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
     assert_eq!(cfg.cooldown_period_seconds, 30);
 }
@@ -162,15 +243,16 @@ fn cli_token_overrides_token_file() {
         format!("github_token_file='{}'", token_path.display()),
     )
     .expect("write config fixture");
-    let cli = CliArgs {
-        config: path.clone(),
-        github_token: Some("cli-token".into()),
-        github_token_file: Some(token_path),
-        socket_path: None,
-        queue_path: None,
-        cooldown_period_seconds: None,
-        github_api_timeout_secs: None,
-    };
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--config",
+        path.to_str().expect("temp path is UTF-8"),
+        "--github-token",
+        "cli-token",
+        "--github-token-file",
+        token_path.to_str().expect("temp path is UTF-8"),
+    ])
+    .expect("parse daemon CLI token options");
 
     let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
 
@@ -221,7 +303,10 @@ fn empty_token_file_errors() {
     let path = dir.path().join("config.toml");
     fs::write(
         &path,
-        format!("github_token_file='{}'", token_path.display()),
+        format!(
+            "github_token='inline-token'\ngithub_token_file='{}'",
+            token_path.display()
+        ),
     )
     .expect("write config fixture");
     assert!(Config::from_file(&path).is_err());
@@ -237,7 +322,10 @@ fn oversized_token_file_errors() {
     let path = dir.path().join("config.toml");
     fs::write(
         &path,
-        format!("github_token_file='{}'", token_path.display()),
+        format!(
+            "github_token='inline-token'\ngithub_token_file='{}'",
+            token_path.display()
+        ),
     )
     .expect("write config fixture");
 
@@ -268,11 +356,54 @@ fn token_file_with_unset_placeholder_errors() {
     let path = dir.path().join("config.toml");
     fs::write(
         &path,
-        "github_token_file='${COMENQD_TEST_UNSET_VARIABLE}/token'",
+        concat!(
+            "github_token='inline-token'\n",
+            "github_token_file='${COMENQD_TEST_UNSET_VARIABLE}/token'",
+        ),
     )
     .expect("write config fixture");
     let _guard = EnvVarGuard::remove("COMENQD_TEST_UNSET_VARIABLE");
     assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn missing_token_file_with_inline_token_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        "github_token='inline-token'\ngithub_token_file='/nonexistent/token'",
+    )
+    .expect("write config fixture");
+
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn nonzero_flutter_loads_from_toml() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token='abc'\ncooldown_flutter_seconds=45")
+        .expect("write config fixture");
+
+    let cfg = Config::from_file(&path).expect("load config");
+
+    assert_eq!(cfg.cooldown_flutter_seconds, 45);
+}
+
+#[rstest]
+#[serial_test::serial]
+fn nonzero_flutter_loads_from_environment() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token='abc'").expect("write config fixture");
+    let _guard = EnvVarGuard::set("COMENQD_COOLDOWN_FLUTTER_SECONDS", "45");
+
+    let cfg = Config::from_file(&path).expect("load config");
+
+    assert_eq!(cfg.cooldown_flutter_seconds, 45);
 }
 
 #[cfg(feature = "test-support")]

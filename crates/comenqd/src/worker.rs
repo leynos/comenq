@@ -6,6 +6,7 @@
 //! regular posting cadence.
 
 use crate::config::Config;
+use crate::metrics;
 use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
@@ -83,6 +84,7 @@ async fn wait_for_cooldown(config: &Config, shutdown: &mut watch::Receiver<()>) 
         wait_seconds,
         "Waiting before the next queue attempt",
     );
+    metrics::record_cooldown_wait(wait_seconds);
     WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await
 }
 
@@ -104,6 +106,7 @@ async fn wait_for_cooldown(
         wait_seconds,
         "Waiting before the next queue attempt",
     );
+    metrics::record_cooldown_wait(wait_seconds);
     let interrupted = WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await;
     if !interrupted {
         hooks.notify_cooldown_complete();

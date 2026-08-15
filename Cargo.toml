@@ -26,6 +26,7 @@ octocrab = { workspace = true }
 test-support = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
+trybuild = "1"
 
 [[test]]
 name = "cucumber"
@@ -63,6 +64,9 @@ test-support = { path = "test-support" }
 backon = "1.5.2"
 rand = "0.9"
 uuid = { version = "1", features = ["v4"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+metrics-util = "0.20"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

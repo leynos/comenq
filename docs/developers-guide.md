@@ -29,11 +29,37 @@ cooldown. Flutter is added to the complete base cooldown and never shortens it.
 Keep this operational rule aligned across configuration, worker tests, the
 [users' guide](users-guide.md), and the design document.
 
+### Configuration API
+
+`comenqd::config::Config` is the public runtime configuration model. The
+`Config::load()` entry point reads the daemon's `--config` file, merges
+`COMENQD_*` environment variables, applies supported CLI overrides, and
+resolves the effective GitHub credential. Its public fields cover the token
+sources, socket and queue paths, cooldown and flutter, restart delay, GitHub
+API timeout, and client-channel capacity.
+
+Tests and integrations built with the `test-support` feature can use
+`Config::from_file(path)` to load a particular file while retaining the
+`COMENQD_*` environment merge. Both entry points return a configuration error
+when the file is missing or invalid, or when no usable GitHub credential is
+available.
+
 Structured tracing records socket probes, the selected credential source (but
 never the token value), queue-side opens and task restarts, and each effective
 cooldown wait. Operators and developers can select the emitted detail through
 `RUST_LOG`. The credential reader rejects files larger than 64 KiB before
 trimming their contents.
+
+Prometheus metrics are exposed at `127.0.0.1:9000/metrics`. The stable metric
+vocabulary is:
+
+- `comenqd_task_restarts_total{task=listener|worker|writer}` for supervised
+  task restarts.
+- `comenqd_queue_writer_failures_total{queue_side=sender}` for queue-writer
+  failures.
+- `comenqd_client_channel_depth` for the bounded client-channel depth proxy.
+- `comenqd_requests_total{outcome=accepted|rejected}` for request outcomes.
+- `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 
 ## Testing support
 

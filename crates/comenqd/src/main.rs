@@ -13,6 +13,8 @@ mod logging;
 async fn main() -> color_eyre::Result<()> {
     logging::init();
     color_eyre::install()?;
+    comenqd::metrics::install_prometheus()
+        .context("failed to start Prometheus metrics exporter")?;
     let cfg = Config::load()?;
     info!(
         socket = ?cfg.socket_path,

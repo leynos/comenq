@@ -4,6 +4,7 @@
 //! persistent queue for processing by the worker.
 
 use crate::config::Config;
+use crate::metrics;
 use anyhow::{Context, Result};
 use comenq_lib::CommentRequest;
 use std::fs as stdfs;
@@ -172,6 +173,16 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
 pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 
 pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
+    let result = handle_client_inner(stream, tx).await;
+    metrics::record_request_outcome(if result.is_ok() {
+        "accepted"
+    } else {
+        "rejected"
+    });
+    result
+}
+
+async fn handle_client_inner(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -189,6 +200,8 @@ pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Res
     tx.send(bytes)
         .await
         .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
+    let depth = tx.max_capacity().saturating_sub(tx.capacity());
+    metrics::record_client_channel_depth(depth);
     Ok(())
 }
 

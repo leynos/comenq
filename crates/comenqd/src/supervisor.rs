@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 use yaque::{Receiver, Sender};
 
 use crate::listener::run_listener;
+use crate::metrics;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
 mod observability;
@@ -71,7 +72,7 @@ async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> b
 /// Supervise a task that returns `Result<()>` and respawn it on failure.
 #[tracing::instrument(skip_all, fields(task = name))]
 async fn supervise_task<F, I>(
-    name: &str,
+    name: &'static str,
     mut handle: tokio::task::JoinHandle<anyhow::Result<()>>,
     mut backoff: I,
     mut spawn_fn: F,
@@ -98,6 +99,7 @@ async fn supervise_task<F, I>(
                 }
                 log_task_failure(name, &res);
                 restart_attempt = restart_attempt.saturating_add(1);
+                metrics::record_task_restart(name);
                 let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
                 tracing::warn!(
                     task = name,
@@ -151,6 +153,7 @@ async fn supervise_writer(
                     }
                 };
                 restart_attempt = restart_attempt.saturating_add(1);
+                metrics::record_task_restart("writer");
                 let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
                 tracing::warn!(
                     task = "writer",
@@ -223,7 +226,9 @@ pub async fn queue_writer(
     mut rx: mpsc::Receiver<Vec<u8>>,
 ) -> mpsc::Receiver<Vec<u8>> {
     while let Some(bytes) = rx.recv().await {
+        metrics::record_client_channel_depth(rx.len());
         if let Err(e) = sender.send(bytes).await {
+            metrics::record_queue_writer_failure();
             tracing::error!(error = %e, "Queue enqueue failed");
             break;
         }

@@ -29,6 +29,8 @@ test-support = { workspace = true, optional = true }
 backon = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -39,6 +41,7 @@ test-support = { workspace = true }
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+metrics-util = { workspace = true }
 
 [features]
 default = []
