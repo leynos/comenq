@@ -270,6 +270,13 @@ impl Config {
         fig = fig.merge(Env::prefixed("COMENQD_").split("__"));
         let mut cfg: Self = fig.extract().map_err(ortho_config::OrthoError::from)?;
 
+        Self::apply_cli_overrides(&mut cfg, cli);
+        cfg.resolve_github_token(cli.github_token.is_some())?;
+        Ok(cfg)
+    }
+
+    /// Apply command-line values that explicitly override loaded configuration.
+    fn apply_cli_overrides(cfg: &mut Self, cli: &CliArgs) {
         if let Some(token) = &cli.github_token {
             cfg.github_token = token.clone();
         }
@@ -288,8 +295,6 @@ impl Config {
         if let Some(secs) = cli.github_api_timeout_secs {
             cfg.github_api_timeout_secs = secs;
         }
-        cfg.resolve_github_token(cli.github_token.is_some())?;
-        Ok(cfg)
     }
 
     /// Resolve the effective GitHub token, reading `github_token_file` when

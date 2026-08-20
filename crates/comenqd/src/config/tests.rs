@@ -29,6 +29,63 @@ fn github_token_file_cli_option_parses() {
     );
 }
 
+#[test]
+fn apply_cli_overrides_preserves_unset_values_and_applies_set_values() {
+    let mut cfg = Config {
+        github_token: "file-token".into(),
+        github_token_file: Some(PathBuf::from("/tmp/file-token")),
+        socket_path: PathBuf::from("/tmp/file.sock"),
+        queue_path: PathBuf::from("/tmp/file-queue"),
+        cooldown_period_seconds: 10,
+        cooldown_flutter_seconds: 20,
+        restart_min_delay_ms: 30,
+        github_api_timeout_secs: 40,
+        client_channel_capacity: 50,
+    };
+
+    Config::apply_cli_overrides(&mut cfg, &CliArgs::default());
+    assert_eq!(cfg.github_token, "file-token");
+    assert_eq!(
+        cfg.github_token_file,
+        Some(PathBuf::from("/tmp/file-token"))
+    );
+    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/file.sock"));
+    assert_eq!(cfg.queue_path, PathBuf::from("/tmp/file-queue"));
+    assert_eq!(cfg.cooldown_period_seconds, 10);
+    assert_eq!(cfg.github_api_timeout_secs, 40);
+    assert_eq!(cfg.cooldown_flutter_seconds, 20);
+    assert_eq!(cfg.restart_min_delay_ms, 30);
+    assert_eq!(cfg.client_channel_capacity, 50);
+
+    let cli = CliArgs::try_parse_from([
+        "comenqd",
+        "--github-token",
+        "cli-token",
+        "--github-token-file",
+        "/tmp/cli-token",
+        "--socket-path",
+        "/tmp/cli.sock",
+        "--queue-path",
+        "/tmp/cli-queue",
+        "--cooldown-period-seconds",
+        "60",
+        "--github-api-timeout-secs",
+        "70",
+    ])
+    .expect("parse CLI overrides");
+
+    Config::apply_cli_overrides(&mut cfg, &cli);
+    assert_eq!(cfg.github_token, "cli-token");
+    assert_eq!(cfg.github_token_file, Some(PathBuf::from("/tmp/cli-token")));
+    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+    assert_eq!(cfg.queue_path, PathBuf::from("/tmp/cli-queue"));
+    assert_eq!(cfg.cooldown_period_seconds, 60);
+    assert_eq!(cfg.github_api_timeout_secs, 70);
+    assert_eq!(cfg.cooldown_flutter_seconds, 20);
+    assert_eq!(cfg.restart_min_delay_ms, 30);
+    assert_eq!(cfg.client_channel_capacity, 50);
+}
+
 #[rstest]
 #[serial_test::serial]
 fn parsed_cli_options_override_environment_and_file() {
