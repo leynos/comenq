@@ -2,8 +2,10 @@
 
 use super::{
     Config, Notify, WorkerControl, WorkerHooks, build_octocrab, cooldown_with_flutter,
-    cooldown_with_flutter_using, cooldown_with_selected_flutter, run_worker,
+    cooldown_with_flutter_using, cooldown_with_selected_flutter, run_worker, wait_for_cooldown,
 };
+use ::metrics::set_default_local_recorder;
+use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use proptest::prelude::*;
 use std::sync::{
     Arc,
@@ -101,6 +103,26 @@ async fn run_worker_waits_for_the_selected_flutter() {
         .await
         .expect("join worker")
         .expect("worker should exit cleanly");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cooldown_wait_records_the_effective_flutter_duration() {
+    let config = config_with_flutter(60, 240);
+    let (shutdown_tx, mut shutdown) = watch::channel(());
+    shutdown_tx.send(()).expect("signal shutdown");
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
+
+    assert!(wait_for_cooldown(&config, &mut shutdown, &WorkerHooks::default(), Some(240),).await);
+
+    let metrics = snapshotter.snapshot().into_vec();
+    assert!(metrics.iter().any(|(key, _, _, value)| {
+        key.key().name() == "comenqd_cooldown_wait_duration_seconds"
+            && matches!(value, DebugValue::Histogram(values) if values
+                .iter()
+                .any(|value| value.0.to_bits() == 300.0_f64.to_bits()))
+    }));
 }
 
 #[test]

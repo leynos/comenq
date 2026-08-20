@@ -1,3 +1,5 @@
+//! Pass fixture for the supported client socket and daemon configuration APIs.
+
 use comenq::Args;
 use comenqd::config::Config;
 use std::path::PathBuf;

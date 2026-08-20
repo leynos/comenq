@@ -1,3 +1,5 @@
+//! Compile-fail fixture proving that `Args::socket` is an optional path.
+
 use comenq::Args;
 use std::path::PathBuf;
 

@@ -67,6 +67,15 @@ Run repository gates through the Makefile. The principal code gates are
 `make check-fmt`, `make lint`, `make typecheck`, and `make test`; documentation
 changes additionally require `make markdownlint` and `make nixie`.
 
+The `make test` target includes the compiler-facing UI suite through its
+workspace `nextest` run. `tests/public_api.rs` uses `trybuild` to compile every
+pass fixture in `tests/ui/pass/*.rs` and to require compilation failure for
+every fixture in `tests/ui/fail/*.rs`, with each failure matched against its
+checked-in `.stderr` file. `trybuild` compiles an isolated fixture workspace;
+the first cold run is allowed a five-minute slow-test period in
+`.config/nextest.toml`. The complete `nextest` run has a 10-minute global
+timeout, after which `make test` runs the Cucumber test target separately.
+
 ## Automated packaging
 
 `make release` builds a local optimized binary and requires the Rust toolchain.

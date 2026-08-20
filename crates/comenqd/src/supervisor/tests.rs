@@ -1,14 +1,23 @@
 //! Tests for task supervision and failure logging.
 
-use super::{log_task_failure, supervise_task};
+use super::{
+    backoff, ensure_queue_dir, log_task_failure, queue_writer, spawn_listener, supervise_task,
+    supervise_writer,
+};
+use ::metrics::set_default_local_recorder;
 use anyhow::anyhow;
+use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use rstest::rstest;
 use serde_json::Value;
+use std::fs;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::io::AsyncWriteExt;
+use tokio::net::UnixStream;
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinError;
+use yaque::{Receiver, Sender, SenderBuilder};
 
 /// In-memory writer used to capture JSON-formatted tracing events.
 #[derive(Clone, Default)]
@@ -82,7 +91,7 @@ fn logs_failures(
 }
 
 /// Consecutive failures must advance the same backoff iterator.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn consecutive_failures_use_increasing_restart_delays() {
     struct RecordingBackoff {
         delays: Vec<Duration>,
@@ -104,8 +113,11 @@ async fn consecutive_failures_use_increasing_restart_delays() {
     let respawn_shutdown = shutdown_rx.clone();
     let respawn_signal = Arc::clone(&spawned_twice);
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
     let supervisor = tokio::spawn(supervise_task(
-        "test",
+        "worker",
         tokio::spawn(async { Err(anyhow!("first failure")) }),
         RecordingBackoff {
             delays: vec![Duration::from_millis(2), Duration::from_millis(1)],
@@ -138,6 +150,133 @@ async fn consecutive_failures_use_increasing_restart_delays() {
         delays.as_slice(),
         &[Duration::from_millis(1), Duration::from_millis(2)]
     );
+    let metrics = snapshotter.snapshot().into_vec();
+    assert!(metrics.iter().any(|(key, _, _, value)| {
+        key.key().name() == "comenqd_task_restarts_total"
+            && key
+                .key()
+                .labels()
+                .any(|label| label.key() == "task" && label.value() == "worker")
+            && matches!(value, DebugValue::Counter(2))
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queue_writer_records_depth_and_enqueue_failure() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let queue_path = dir.path().join("queue");
+    let sender = SenderBuilder::new()
+        .segment_size(1)
+        .open(&queue_path)
+        .expect("open queue sender");
+    let (tx, rx) = mpsc::channel(2);
+    tx.send(vec![1]).await.expect("queue first request");
+    tx.send(vec![2]).await.expect("queue second request");
+    drop(tx);
+    fs::remove_dir_all(&queue_path).expect("remove queue directory");
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
+    let _ = queue_writer(sender, rx).await;
+
+    let metrics = snapshotter.snapshot().into_vec();
+    assert!(
+        metrics
+            .iter()
+            .any(|(key, _, _, _)| { key.key().name() == "comenqd_client_channel_depth" })
+    );
+    assert!(metrics.iter().any(|(key, _, _, value)| {
+        key.key().name() == "comenqd_queue_writer_failures_total"
+            && key
+                .key()
+                .labels()
+                .any(|label| label.key() == "queue_side" && label.value() == "sender")
+            && matches!(value, DebugValue::Counter(1))
+    }));
+}
+
+#[tokio::test]
+async fn listener_uses_replacement_sender_after_writer_panics() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let mut config: crate::config::Config = test_support::temp_config(&dir).into();
+    config.restart_min_delay_ms = 1;
+    let cfg = Arc::new(config);
+    ensure_queue_dir(&cfg.queue_path)
+        .await
+        .expect("create queue directory");
+
+    let initial_queue_sender = Sender::open(&cfg.queue_path).expect("open initial queue sender");
+    let (initial_tx, initial_rx) = mpsc::channel(cfg.client_channel_capacity);
+    let initial_sender = initial_tx.clone();
+    let client_tx = Arc::new(tokio::sync::Mutex::new(initial_tx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let writer: tokio::task::JoinHandle<mpsc::Receiver<Vec<u8>>> = tokio::spawn(async move {
+        drop(initial_queue_sender);
+        drop(initial_rx);
+        panic!("writer panic for recovery test");
+    });
+    let writer_supervisor = tokio::spawn(supervise_writer(
+        writer,
+        backoff(Duration::from_millis(1)),
+        cfg.clone(),
+        client_tx.clone(),
+        shutdown_tx.clone(),
+        shutdown_rx.clone(),
+    ));
+    let listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !initial_sender.is_closed() {
+            tokio::task::yield_now().await;
+        }
+        loop {
+            if !client_tx.lock().await.is_closed() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("writer replacement should be ready");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !cfg.socket_path.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("listener socket should be ready");
+
+    let mut client = UnixStream::connect(&cfg.socket_path)
+        .await
+        .expect("connect to listener");
+    let request = comenq_lib::CommentRequest {
+        owner: "owner".into(),
+        repo: "repo".into(),
+        pr_number: 1,
+        body: "body".into(),
+    };
+    client
+        .write_all(&serde_json::to_vec(&request).expect("serialize request"))
+        .await
+        .expect("write request");
+    client.shutdown().await.expect("close request");
+
+    let mut receiver = Receiver::open(&cfg.queue_path).expect("open queue receiver");
+    let queued = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+        .await
+        .expect("request should reach replacement writer")
+        .expect("receive queued request");
+    let queued: comenq_lib::CommentRequest =
+        serde_json::from_slice(&queued).expect("deserialize queued request");
+    assert_eq!(queued, request);
+
+    shutdown_tx.send(()).expect("signal shutdown");
+    listener
+        .await
+        .expect("join listener")
+        .expect("listener result");
+    writer_supervisor.await.expect("join writer supervisor");
 }
 
 /// The worker must start while the queue writer holds the sender.

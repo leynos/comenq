@@ -260,12 +260,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Initial task spawns and backoff builders.
     let writer = tokio::spawn(queue_writer(queue_tx, client_rx));
-    let listener_tx = client_tx.clone();
-    let listener = spawn_listener(
-        cfg.clone(),
-        listener_tx.lock().await.clone(),
-        shutdown_rx.clone(),
-    );
+    let listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone(), 0);
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let listener_backoff = backoff(min_delay);
@@ -314,10 +309,7 @@ pub async fn run(config: Config) -> Result<()> {
                 let cfg = cfg.clone();
                 let client_tx = client_tx_clone.clone();
                 let shutdown_listener = shutdown_listener.clone();
-                tokio::spawn(async move {
-                    let tx = client_tx.lock().await.clone();
-                    run_listener(cfg, tx, shutdown_listener).await
-                })
+                spawn_listener(cfg, client_tx, shutdown_listener)
             },
             shutdown_listener.clone(),
         ),
@@ -350,10 +342,10 @@ pub async fn run(config: Config) -> Result<()> {
 
 fn spawn_listener(
     cfg: Arc<Config>,
-    tx: mpsc::Sender<Vec<u8>>,
+    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run_listener(cfg, tx, shutdown))
+    tokio::spawn(run_listener(cfg, client_tx, shutdown))
 }
 
 fn spawn_worker(

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use uuid::Uuid;
 
 use crate::supervisor::backoff;
@@ -114,10 +114,13 @@ fn create_socket_parent(parent: &Path) -> Result<()> {
 /// and not treated as an error.
 pub async fn run_listener(
     config: Arc<Config>,
-    tx: mpsc::Sender<Vec<u8>>,
+    client_tx: Arc<Mutex<mpsc::Sender<Vec<u8>>>>,
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
-    let listener = prepare_listener(&config.socket_path)?;
+    let socket_path = config.socket_path.clone();
+    let listener = tokio::task::spawn_blocking(move || prepare_listener(&socket_path))
+        .await
+        .context("listener preparation task failed")??;
     let min_delay = Duration::from_millis(config.restart_min_delay_ms);
     let mut accept_backoff = backoff(min_delay);
 
@@ -129,9 +132,10 @@ pub async fn run_listener(
                     let cred = stream.peer_cred().ok();
                     let pid = cred.as_ref().map(|c| c.pid());
                     let uid = cred.as_ref().map(|c| c.uid());
-                    let tx_clone = tx.clone();
+                    let client_tx = client_tx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, tx_clone).await {
+                        let tx = client_tx.lock().await.clone();
+                        if let Err(e) = handle_client(stream, tx).await {
                             match (pid, uid) {
                                 (Some(pid), Some(uid)) => {
                                     tracing::warn!(pid, uid, error = %e, "Client handling failed");
@@ -208,12 +212,30 @@ async fn handle_client_inner(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::metrics::set_default_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use std::fs::OpenOptions;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use tempfile::tempdir;
+
+    fn request_outcomes(
+        metrics: &[(
+            metrics_util::CompositeKey,
+            Option<::metrics::Unit>,
+            Option<::metrics::SharedString>,
+            DebugValue,
+        )],
+    ) -> Vec<&str> {
+        metrics
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name() == "comenqd_requests_total")
+            .flat_map(|(key, _, _, _)| key.key().labels())
+            .filter_map(|label| (label.key() == "outcome").then_some(label.value()))
+            .collect()
+    }
 
     #[tokio::test]
     async fn prepare_listener_creates_missing_parent_directory() {
@@ -270,5 +292,49 @@ mod tests {
         let meta = std::fs::symlink_metadata(&sock).expect("metadata");
         assert!(meta.file_type().is_socket());
         drop(listener);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_client_records_accepted_and_rejected_request_metrics() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::sync::mpsc;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = set_default_local_recorder(&recorder);
+        let (tx, mut rx) = mpsc::channel(2);
+
+        let (mut valid_client, valid_server) = UnixStream::pair().expect("create valid pair");
+        let request = CommentRequest {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            pr_number: 1,
+            body: "body".into(),
+        };
+        valid_client
+            .write_all(&serde_json::to_vec(&request).expect("serialize request"))
+            .await
+            .expect("write valid request");
+        valid_client.shutdown().await.expect("close valid request");
+        handle_client(valid_server, tx.clone())
+            .await
+            .expect("accept valid request");
+        let _ = rx.recv().await.expect("receive valid request");
+
+        let (mut invalid_client, invalid_server) = UnixStream::pair().expect("create invalid pair");
+        invalid_client
+            .write_all(b"not json")
+            .await
+            .expect("write invalid request");
+        invalid_client
+            .shutdown()
+            .await
+            .expect("close invalid request");
+        assert!(handle_client(invalid_server, tx).await.is_err());
+
+        let metrics = snapshotter.snapshot().into_vec();
+        let outcomes = request_outcomes(&metrics);
+        assert!(outcomes.contains(&"accepted"));
+        assert!(outcomes.contains(&"rejected"));
     }
 }

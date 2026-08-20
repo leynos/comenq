@@ -74,6 +74,26 @@ comenq owner/repository 123 "Please review this change"
 comenq --socket /run/comenq/comenq.sock owner/repository 123 "Queued"
 ```
 
+## Inspect local metrics
+
+The daemon exposes Prometheus metrics at `http://127.0.0.1:9000/metrics`. This
+endpoint listens only on the local loopback interface, so it is not reachable
+from other hosts. Scrape it from the machine running `comenqd`:
+
+```bash
+curl http://127.0.0.1:9000/metrics
+```
+
+The stable metric names and labels are:
+
+- `comenqd_task_restarts_total{task=listener|worker|writer}` for supervised
+  task restarts.
+- `comenqd_queue_writer_failures_total{queue_side=sender}` for queue-writer
+  failures.
+- `comenqd_client_channel_depth` for the bounded client-channel depth proxy.
+- `comenqd_requests_total{outcome=accepted|rejected}` for request outcomes.
+- `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
+
 ## Configure the cooldown
 
 `cooldown_period_seconds` sets the minimum delay after a comment is posted. It

@@ -1,3 +1,5 @@
+//! Compile-fail fixture proving that `Config::github_token_file` is optional.
+
 use comenqd::config::Config;
 use std::path::PathBuf;
 
