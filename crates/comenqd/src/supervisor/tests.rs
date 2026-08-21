@@ -1,8 +1,8 @@
 //! Tests for task supervision and failure logging.
 
 use super::{
-    backoff, ensure_queue_dir, log_task_failure, queue_writer, spawn_listener, supervise_task,
-    supervise_writer,
+    QueueWriterState, backoff, ensure_queue_dir, log_task_failure, queue_writer, run_queue_writer,
+    spawn_listener, supervise_task, supervise_writer,
 };
 use ::metrics::set_default_local_recorder;
 use anyhow::anyhow;
@@ -197,6 +197,47 @@ async fn queue_writer_records_depth_and_enqueue_failure() {
 }
 
 #[tokio::test]
+async fn queue_writer_retries_failed_payload_without_duplication() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let queue_path = dir.path().join("queue");
+    let sender = SenderBuilder::new()
+        .segment_size(1)
+        .open(&queue_path)
+        .expect("open initial queue sender");
+    let payload = b"preserve this request".to_vec();
+    let (input_tx, input_rx) = mpsc::channel(2);
+    input_tx
+        .send(vec![0])
+        .await
+        .expect("advance the initial queue segment");
+    input_tx
+        .send(payload.clone())
+        .await
+        .expect("queue payload for writer");
+    drop(input_tx);
+    fs::remove_dir_all(&queue_path).expect("force enqueue failure");
+
+    let state = run_queue_writer(sender, QueueWriterState::new(input_rx)).await;
+    assert_eq!(state.pending.as_deref(), Some(payload.as_slice()));
+    let sender = Sender::open(&queue_path).expect("reopen queue sender");
+    let state = run_queue_writer(sender, state).await;
+    assert!(state.pending.is_none(), "retry should consume the payload");
+    let mut receiver = Receiver::open(&queue_path).expect("open queue receiver");
+    let queued = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+        .await
+        .expect("retry should enqueue payload")
+        .expect("receive retried payload");
+    assert_eq!(&*queued, payload.as_slice());
+    queued.commit().expect("commit retried payload");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "retried payload must not be duplicated"
+    );
+}
+
+#[tokio::test]
 async fn listener_uses_replacement_sender_after_writer_panics() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let mut config: crate::config::Config = test_support::temp_config(&dir).into();
@@ -211,7 +252,7 @@ async fn listener_uses_replacement_sender_after_writer_panics() {
     let initial_sender = initial_tx.clone();
     let client_tx = Arc::new(tokio::sync::Mutex::new(initial_tx));
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let writer: tokio::task::JoinHandle<mpsc::Receiver<Vec<u8>>> = tokio::spawn(async move {
+    let writer = tokio::spawn(async move {
         drop(initial_queue_sender);
         drop(initial_rx);
         panic!("writer panic for recovery test");
@@ -221,7 +262,6 @@ async fn listener_uses_replacement_sender_after_writer_panics() {
         backoff(Duration::from_millis(1)),
         cfg.clone(),
         client_tx.clone(),
-        shutdown_tx.clone(),
         shutdown_rx.clone(),
     ));
     let listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());

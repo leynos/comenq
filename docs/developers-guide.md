@@ -65,7 +65,7 @@ vocabulary is:
 
 Run repository gates through the Makefile. The principal code gates are
 `make check-fmt`, `make lint`, `make typecheck`, and `make test`; documentation
-changes additionally require `make markdownlint` and `make nixie`.
+changes additionally require `make fmt`, `make markdownlint`, and `make nixie`.
 
 The `make test` target includes the compiler-facing UI suite through its
 workspace `nextest` run. `tests/public_api.rs` uses `trybuild` to compile every

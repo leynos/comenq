@@ -1,6 +1,7 @@
 //! Bounded Prometheus metrics for daemon reliability and throughput.
 //!
-//! The daemon exposes a local scrape endpoint at `127.0.0.1:9000/metrics`.
+//! The daemon attempts to expose a local scrape endpoint at
+//! `127.0.0.1:9000/metrics`.
 //! Metric labels are static, low-cardinality classifications so metrics never
 //! include request content, repository names, file paths, or credentials.
 
