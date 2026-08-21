@@ -73,7 +73,9 @@ fn targets_user_session(world: &mut PackagingWorld) -> anyhow::Result<()> {
 
     assert!(install.contains(&"WantedBy=default.target"));
     assert!(service.contains(&"RuntimeDirectory=comenq"));
+    assert!(service.contains(&"StateDirectoryMode=0700"));
     assert!(service.contains(&"LoadCredential=token:%h/pandalump-token"));
+    assert!(service.contains(&"UMask=0077"));
     assert!(service.contains(&"ProtectSystem=strict"));
     assert!(service.contains(&"PrivateTmp=true"));
     assert!(service.contains(&"ProtectHome=read-only"));

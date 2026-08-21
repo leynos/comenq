@@ -31,6 +31,12 @@ systemctl --user enable --now comenqd.service
 systemctl --user status comenqd.service
 ```
 
+For a manual daemon launch, `comenqd` creates missing parent components for its
+socket path and sets each component it creates to mode `0700`. Existing parent
+directories retain their current modes, so this does not alter a
+systemd-provisioned `RuntimeDirectory`. The packaged user unit stores the
+persistent queue at `~/.local/state/comenq/queue`.
+
 Change the source path in `LoadCredential` if the token is stored elsewhere.
 The unit uses `LoadCredential=token:%h/pandalump-token`; systemd makes the
 credential available as `${CREDENTIALS_DIRECTORY}/token`, which the example

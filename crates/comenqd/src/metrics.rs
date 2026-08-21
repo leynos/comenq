@@ -56,6 +56,8 @@ pub(crate) fn record_cooldown_wait(seconds: u64) {
 
 #[cfg(test)]
 mod tests {
+    //! Tests bounded metric names, values, and labels emitted by this module.
+
     use super::*;
     use metrics::with_local_recorder;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
