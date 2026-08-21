@@ -107,12 +107,20 @@ mod tests {
 
         assert!(names.contains(&TASK_RESTARTS));
         assert!(names.contains(&QUEUE_WRITER_FAILURES));
+        assert!(names.contains(&GITHUB_POSTS));
         assert_eq!(
             metrics
                 .iter()
                 .filter(|(key, _, _, _)| key.key().name() == REQUESTS)
                 .count(),
             2
+        );
+        assert_eq!(
+            metrics
+                .iter()
+                .filter(|(key, _, _, _)| key.key().name() == GITHUB_POSTS)
+                .count(),
+            3
         );
         assert!(metrics.iter().all(|(key, _, _, _)| {
             key.key().labels().all(|label| {

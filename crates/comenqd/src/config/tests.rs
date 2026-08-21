@@ -222,7 +222,7 @@ fn defaults_are_applied() {
     let cfg = Config::from_file(&path).expect("load config");
     assert_eq!(
         cfg.socket_path,
-        PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)
+        PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)
     );
     assert_eq!(cfg.queue_path, PathBuf::from("/var/lib/comenq/queue"));
     assert_eq!(cfg.cooldown_period_seconds, DEFAULT_COOLDOWN);

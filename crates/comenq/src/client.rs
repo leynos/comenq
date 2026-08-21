@@ -73,7 +73,7 @@ async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError
 /// ```no_run
 /// # use comenq::{Args, run};
 /// # use std::path::PathBuf;
-/// # use comenq_lib::DEFAULT_SOCKET_PATH;
+/// # use comenq_transport::DEFAULT_SOCKET_PATH;
 /// # async fn try_run() -> Result<(), comenq::ClientError> {
 /// let args = Args {
 ///     repo_slug: "owner/repo".parse().expect("slug"),

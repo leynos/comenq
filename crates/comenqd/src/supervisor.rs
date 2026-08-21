@@ -141,8 +141,7 @@ pub async fn run(config: Config) -> Result<()> {
         queue = %config.queue_path.display(),
         "Queue side opened",
     );
-    let (client_tx_initial, client_rx) = mpsc::channel(config.client_channel_capacity);
-    let client_tx = Arc::new(tokio::sync::Mutex::new(client_tx_initial));
+    let (client_tx, client_rx) = mpsc::channel(config.client_channel_capacity);
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
@@ -232,7 +231,7 @@ pub async fn run(config: Config) -> Result<()> {
 
 fn spawn_listener(
     cfg: Arc<Config>,
-    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
+    client_tx: mpsc::Sender<Vec<u8>>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     tokio::spawn(run_listener(cfg, client_tx, shutdown))

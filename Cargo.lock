@@ -359,6 +359,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "comenq-lib",
+ "comenq-transport",
  "rstest",
  "serde",
  "serde_json",
@@ -396,6 +397,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "comenq-transport"
+version = "0.1.0"
+dependencies = [
+ "serial_test",
+ "tempfile",
+ "test-support",
+]
+
+[[package]]
 name = "comenqd"
 version = "0.1.0"
 dependencies = [
@@ -404,6 +414,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "comenq-lib",
+ "comenq-transport",
  "figment",
  "metrics",
  "metrics-exporter-prometheus",

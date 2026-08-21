@@ -36,6 +36,7 @@ harness = false
 members = [
     "crates/comenq",
     "crates/comenqd",
+    "crates/comenq-transport",
     "crates/test-utils",
     "test-support",
 ]

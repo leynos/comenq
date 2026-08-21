@@ -52,7 +52,7 @@ pub struct Config {
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
     /// directory is available, falling back to the system-wide path
-    /// otherwise. See [`comenq_lib::default_socket_path`].
+    /// otherwise. See [`comenq_transport::default_socket_path`].
     #[serde(default = "default_socket_path")]
     pub socket_path: PathBuf,
     /// Directory for the persistent queue.
@@ -187,7 +187,7 @@ struct CliArgs {
 }
 
 fn default_socket_path() -> PathBuf {
-    comenq_lib::default_socket_path()
+    comenq_transport::default_socket_path()
 }
 
 fn default_queue_path() -> PathBuf {

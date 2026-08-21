@@ -124,7 +124,7 @@ impl Args {
     ///
     /// An explicit `--socket` (or `COMENQ_SOCKET`) yields exactly that
     /// path; otherwise the discovery candidates from
-    /// [`comenq_lib::socket_candidates`] are returned. Callers connect to
+    /// [`comenq_transport::socket_candidates`] are returned. Callers connect to
     /// each in turn so a stale socket file cannot shadow a live daemon.
     ///
     /// # Examples
@@ -151,7 +151,9 @@ impl Args {
     pub fn socket_candidates(&self) -> Vec<PathBuf> {
         self.socket
             .clone()
-            .map_or_else(comenq_lib::socket_candidates, |explicit| vec![explicit])
+            .map_or_else(comenq_transport::socket_candidates, |explicit| {
+                vec![explicit]
+            })
     }
 }
 
@@ -228,7 +230,7 @@ mod tests {
         assert_eq!(args.socket, None);
         assert_eq!(
             args.socket_candidates(),
-            vec![PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH)]
+            vec![PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)]
         );
     }
 
@@ -248,7 +250,7 @@ mod tests {
             args.socket_candidates(),
             vec![
                 dir.path().join("comenq/comenq.sock"),
-                PathBuf::from(comenq_lib::DEFAULT_SOCKET_PATH),
+                PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH),
             ]
         );
     }

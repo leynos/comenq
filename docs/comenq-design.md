@@ -103,7 +103,9 @@ restart independently.
 - Recovery path: Supervisor-owned recovery state retains the receiver and any
   pending payload outside the restartable writer task. After a writer failure,
   the supervisor reopens only the `yaque::Sender` and reuses that state, so the
-  pending payload is retried without duplication.
+  pending payload is retried. This preserves accepted work across writer
+  failures, but delivery remains at least once: an abort after a successful
+  enqueue and before `pending` is cleared can enqueue the payload again.
 
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
@@ -145,9 +147,11 @@ pattern.[^3]
 The CLI accepts three required positional arguments, matching the user's
 requested invocation format: `comenq <owner/repo> <pr_number> <comment_body>`.
 The production `Args` type also accepts an optional `--socket` (or
-`COMENQ_SOCKET`) override. Without an override, `socket_candidates()` discovers
-the user runtime socket and then the system socket; the client tries each
-candidate by connecting, so a stale socket file does not hide a live daemon. See
+`COMENQ_SOCKET`) override. Without an override, `socket_candidates()` includes
+the user socket first only when `XDG_RUNTIME_DIR` is a non-empty absolute path,
+followed by the system socket; the client tries each candidate by connecting,
+so a stale socket file does not hide a live daemon. See the `comenq-transport`
+crate for the shared policy,
 [`crates/comenq/src/lib.rs`](../crates/comenq/src/lib.rs) for the parser and
 [`crates/comenq/src/client.rs`](../crates/comenq/src/client.rs) for the
 connection and request-writing code.
@@ -259,9 +263,10 @@ instrumentation records the task, attempt, queue path, and scheduled delay.
 Supervisor-owned recovery state retains the `mpsc` receiver and any pending
 payload outside the restartable writer task. When the writer fails, the
 supervisor opens a fresh `yaque::Sender`, reuses that state, and restarts the
-writer. This preserves the exactly-once handoff for accepted requests across
-writer task failures and sender reopens. Worker restarts open a fresh
-`yaque::Receiver` while the writer continues to own the sender.
+writer. This preserves accepted requests across writer task failures and sender
+reopens, but the handoff is at least once: cancellation after an enqueue and
+before clearing the pending payload can cause a retry. Worker restarts open a
+fresh `yaque::Receiver` while the active writer owns the sender.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -657,15 +662,16 @@ The daemon also runs unprivileged under `systemd --user`, using the
 `packaging/linux/comenqd-user.service` unit and the matching example
 configuration `packaging/config/comenqd-user.toml`:
 
-- The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`;
-  `RuntimeDirectory=comenq` provisions the directory. The client probes the
-  user socket first, then falls back to the system socket when the connection
-  fails.
+- The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when
+  `XDG_RUNTIME_DIR` is a non-empty absolute path; `RuntimeDirectory=comenq`
+  provisions the directory. The client probes the user socket first, then falls
+  back to the system socket when the connection fails. Without a valid user
+  runtime directory, it uses the system socket.
 - The queue lives in `~/.local/state/comenq/queue`, provided through
   `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
   the unit.
 - The PAT is supplied through the systemd credential system:
-  `LoadCredential=token:%h/pandalump-token` exposes the token file to the
+  `LoadCredential=token:%h/.config/comenqd/token` exposes the token file to the
   service, and the configuration references it as
   `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`, keeping the secret
   out of the unit, the environment, and `ps` output.

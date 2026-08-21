@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::supervisor::backoff;
@@ -114,7 +114,7 @@ fn create_socket_parent(parent: &Path) -> Result<()> {
 /// and not treated as an error.
 pub async fn run_listener(
     config: Arc<Config>,
-    client_tx: Arc<Mutex<mpsc::Sender<Vec<u8>>>>,
+    client_tx: mpsc::Sender<Vec<u8>>,
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let socket_path = config.socket_path.clone();
@@ -134,8 +134,7 @@ pub async fn run_listener(
                     let uid = cred.as_ref().map(|c| c.uid());
                     let client_tx = client_tx.clone();
                     tokio::spawn(async move {
-                        let tx = client_tx.lock().await.clone();
-                        if let Err(e) = handle_client(stream, tx).await {
+                        if let Err(e) = handle_client(stream, client_tx).await {
                             match (pid, uid) {
                                 (Some(pid), Some(uid)) => {
                                     tracing::warn!(pid, uid, error = %e, "Client handling failed");

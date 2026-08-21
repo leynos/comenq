@@ -2,29 +2,35 @@
 
 ## Architecture
 
-The workspace separates shared protocol types and socket discovery in the root
-`comenq-lib` crate from the `comenq` client and `comenqd` daemon adapters. The
-daemon composes configuration, the Unix socket listener, persistent `yaque`
-queue, GitHub worker, and task supervisor. The detailed component and lifecycle
-design is maintained in [Comenq design](comenq-design.md), especially
+The root `comenq-lib` crate owns only shared protocol types. The
+`comenq-transport` crate owns socket-discovery policy because it reads
+`XDG_RUNTIME_DIR`; the `comenq` client and `comenqd` daemon use its helpers in
+their transport and configuration adapters. The daemon composes configuration,
+the Unix socket listener, persistent `yaque` queue, GitHub worker, and task
+supervisor. The detailed component and lifecycle design is maintained in
+[Comenq design](comenq-design.md), especially
 [Daemon architecture](comenq-design.md#section-3-design-of-the-comenqd-daemon)
 and
 [Source code for `comenqd`](comenq-design.md#55-source-code-for-comenqd-daemon).
 
-`user_socket_path()` returns a per-user socket only when `XDG_RUNTIME_DIR` is a
-non-empty absolute path. `default_socket_path()` selects that path for a daemon
-or the system default otherwise. `socket_candidates()` returns the user path
-first, then `/run/comenq/comenq.sock`, without duplicates. The client probes
-those candidates by connecting rather than checking for socket files. An
+`comenq_transport::user_socket_path()` returns a per-user socket only when
+`XDG_RUNTIME_DIR` is a non-empty absolute path.
+`comenq_transport::default_socket_path()` selects that path for a daemon or the
+system default otherwise. `comenq_transport::socket_candidates()` returns the
+user path first, then `/run/comenq/comenq.sock`, without duplicates. The client
+probes those candidates by connecting rather than checking for socket files. An
 explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate.
 
-The supervisor owns the `yaque::Sender` used by the queue writer; it opens that
-side at startup and whenever the writer restarts. Each worker start opens only
-the matching `yaque::Receiver`. This one-side-per-task topology avoids yaque's
-per-side lock contention. Restart tracing includes the task name, attempt,
-queue path, queue side, and backoff delay where applicable. Writer recovery is
-bounded to five restart attempts; when that limit is exhausted, the supervisor
-signals daemon shutdown.
+The supervisor manages the `yaque::Sender` lifecycle and passes the active
+sender to the queue writer; it opens that side at startup and whenever the
+writer restarts. Each worker start opens only the matching `yaque::Receiver`.
+This one-side-per-task topology avoids yaque's per-side lock contention.
+Restart tracing includes the task name, attempt, queue path, queue side, and
+backoff delay where applicable. Writer recovery retains the receiver and
+pending payload across restarts, preserving accepted work with at-least-once
+delivery; an abort after enqueue and before clearing the pending payload can
+result in a retry. Recovery is bounded to five restart attempts; when that
+limit is exhausted, the supervisor signals daemon shutdown.
 
 The worker uses `rand` to choose a new uniformly distributed flutter for each
 cooldown. Flutter is added to the complete base cooldown and never shortens it.

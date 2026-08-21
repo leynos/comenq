@@ -23,6 +23,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 color-eyre = { workspace = true }
 comenq-lib = { path = "../.." }
+comenq-transport = { path = "../comenq-transport" }
 ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
 test-support = { workspace = true, optional = true }

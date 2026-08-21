@@ -19,7 +19,7 @@ use tempfile::{TempDir, tempdir};
 use test_support::{octocrab_for, temp_config};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, Notify, mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::sleep;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -130,11 +130,7 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
     let (client_tx, writer_rx) = mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let writer_handle = tokio::spawn(queue_writer(sender, writer_rx));
-    let listener_task = tokio::spawn(run_listener(
-        cfg.clone(),
-        Arc::new(Mutex::new(client_tx)),
-        shutdown_rx,
-    ));
+    let listener_task = tokio::spawn(run_listener(cfg.clone(), client_tx, shutdown_rx));
     wait_for_file(&cfg.socket_path, 10, Duration::from_millis(10)).await;
     let mut stream = UnixStream::connect(&cfg.socket_path)
         .await

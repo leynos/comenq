@@ -1,0 +1,12 @@
+[package]
+name = "comenq-transport"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = { workspace = true }
+test-support = { workspace = true }

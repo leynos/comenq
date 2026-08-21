@@ -21,11 +21,11 @@ install -Dm600 packaging/config/comenqd-user.toml \
 ```
 
 The packaged unit expects the GitHub Personal Access Token (PAT) at
-`~/pandalump-token`. Create that file without exposing the token in shell
+`~/.config/comenqd/token`. Create that file without exposing the token in shell
 history, and restrict it to the account running the service:
 
 ```bash
-install -m600 /path/to/token ~/pandalump-token
+install -m600 /path/to/token ~/.config/comenqd/token
 systemctl --user daemon-reload
 systemctl --user enable --now comenqd.service
 systemctl --user status comenqd.service
@@ -38,8 +38,8 @@ systemd-provisioned `RuntimeDirectory`. The packaged user unit stores the
 persistent queue at `~/.local/state/comenq/queue`.
 
 Change the source path in `LoadCredential` if the token is stored elsewhere.
-The unit uses `LoadCredential=token:%h/pandalump-token`; systemd makes the
-credential available as `${CREDENTIALS_DIRECTORY}/token`, which the example
+The unit uses `LoadCredential=token:%h/.config/comenqd/token`; systemd makes
+the credential available as `${CREDENTIALS_DIRECTORY}/token`, which the example
 configuration selects through `github_token_file`. This keeps the PAT out of
 the unit and process environment.
 

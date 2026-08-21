@@ -1,7 +1,8 @@
 //! Tests queue-writer recovery without dropping accepted client payloads.
 
 use super::{
-    MAX_WRITER_RESTARTS, QueueWriterState, queue_writer, run_queue_writer, supervise_writer,
+    MAX_WRITER_RESTARTS, QueueWriterExit, QueueWriterState, queue_writer, run_queue_writer,
+    run_queue_writer_with_after_enqueue, spawn_queue_writer, supervise_writer,
 };
 use crate::supervisor::ensure_queue_dir;
 use ::metrics::set_default_local_recorder;
@@ -9,7 +10,7 @@ use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, SenderBuilder};
 
 #[tokio::test(flavor = "current_thread")]
@@ -48,7 +49,7 @@ async fn queue_writer_records_depth_and_enqueue_failure() {
 }
 
 #[tokio::test]
-async fn queue_writer_retries_failed_payload_without_duplication() {
+async fn queue_writer_retries_failed_payload() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let queue_path = dir.path().join("queue");
     let sender = SenderBuilder::new()
@@ -68,17 +69,20 @@ async fn queue_writer_retries_failed_payload_without_duplication() {
     drop(input_tx);
     fs::remove_dir_all(&queue_path).expect("force enqueue failure");
 
-    let state = run_queue_writer(sender, QueueWriterState::new(input_rx)).await;
+    let QueueWriterExit::EnqueueFailed(state) =
+        run_queue_writer(sender, QueueWriterState::new(input_rx)).await
+    else {
+        panic!("removed queue sender must fail enqueue");
+    };
     assert_eq!(
         state.pending.lock().await.as_deref(),
         Some(payload.as_slice())
     );
     let sender = Sender::open(&queue_path).expect("reopen queue sender");
-    let state = run_queue_writer(sender, state).await;
-    assert!(
-        state.pending.lock().await.is_none(),
-        "retry should consume the payload"
-    );
+    assert!(matches!(
+        run_queue_writer(sender, state).await,
+        QueueWriterExit::ClientChannelClosed
+    ));
     let mut receiver = Receiver::open(&queue_path).expect("open queue receiver");
     let queued = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -90,7 +94,106 @@ async fn queue_writer_retries_failed_payload_without_duplication() {
         tokio::time::timeout(Duration::from_millis(100), receiver.recv())
             .await
             .is_err(),
-        "retried payload must not be duplicated"
+        "the completed retry does not enqueue a second payload"
+    );
+}
+
+#[tokio::test]
+async fn writer_exits_when_all_client_senders_are_dropped() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let cfg: Arc<crate::config::Config> = Arc::new(test_support::temp_config(&dir).into());
+    ensure_queue_dir(&cfg.queue_path)
+        .await
+        .expect("create queue directory");
+    let sender = Sender::open(&cfg.queue_path).expect("open queue sender");
+    let (client_tx, client_rx) = mpsc::channel(1);
+    drop(client_tx);
+    let writer = spawn_queue_writer(sender, QueueWriterState::new(client_rx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        supervise_writer(
+            writer,
+            QueueWriterState::new(mpsc::channel(1).1),
+            std::iter::empty(),
+            cfg,
+            |path| Sender::open(path).map_err(anyhow::Error::from),
+            shutdown_tx,
+            shutdown_rx,
+        ),
+    )
+    .await
+    .expect("supervisor exits after normal client channel closure");
+
+    assert!(
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .iter()
+            .all(|(key, _, _, _)| { key.key().name() != "comenqd_task_restarts_total" })
+    );
+}
+
+#[tokio::test]
+async fn shutdown_after_enqueue_preserves_the_persisted_payload() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let cfg: Arc<crate::config::Config> = Arc::new(test_support::temp_config(&dir).into());
+    ensure_queue_dir(&cfg.queue_path)
+        .await
+        .expect("create queue directory");
+    let sender = Sender::open(&cfg.queue_path).expect("open queue sender");
+    let (client_tx, client_rx) = mpsc::channel(1);
+    let payload = b"persist before shutdown".to_vec();
+    client_tx
+        .send(payload.clone())
+        .await
+        .expect("queue payload");
+    let state = QueueWriterState::new(client_rx);
+    let recovery_state = state.clone();
+    let enqueued = Arc::new(Notify::new());
+    let continue_after_enqueue = Arc::new(Notify::new());
+    let notify_enqueued = Arc::clone(&enqueued);
+    let wait_for_shutdown = Arc::clone(&continue_after_enqueue);
+    let writer = tokio::spawn(run_queue_writer_with_after_enqueue(
+        sender,
+        state,
+        move || {
+            let notify_enqueued = Arc::clone(&notify_enqueued);
+            let wait_for_shutdown = Arc::clone(&wait_for_shutdown);
+            async move {
+                notify_enqueued.notify_one();
+                wait_for_shutdown.notified().await;
+            }
+        },
+    ));
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let supervisor = tokio::spawn(supervise_writer(
+        writer,
+        recovery_state,
+        std::iter::empty(),
+        cfg.clone(),
+        |path| Sender::open(path).map_err(anyhow::Error::from),
+        shutdown_tx.clone(),
+        shutdown_rx,
+    ));
+
+    enqueued.notified().await;
+    shutdown_tx.send(()).expect("signal shutdown");
+    supervisor.await.expect("join writer supervisor");
+
+    let mut receiver = Receiver::open(&cfg.queue_path).expect("open queue receiver");
+    let queued = receiver.recv().await.expect("receive persisted payload");
+    assert_eq!(&*queued, payload.as_slice());
+    queued.commit().expect("commit persisted payload");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "shutdown must not duplicate the payload that was already persisted"
     );
 }
 

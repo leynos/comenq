@@ -5,6 +5,7 @@
 
 use super::observability::log_task_failure;
 use super::{Config, Path, metrics, sleep_or_shutdown};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -21,6 +22,14 @@ pub(super) fn writer_backoff(min_delay: Duration) -> impl Iterator<Item = Durati
 pub(super) struct QueueWriterState {
     pub(super) receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     pub(super) pending: Arc<tokio::sync::Mutex<Option<Vec<u8>>>>,
+}
+
+/// Reason the queue writer stopped processing client requests.
+pub(super) enum QueueWriterExit {
+    /// All client senders were dropped, so no recovery is required.
+    ClientChannelClosed,
+    /// Persistent enqueue failed and the retained payload needs recovery.
+    EnqueueFailed(QueueWriterState),
 }
 
 impl QueueWriterState {
@@ -43,7 +52,7 @@ impl Clone for QueueWriterState {
 
 #[tracing::instrument(skip_all, fields(task = "writer", queue = %cfg.queue_path.display()))]
 pub(super) async fn supervise_writer<I, O>(
-    mut handle: tokio::task::JoinHandle<QueueWriterState>,
+    mut handle: tokio::task::JoinHandle<QueueWriterExit>,
     recovery_state: QueueWriterState,
     mut backoff: I,
     cfg: Arc<Config>,
@@ -67,7 +76,8 @@ pub(super) async fn supervise_writer<I, O>(
             }
             res = &mut handle => {
                 let state = match res {
-                    Ok(state) => state,
+                    Ok(QueueWriterExit::ClientChannelClosed) => break,
+                    Ok(QueueWriterExit::EnqueueFailed(state)) => state,
                     Err(e) => {
                         // Only log join failures here; queue_writer logs enqueue errors.
                         log_task_failure::<(), _>("writer", &Err(e));
@@ -116,7 +126,7 @@ pub(super) async fn supervise_writer<I, O>(
                             error = %e,
                             "Queue sender creation failed",
                         );
-                        handle = tokio::spawn(async move { state });
+                        handle = tokio::spawn(async move { QueueWriterExit::EnqueueFailed(state) });
                     }
                 }
             }
@@ -147,14 +157,23 @@ pub async fn queue_writer(
 pub(super) fn spawn_queue_writer(
     sender: Sender,
     state: QueueWriterState,
-) -> tokio::task::JoinHandle<QueueWriterState> {
+) -> tokio::task::JoinHandle<QueueWriterExit> {
     tokio::spawn(run_queue_writer(sender, state))
 }
 
-pub(super) async fn run_queue_writer(
+pub(super) async fn run_queue_writer(sender: Sender, state: QueueWriterState) -> QueueWriterExit {
+    run_queue_writer_with_after_enqueue(sender, state, || std::future::ready(())).await
+}
+
+async fn run_queue_writer_with_after_enqueue<F, Fut>(
     mut sender: Sender,
     state: QueueWriterState,
-) -> QueueWriterState {
+    mut after_enqueue: F,
+) -> QueueWriterExit
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
     loop {
         let bytes = {
             let pending = state.pending.lock().await;
@@ -164,7 +183,7 @@ pub(super) async fn run_queue_writer(
                     drop(pending);
                     let mut receiver = state.receiver.lock().await;
                     let Some(bytes) = receiver.recv().await else {
-                        break;
+                        return QueueWriterExit::ClientChannelClosed;
                     };
                     let depth = receiver.len();
                     drop(receiver);
@@ -178,11 +197,11 @@ pub(super) async fn run_queue_writer(
         if let Err(e) = sender.send(&bytes).await {
             metrics::record_queue_writer_failure();
             tracing::error!(error = %e, "Queue enqueue failed");
-            break;
+            return QueueWriterExit::EnqueueFailed(state);
         }
+        after_enqueue().await;
         *state.pending.lock().await = None;
     }
-    state
 }
 
 #[cfg(test)]
