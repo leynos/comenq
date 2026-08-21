@@ -22,7 +22,9 @@ The supervisor owns the `yaque::Sender` used by the queue writer; it opens that
 side at startup and whenever the writer restarts. Each worker start opens only
 the matching `yaque::Receiver`. This one-side-per-task topology avoids yaque's
 per-side lock contention. Restart tracing includes the task name, attempt,
-queue path, queue side, and backoff delay where applicable.
+queue path, queue side, and backoff delay where applicable. Writer recovery is
+bounded to five restart attempts; when that limit is exhausted, the supervisor
+signals daemon shutdown.
 
 The worker uses `rand` to choose a new uniformly distributed flutter for each
 cooldown. Flutter is added to the complete base cooldown and never shortens it.
@@ -50,8 +52,8 @@ cooldown wait. Operators and developers can select the emitted detail through
 `RUST_LOG`. The credential reader rejects files larger than 64 KiB before
 trimming their contents.
 
-Prometheus metrics are exposed at `127.0.0.1:9000/metrics`. The stable metric
-vocabulary is:
+The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`.
+The stable metric vocabulary is:
 
 - `comenqd_task_restarts_total{task=listener|worker|writer}` for supervised
   task restarts.
@@ -60,6 +62,9 @@ vocabulary is:
 - `comenqd_client_channel_depth` for the bounded client-channel depth proxy.
 - `comenqd_requests_total{outcome=accepted|rejected}` for request outcomes.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
+- `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
+  comment-post outcomes.
+- `comenqd_github_post_duration_seconds` for GitHub comment-post durations.
 
 ## Testing support
 

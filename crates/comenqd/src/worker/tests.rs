@@ -2,9 +2,11 @@
 
 use super::{
     Config, Notify, WorkerControl, WorkerHooks, build_octocrab, cooldown_with_flutter,
-    cooldown_with_flutter_using, cooldown_with_selected_flutter, run_worker, wait_for_cooldown,
+    cooldown_with_flutter_using, cooldown_with_selected_flutter, post_comment_with_metrics,
+    run_worker, wait_for_cooldown,
 };
 use ::metrics::set_default_local_recorder;
+use comenq_lib::CommentRequest;
 use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use proptest::prelude::*;
 use std::sync::{
@@ -13,7 +15,10 @@ use std::sync::{
 };
 use std::time::Duration;
 use std::time::Instant;
+use test_support::octocrab_for;
 use tokio::sync::watch;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 use yaque::{Receiver, Sender};
 
 /// Build a minimal config with the given cooldown and flutter.
@@ -122,6 +127,62 @@ async fn cooldown_wait_records_the_effective_flutter_duration() {
             && matches!(value, DebugValue::Histogram(values) if values
                 .iter()
                 .any(|value| value.0.to_bits() == 300.0_f64.to_bits()))
+    }));
+}
+
+#[tokio::test]
+#[serial_test::serial(metrics)]
+async fn github_post_metrics_record_api_errors_and_timeouts() {
+    let request = CommentRequest {
+        owner: "owner".into(),
+        repo: "repo".into(),
+        pr_number: 1,
+        body: "body".into(),
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/owner/repo/issues/1/comments"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let octocrab = octocrab_for(&server).expect("build mock GitHub client");
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
+
+    assert!(
+        post_comment_with_metrics(&octocrab, &request, &config_with_flutter(1, 0))
+            .await
+            .is_err()
+    );
+
+    let timeout_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/owner/repo/issues/1/comments"))
+        .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_secs(1)))
+        .mount(&timeout_server)
+        .await;
+    let timeout_octocrab = octocrab_for(&timeout_server).expect("build timeout client");
+    let mut timeout_config = config_with_flutter(1, 0);
+    timeout_config.github_api_timeout_secs = 0;
+    assert!(
+        post_comment_with_metrics(&timeout_octocrab, &request, &timeout_config)
+            .await
+            .is_err()
+    );
+
+    let metrics = snapshotter.snapshot().into_vec();
+    let outcomes = metrics
+        .iter()
+        .filter(|(key, _, _, _)| key.key().name() == "comenqd_github_posts_total")
+        .flat_map(|(key, _, _, _)| key.key().labels())
+        .filter_map(|label| (label.key() == "outcome").then_some(label.value()))
+        .collect::<Vec<_>>();
+    assert!(outcomes.contains(&"api_error"));
+    assert!(outcomes.contains(&"timeout"));
+    assert!(metrics.iter().any(|(key, _, _, value)| {
+        key.key().name() == "comenqd_github_post_duration_seconds"
+            && matches!(value, DebugValue::Histogram(values) if !values.is_empty())
     }));
 }
 

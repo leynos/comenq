@@ -21,8 +21,11 @@ use crate::metrics;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
 mod observability;
+mod writer;
 
 use observability::log_task_failure;
+pub use writer::queue_writer;
+use writer::{QueueWriterState, spawn_queue_writer, supervise_writer, writer_backoff};
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -62,7 +65,7 @@ pub(crate) fn backoff(min_delay: Duration) -> ExponentialBackoff {
 /// Sleep for `d` or return early if `shutdown` is triggered.
 ///
 /// Returns `true` if a shutdown occurred.
-async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> bool {
+pub(super) async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> bool {
     tokio::select! {
         _ = tokio::time::sleep(d) => false,
         _ = shutdown.changed() => true,
@@ -121,149 +124,6 @@ async fn supervise_task<F, I>(
     }
 }
 
-#[tracing::instrument(skip_all, fields(task = "writer", queue = %cfg.queue_path.display()))]
-async fn supervise_writer(
-    mut handle: tokio::task::JoinHandle<QueueWriterState>,
-    mut backoff: ExponentialBackoff,
-    cfg: Arc<Config>,
-    client_tx: Arc<tokio::sync::Mutex<mpsc::Sender<Vec<u8>>>>,
-    mut shutdown: watch::Receiver<()>,
-) {
-    let mut restart_attempt = 0_u64;
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                let grace = tokio::time::sleep(Duration::from_millis(100));
-                tokio::select! {
-                    _ = &mut handle => {}
-                    _ = grace => handle.abort(),
-                }
-                break;
-            }
-            res = &mut handle => {
-                let state = match res {
-                    Ok(state) => state,
-                    Err(e) => {
-                        // Only log join failures here; queue_writer logs enqueue errors.
-                        log_task_failure::<(), _>("writer", &Err(e));
-                        let pair = mpsc::channel(cfg.client_channel_capacity);
-                        *client_tx.lock().await = pair.0;
-                        QueueWriterState::new(pair.1)
-                    }
-                };
-                restart_attempt = restart_attempt.saturating_add(1);
-                metrics::record_task_restart("writer");
-                let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
-                tracing::warn!(
-                    task = "writer",
-                    attempt = restart_attempt,
-                    delay_ms = delay.as_millis(),
-                    queue = %cfg.queue_path.display(),
-                    "Scheduling task restart",
-                );
-                if sleep_or_shutdown(&mut shutdown, delay).await {
-                    break;
-                }
-                // Open only the sender: the worker holds the queue's receiver,
-                // and yaque permits one live handle per side.
-                match Sender::open(&cfg.queue_path) {
-                    Ok(queue_tx) => {
-                        tracing::debug!(
-                            task = "writer",
-                            attempt = restart_attempt,
-                            side = "sender",
-                            queue = %cfg.queue_path.display(),
-                            "Queue side reopened",
-                        );
-                        handle = tokio::spawn(run_queue_writer(queue_tx, state));
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            task = "writer",
-                            attempt = restart_attempt,
-                            side = "sender",
-                            queue = %cfg.queue_path.display(),
-                            error = %e,
-                            "Queue sender creation failed",
-                        );
-                        handle = tokio::spawn(async move { state });
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct QueueWriterState {
-    receiver: mpsc::Receiver<Vec<u8>>,
-    pending: Option<Vec<u8>>,
-}
-
-impl QueueWriterState {
-    fn new(receiver: mpsc::Receiver<Vec<u8>>) -> Self {
-        Self {
-            receiver,
-            pending: None,
-        }
-    }
-}
-
-/// Forward bytes from a channel into the persistent queue.
-///
-/// The queue writer decouples the listener from the queue, ensuring a
-/// single writer for the `yaque` queue. It reads raw JSON payloads from the
-/// provided [`mpsc::Receiver`] and attempts to enqueue each item
-/// using the [`yaque::Sender`]. On enqueue failure the error is logged and the
-/// loop terminates so a supervising task can recreate the sender.
-///
-/// When the loop terminates, the receiver is returned. The supervisor retains
-/// a failed payload and retries it before consuming another request.
-///
-/// # Examples
-/// ```rust,no_run
-/// use yaque::channel;
-/// use tokio::sync::mpsc;
-/// # async fn docs() -> anyhow::Result<()> {
-/// let (queue_tx, _rx) = channel("/tmp/q")?;
-/// let (tx, rx) = mpsc::channel(1);
-/// tokio::spawn(async move { comenqd::daemon::queue_writer(queue_tx, rx).await });
-/// tx.send(Vec::new())
-///     .await
-///     .expect("send on docs channel failed");
-/// # Ok(())
-/// # }
-/// ```
-pub async fn queue_writer(
-    sender: Sender,
-    receiver: mpsc::Receiver<Vec<u8>>,
-) -> mpsc::Receiver<Vec<u8>> {
-    run_queue_writer(sender, QueueWriterState::new(receiver))
-        .await
-        .receiver
-}
-
-async fn run_queue_writer(mut sender: Sender, mut state: QueueWriterState) -> QueueWriterState {
-    loop {
-        let bytes = match state.pending.take() {
-            Some(bytes) => bytes,
-            None => match state.receiver.recv().await {
-                Some(bytes) => {
-                    metrics::record_client_channel_depth(state.receiver.len());
-                    bytes
-                }
-                None => break,
-            },
-        };
-        if let Err(e) = sender.send(&bytes).await {
-            metrics::record_queue_writer_failure();
-            tracing::error!(error = %e, "Queue enqueue failed");
-            state.pending = Some(bytes);
-            break;
-        }
-    }
-    state
-}
-
 /// Start the daemon with the provided configuration.
 #[tracing::instrument(skip(config), fields(queue = %config.queue_path.display()))]
 pub async fn run(config: Config) -> Result<()> {
@@ -287,13 +147,14 @@ pub async fn run(config: Config) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     // Initial task spawns and backoff builders.
-    let writer = tokio::spawn(run_queue_writer(queue_tx, QueueWriterState::new(client_rx)));
+    let writer_state = QueueWriterState::new(client_rx);
+    let writer = spawn_queue_writer(queue_tx, writer_state.clone());
     let listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone(), 0);
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let listener_backoff = backoff(min_delay);
     let worker_backoff = backoff(min_delay);
-    let writer_backoff = backoff(min_delay);
+    let writer_backoff = writer_backoff(min_delay);
 
     // Convert SIGINT and SIGTERM into a shutdown signal.
     #[cfg(unix)]
@@ -355,7 +216,15 @@ pub async fn run(config: Config) -> Result<()> {
             },
             shutdown_worker.clone(),
         ),
-        supervise_writer(writer, writer_backoff, cfg.clone(), client_tx, shutdown_rx,),
+        supervise_writer(
+            writer,
+            writer_state,
+            writer_backoff,
+            cfg.clone(),
+            |path| Sender::open(path).map_err(anyhow::Error::from),
+            shutdown_tx,
+            shutdown_rx,
+        ),
     );
 
     Ok(())

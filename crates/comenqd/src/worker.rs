@@ -15,7 +15,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use yaque::Receiver;
@@ -133,6 +133,23 @@ async fn post_comment(
         Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
         Err(_) => Err(PostCommentError::Timeout),
     }
+}
+
+/// Post one queued request while recording its duration and bounded outcome.
+async fn post_comment_with_metrics(
+    octocrab: &Octocrab,
+    request: &CommentRequest,
+    config: &Config,
+) -> Result<(), PostCommentError> {
+    let start = Instant::now();
+    let result = post_comment(octocrab, request, config).await;
+    metrics::record_github_post_duration(start.elapsed());
+    metrics::record_github_post_outcome(match &result {
+        Ok(()) => "success",
+        Err(PostCommentError::Api(_)) => "api_error",
+        Err(PostCommentError::Timeout) => "timeout",
+    });
+    result
 }
 
 /// Hooks used to observe worker progress during tests.
@@ -320,7 +337,7 @@ pub async fn run_worker(
             }
         };
 
-        match post_comment(&octocrab, &request, &config).await {
+        match post_comment_with_metrics(&octocrab, &request, &config).await {
             Ok(_) => {
                 guard.commit()?;
             }

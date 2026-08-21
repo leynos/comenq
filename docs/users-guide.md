@@ -82,9 +82,10 @@ comenq --socket /run/comenq/comenq.sock owner/repository 123 "Queued"
 
 ## Inspect local metrics
 
-The daemon exposes Prometheus metrics at `http://127.0.0.1:9000/metrics`. This
-endpoint listens only on the local loopback interface, so it is not reachable
-from other hosts. Scrape it from the machine running `comenqd`:
+The daemon attempts to expose Prometheus metrics at
+`http://127.0.0.1:9000/metrics`. This endpoint listens only on the local
+loopback interface, so it is not reachable from other hosts. Scrape it from the
+machine running `comenqd`:
 
 ```bash
 curl http://127.0.0.1:9000/metrics
@@ -99,6 +100,9 @@ The stable metric names and labels are:
 - `comenqd_client_channel_depth` for the bounded client-channel depth proxy.
 - `comenqd_requests_total{outcome=accepted|rejected}` for request outcomes.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
+- `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
+  comment-post outcomes.
+- `comenqd_github_post_duration_seconds` for GitHub comment-post durations.
 
 ## Configure the cooldown
 

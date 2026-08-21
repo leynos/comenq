@@ -16,6 +16,8 @@ const QUEUE_WRITER_FAILURES: &str = "comenqd_queue_writer_failures_total";
 const CLIENT_CHANNEL_DEPTH: &str = "comenqd_client_channel_depth";
 const REQUESTS: &str = "comenqd_requests_total";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
+const GITHUB_POSTS: &str = "comenqd_github_posts_total";
+const GITHUB_POST_DURATION: &str = "comenqd_github_post_duration_seconds";
 
 /// Install the Prometheus recorder and local scrape endpoint.
 ///
@@ -54,6 +56,16 @@ pub(crate) fn record_cooldown_wait(seconds: u64) {
     histogram!(COOLDOWN_WAIT_DURATION).record(seconds as f64);
 }
 
+/// Record the bounded result class of a GitHub comment request.
+pub(crate) fn record_github_post_outcome(outcome: &'static str) {
+    counter!(GITHUB_POSTS, "outcome" => outcome).increment(1);
+}
+
+/// Record the elapsed duration of a GitHub comment request.
+pub(crate) fn record_github_post_duration(duration: std::time::Duration) {
+    histogram!(GITHUB_POST_DURATION).record(duration.as_secs_f64());
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests bounded metric names, values, and labels emitted by this module.
@@ -85,6 +97,9 @@ mod tests {
             record_queue_writer_failure();
             record_request_outcome("accepted");
             record_request_outcome("rejected");
+            record_github_post_outcome("success");
+            record_github_post_outcome("api_error");
+            record_github_post_outcome("timeout");
         });
 
         let metrics = snapshotter.snapshot().into_vec();
@@ -106,6 +121,7 @@ mod tests {
                     ("task", "listener" | "worker" | "writer")
                         | ("queue_side", "sender")
                         | ("outcome", "accepted" | "rejected")
+                        | ("outcome", "success" | "api_error" | "timeout")
                 )
             })
         }));
@@ -118,10 +134,12 @@ mod tests {
         with_local_recorder(&recorder, || {
             record_client_channel_depth(3);
             record_cooldown_wait(45);
+            record_github_post_duration(std::time::Duration::from_secs(2));
         });
 
         let metrics = snapshotter.snapshot().into_vec();
         assert!(metric_names(&metrics).contains(&CLIENT_CHANNEL_DEPTH));
         assert!(metric_names(&metrics).contains(&COOLDOWN_WAIT_DURATION));
+        assert!(metric_names(&metrics).contains(&GITHUB_POST_DURATION));
     }
 }

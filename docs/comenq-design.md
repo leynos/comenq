@@ -100,9 +100,10 @@ restart independently.
   writer is unavailable. Its capacity is configured by
   `client_channel_capacity`.
 
-- Lossy path: If the writer task panics, the old receiver is dropped and any
-  buffered items in that channel are lost. This is the only scenario where
-  pending requests may be discarded.
+- Recovery path: Supervisor-owned recovery state retains the receiver and any
+  pending payload outside the restartable writer task. After a writer failure,
+  the supervisor reopens only the `yaque::Sender` and reuses that state, so the
+  pending payload is retried without duplication.
 
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
@@ -249,16 +250,18 @@ processes the queue at its own deliberate pace.
 All daemon tasks—the listener, worker, and queue writer—are supervised. If any
 task exits unexpectedly, the daemon logs the failure, waits using an
 exponential backoff with jitter (via the `backon` crate) to avoid a tight
-restart loop, and then respawns the task. The minimum delay between restarts is
-configurable via `restart_min_delay_ms`. Restart instrumentation records the
-task, attempt, queue path, and scheduled delay.
+restart loop, and then respawns the task. Queue-writer recovery is bounded to
+five restart attempts; when that limit is exhausted, the supervisor signals
+daemon shutdown instead of scheduling another restart. The minimum delay
+between restarts is configurable via `restart_min_delay_ms`. Restart
+instrumentation records the task, attempt, queue path, and scheduled delay.
 
-When the writer returns its `mpsc` receiver, the supervisor preserves that
-receiver, opens a fresh `yaque::Sender`, and restarts the writer. If the writer
-task panics, its receiver is unavailable; the supervisor replaces the
-listener-to-writer channel, and a listener restart obtains the new sender. Any
-bytes buffered only in the discarded receiver can then be lost. Worker restarts
-open a fresh `yaque::Receiver` while the writer continues to own the sender.
+Supervisor-owned recovery state retains the `mpsc` receiver and any pending
+payload outside the restartable writer task. When the writer fails, the
+supervisor opens a fresh `yaque::Sender`, reuses that state, and restarts the
+writer. This preserves the exactly-once handoff for accepted requests across
+writer task failures and sender reopens. Worker restarts open a fresh
+`yaque::Receiver` while the writer continues to own the sender.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -504,7 +507,7 @@ When run as a `systemd` service, these logs will be automatically captured by
 the system's journal, making them easily accessible for administrators via
 `journalctl`.
 
-The daemon also exposes Prometheus metrics at `127.0.0.1:9000/metrics`:
+The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`:
 
 - `comenqd_task_restarts_total{task=listener|worker|writer}` counts supervised
   task restarts.
@@ -514,6 +517,9 @@ The daemon also exposes Prometheus metrics at `127.0.0.1:9000/metrics`:
   proxy, updated when requests enter and leave the channel.
 - `comenqd_requests_total{outcome=accepted|rejected}` counts request outcomes.
 - `comenqd_cooldown_wait_duration_seconds` records cooldown wait durations.
+- `comenqd_github_posts_total{outcome=success|api_error|timeout}` counts GitHub
+  comment-post outcomes.
+- `comenqd_github_post_duration_seconds` records GitHub comment-post durations.
 
 ## Section 4: Deployment and Operationalization
 

@@ -39,8 +39,11 @@ pub struct Config {
     /// Optional path to a file containing the GitHub Personal Access Token.
     ///
     /// When set, the file is read at startup and its trimmed contents
-    /// override [`Config::github_token`]. A leading `${VAR}` placeholder is
-    /// expanded from the environment, so systemd credentials work with
+    /// override [`Config::github_token`] unless an explicit `--github-token`
+    /// argument is supplied. Selecting a file never falls back to the inline
+    /// token: an unreadable or empty file is a configuration error. A leading
+    /// `${VAR}` placeholder is expanded from the environment, so systemd
+    /// credentials work with
     /// `LoadCredential=token:...` and
     /// `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`.
     #[serde(default)]
