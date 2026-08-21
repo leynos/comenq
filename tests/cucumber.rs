@@ -21,7 +21,6 @@ fn main() -> anyhow::Result<()> {
         .context("failed to build the Tokio runtime for the cucumber test binary")?;
     runtime.block_on(async {
         tokio::join!(
-            CliWorld::run("tests/features/cli.feature"),
             ReleaseWorld::run("tests/features/release.feature"),
             CommentWorld::run("tests/features/comment_request.feature"),
             ListenerWorld::run("tests/features/listener.feature"),
@@ -29,8 +28,9 @@ fn main() -> anyhow::Result<()> {
             WorkerWorld::run("tests/features/worker.feature"),
         );
 
-        // Both worlds temporarily set XDG_RUNTIME_DIR, which is process-wide.
-        // Run them separately so their socket-discovery assertions cannot race.
+        // These worlds temporarily mutate process-wide environment variables.
+        // Run them separately so their environment-dependent assertions cannot race.
+        CliWorld::run("tests/features/cli.feature").await;
         ClientWorld::run("tests/features/client_main.feature").await;
         ConfigWorld::run("tests/features/config.feature").await;
     });
