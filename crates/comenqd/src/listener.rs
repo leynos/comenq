@@ -112,6 +112,10 @@ fn create_socket_parent(parent: &Path) -> Result<()> {
 /// Returns an error if the socket cannot be created or if accepting a
 /// connection fails after retries. Exiting due to a shutdown signal is normal
 /// and not treated as an error.
+#[tracing::instrument(
+    skip(config, client_tx, shutdown),
+    fields(task = "listener", socket = %config.socket_path.display())
+)]
 pub async fn run_listener(
     config: Arc<Config>,
     client_tx: mpsc::Sender<Vec<u8>>,
@@ -175,13 +179,16 @@ pub async fn run_listener(
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
 pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 
+#[tracing::instrument(skip(stream, tx), fields(task = "listener", outcome = tracing::field::Empty))]
 pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
     let result = handle_client_inner(stream, tx).await;
-    metrics::record_request_outcome(if result.is_ok() {
+    let outcome = if result.is_ok() {
         "accepted"
     } else {
         "rejected"
-    });
+    };
+    tracing::Span::current().record("outcome", outcome);
+    metrics::record_request_outcome(outcome);
     result
 }
 

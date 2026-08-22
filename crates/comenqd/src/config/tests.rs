@@ -213,6 +213,16 @@ fn invalid_configuration_errors(#[case] contents: &str) {
 
 #[rstest]
 #[serial_test::serial]
+fn whitespace_only_inline_token_errors() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "github_token=' \t '").expect("write whitespace token fixture");
+
+    assert!(Config::from_file(&path).is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
 fn defaults_are_applied() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");

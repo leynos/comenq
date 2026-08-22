@@ -7,11 +7,34 @@ use super::{
 use crate::supervisor::ensure_queue_dir;
 use ::metrics::set_default_local_recorder;
 use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+use rstest::fixture;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::{Notify, mpsc, watch};
 use yaque::{Receiver, Sender, SenderBuilder};
+
+struct WriterTestSetup {
+    _dir: TempDir,
+    cfg: Arc<crate::config::Config>,
+    sender: Sender,
+}
+
+#[fixture]
+async fn writer_test_setup() -> WriterTestSetup {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let cfg: Arc<crate::config::Config> = Arc::new(test_support::temp_config(&dir).into());
+    ensure_queue_dir(&cfg.queue_path)
+        .await
+        .expect("create queue directory");
+    let sender = Sender::open(&cfg.queue_path).expect("open queue sender");
+    WriterTestSetup {
+        _dir: dir,
+        cfg,
+        sender,
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn queue_writer_records_depth_and_enqueue_failure() {
@@ -98,17 +121,15 @@ async fn queue_writer_retries_failed_payload() {
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
-async fn writer_exits_when_all_client_senders_are_dropped() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let cfg: Arc<crate::config::Config> = Arc::new(test_support::temp_config(&dir).into());
-    ensure_queue_dir(&cfg.queue_path)
-        .await
-        .expect("create queue directory");
-    let sender = Sender::open(&cfg.queue_path).expect("open queue sender");
+async fn writer_exits_when_all_client_senders_are_dropped(
+    #[future(awt)] writer_test_setup: WriterTestSetup,
+) {
+    let WriterTestSetup { cfg, sender, .. } = writer_test_setup;
     let (client_tx, client_rx) = mpsc::channel(1);
     drop(client_tx);
-    let writer = spawn_queue_writer(sender, QueueWriterState::new(client_rx));
+    let writer = spawn_queue_writer(sender, QueueWriterState::new(client_rx), &cfg.queue_path, 0);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     let recorder = DebuggingRecorder::new();
@@ -138,14 +159,12 @@ async fn writer_exits_when_all_client_senders_are_dropped() {
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
-async fn shutdown_after_enqueue_preserves_the_persisted_payload() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let cfg: Arc<crate::config::Config> = Arc::new(test_support::temp_config(&dir).into());
-    ensure_queue_dir(&cfg.queue_path)
-        .await
-        .expect("create queue directory");
-    let sender = Sender::open(&cfg.queue_path).expect("open queue sender");
+async fn shutdown_after_enqueue_preserves_the_persisted_payload(
+    #[future(awt)] writer_test_setup: WriterTestSetup,
+) {
+    let WriterTestSetup { cfg, sender, .. } = writer_test_setup;
     let (client_tx, client_rx) = mpsc::channel(1);
     let payload = b"persist before shutdown".to_vec();
     client_tx
@@ -195,6 +214,43 @@ async fn shutdown_after_enqueue_preserves_the_persisted_payload() {
             .is_err(),
         "shutdown must not duplicate the payload that was already persisted"
     );
+}
+
+#[rstest::rstest]
+#[tokio::test]
+async fn cancelled_writer_releases_the_receiver_for_recovery(
+    #[future(awt)] writer_test_setup: WriterTestSetup,
+) {
+    let WriterTestSetup { cfg, sender, .. } = writer_test_setup;
+    let (client_tx, client_rx) = mpsc::channel(1);
+    let state = QueueWriterState::new(client_rx);
+    let recovery_state = state.clone();
+    let writer = tokio::spawn(run_queue_writer(sender, state));
+
+    tokio::task::yield_now().await;
+    writer.abort();
+    let join_error = match writer.await {
+        Ok(_) => panic!("cancelled writer must not complete"),
+        Err(error) => error,
+    };
+    assert!(join_error.is_cancelled());
+
+    let payload = b"recover after cancellation".to_vec();
+    client_tx
+        .send(payload.clone())
+        .await
+        .expect("queue payload after cancellation");
+    drop(client_tx);
+    let replacement_sender = Sender::open(&cfg.queue_path).expect("open replacement sender");
+    assert!(matches!(
+        run_queue_writer(replacement_sender, recovery_state).await,
+        QueueWriterExit::ClientChannelClosed
+    ));
+
+    let mut receiver = Receiver::open(&cfg.queue_path).expect("open queue receiver");
+    let queued = receiver.recv().await.expect("receive recovered payload");
+    assert_eq!(&*queued, payload.as_slice());
+    queued.commit().expect("commit recovered payload");
 }
 
 #[tokio::test]

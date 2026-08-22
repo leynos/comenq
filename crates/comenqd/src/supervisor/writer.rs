@@ -9,6 +9,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
+use tracing::Instrument;
 use yaque::Sender;
 
 /// Maximum consecutive queue-writer recovery attempts before shutdown.
@@ -19,6 +20,13 @@ pub(super) fn writer_backoff(min_delay: Duration) -> impl Iterator<Item = Durati
     super::backoff(min_delay).take(MAX_WRITER_RESTARTS)
 }
 
+/// Recovery state owned by the writer supervisor.
+///
+/// At most one writer task may call `recv` at a time: the supervisor always
+/// awaits or aborts the previous task before spawning a replacement. The
+/// receiver lock therefore protects hand-off across task cancellation. It is
+/// intentionally held while awaiting a message so a received payload is
+/// recorded in `pending` before any replacement can access the receiver.
 pub(super) struct QueueWriterState {
     pub(super) receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     pub(super) pending: Arc<tokio::sync::Mutex<Option<Vec<u8>>>>,
@@ -115,7 +123,7 @@ pub(super) async fn supervise_writer<I, O>(
                             queue = %cfg.queue_path.display(),
                             "Queue side reopened",
                         );
-                        handle = spawn_queue_writer(queue_tx, state);
+                        handle = spawn_queue_writer(queue_tx, state, &cfg.queue_path, restart_attempt);
                     }
                     Err(e) => {
                         tracing::error!(
@@ -157,8 +165,16 @@ pub async fn queue_writer(
 pub(super) fn spawn_queue_writer(
     sender: Sender,
     state: QueueWriterState,
+    queue_path: &Path,
+    attempt: u64,
 ) -> tokio::task::JoinHandle<QueueWriterExit> {
-    tokio::spawn(run_queue_writer(sender, state))
+    let span = tracing::info_span!(
+        "queue_writer",
+        task = "writer",
+        queue = %queue_path.display(),
+        attempt,
+    );
+    tokio::spawn(run_queue_writer(sender, state).instrument(span))
 }
 
 pub(super) async fn run_queue_writer(sender: Sender, state: QueueWriterState) -> QueueWriterExit {
@@ -176,11 +192,10 @@ where
 {
     loop {
         let bytes = {
-            let pending = state.pending.lock().await;
+            let mut pending = state.pending.lock().await;
             match pending.as_ref() {
                 Some(bytes) => bytes.clone(),
                 None => {
-                    drop(pending);
                     let mut receiver = state.receiver.lock().await;
                     let Some(bytes) = receiver.recv().await else {
                         return QueueWriterExit::ClientChannelClosed;
@@ -188,7 +203,6 @@ where
                     let depth = receiver.len();
                     drop(receiver);
                     metrics::record_client_channel_depth(depth);
-                    let mut pending = state.pending.lock().await;
                     *pending = Some(bytes.clone());
                     bytes
                 }

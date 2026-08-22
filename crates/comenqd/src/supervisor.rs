@@ -147,7 +147,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Initial task spawns and backoff builders.
     let writer_state = QueueWriterState::new(client_rx);
-    let writer = spawn_queue_writer(queue_tx, writer_state.clone());
+    let writer = spawn_queue_writer(queue_tx, writer_state.clone(), &cfg.queue_path, 0);
     let listener = spawn_listener(cfg.clone(), client_tx.clone(), shutdown_rx.clone());
     let worker = spawn_worker(cfg.clone(), octocrab.clone(), shutdown_rx.clone(), 0);
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);

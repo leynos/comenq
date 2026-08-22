@@ -1,7 +1,7 @@
 //! Tests for the queue worker's cooldown, flutter, and notification hooks.
 
 use super::{
-    Config, Notify, WorkerControl, WorkerHooks, build_octocrab, cooldown_with_flutter,
+    Config, WorkerControl, WorkerHooks, build_octocrab, cooldown_with_flutter,
     cooldown_with_flutter_using, cooldown_with_selected_flutter, post_comment_with_metrics,
     run_worker, wait_for_cooldown,
 };
@@ -16,6 +16,7 @@ use std::sync::{
 use std::time::Duration;
 use std::time::Instant;
 use test_support::octocrab_for;
+use tokio::sync::Notify;
 use tokio::sync::watch;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -93,21 +94,94 @@ async fn run_worker_waits_for_the_selected_flutter() {
     };
     let control = WorkerControl::new(shutdown_rx, hooks).with_test_flutter(240);
     let octocrab = Arc::new(build_octocrab("token").expect("build Octocrab"));
-    let worker = tokio::spawn(run_worker(Arc::new(config), receiver, octocrab, control));
+    let worker = run_worker(Arc::new(config), receiver, octocrab, control);
+    let observe_worker = async {
+        idle.notified().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(299)).await;
+        assert!(!cooldown_complete.load(Ordering::SeqCst));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(cooldown_complete.load(Ordering::SeqCst));
+        shutdown_tx.send(()).expect("signal shutdown");
+    };
+    let (worker_result, ()) = tokio::join!(worker, observe_worker);
 
-    idle.notified().await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(299)).await;
-    assert!(!cooldown_complete.load(Ordering::SeqCst));
-    tokio::time::advance(Duration::from_secs(1)).await;
-    tokio::task::yield_now().await;
-    assert!(cooldown_complete.load(Ordering::SeqCst));
+    worker_result.expect("worker should exit cleanly");
+}
 
-    shutdown_tx.send(()).expect("signal shutdown");
-    worker
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(metrics)]
+async fn run_worker_records_success_and_waits_for_the_selected_flutter() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let mut config = config_with_flutter(60, 240);
+    config.queue_path = dir.path().join("queue");
+    crate::supervisor::ensure_queue_dir(&config.queue_path)
         .await
-        .expect("join worker")
-        .expect("worker should exit cleanly");
+        .expect("create queue directory");
+    let mut sender = Sender::open(&config.queue_path).expect("open queue sender");
+    let request = CommentRequest {
+        owner: "owner".into(),
+        repo: "repo".into(),
+        pr_number: 1,
+        body: "body".into(),
+    };
+    sender
+        .send(serde_json::to_vec(&request).expect("serialize request"))
+        .await
+        .expect("enqueue valid request");
+    let receiver = Receiver::open(&config.queue_path).expect("open queue receiver");
+    let server = MockServer::start().await;
+    let response_body: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/github_comment_response.json"
+    ))
+    .expect("parse GitHub comment response fixture");
+    Mock::given(method("POST"))
+        .and(path("/repos/owner/repo/issues/1/comments"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(response_body))
+        .mount(&server)
+        .await;
+    let octocrab = octocrab_for(&server).expect("build mock GitHub client");
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let cooldown_complete = Arc::new(AtomicBool::new(false));
+    let cooldown_started = Arc::new(Notify::new());
+    let idle = Arc::new(Notify::new());
+    let hooks = WorkerHooks {
+        idle: Some(Arc::clone(&idle)),
+        cooldown_complete: Some(Arc::clone(&cooldown_complete)),
+        cooldown_started: Some(Arc::clone(&cooldown_started)),
+        ..WorkerHooks::default()
+    };
+    let control = WorkerControl::new(shutdown_rx, hooks).with_test_flutter(240);
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder_guard = set_default_local_recorder(&recorder);
+    let worker = run_worker(Arc::new(config), receiver, octocrab, control);
+    let observe_worker = async {
+        idle.notified().await;
+        tokio::time::pause();
+        cooldown_started.notified().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(299)).await;
+        assert!(!cooldown_complete.load(Ordering::SeqCst));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(cooldown_complete.load(Ordering::SeqCst));
+        shutdown_tx.send(()).expect("signal shutdown");
+    };
+    let (worker_result, ()) = tokio::join!(worker, observe_worker);
+
+    let metrics = snapshotter.snapshot().into_vec();
+    let outcomes = metrics
+        .iter()
+        .filter(|(key, _, _, _)| key.key().name() == "comenqd_github_posts_total")
+        .flat_map(|(key, _, _, _)| key.key().labels())
+        .filter_map(|label| (label.key() == "outcome").then_some(label.value()))
+        .collect::<Vec<_>>();
+    assert!(outcomes.contains(&"success"), "outcomes: {outcomes:?}");
+
+    worker_result.expect("worker should exit cleanly");
 }
 
 #[tokio::test(flavor = "current_thread")]

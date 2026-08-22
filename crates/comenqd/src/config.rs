@@ -332,7 +332,7 @@ impl Config {
                 "Using GitHub credential"
             );
         }
-        if self.github_token.is_empty() {
+        if self.github_token.trim().is_empty() {
             return Err(ortho_config::OrthoError::Validation {
                 key: "github_token".into(),
                 message: "provide github_token or github_token_file".into(),
