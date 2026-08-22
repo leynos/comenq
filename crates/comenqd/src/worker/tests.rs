@@ -22,6 +22,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use yaque::{Receiver, Sender};
 
+mod post_span;
+
 /// Build a minimal config with the given cooldown and flutter.
 fn config_with_flutter(cooldown: u64, flutter: u64) -> Config {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("create tempdir: {e}"));

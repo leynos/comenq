@@ -153,6 +153,10 @@ async fn post_comment(
 }
 
 /// Post one queued request while recording its duration and bounded outcome.
+#[tracing::instrument(
+    skip(octocrab, request, config),
+    fields(task = "worker", outcome = tracing::field::Empty)
+)]
 async fn post_comment_with_metrics(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -161,11 +165,13 @@ async fn post_comment_with_metrics(
     let start = Instant::now();
     let result = post_comment(octocrab, request, config).await;
     metrics::record_github_post_duration(start.elapsed());
-    metrics::record_github_post_outcome(match &result {
+    let outcome = match &result {
         Ok(()) => "success",
         Err(PostCommentError::Api(_)) => "api_error",
         Err(PostCommentError::Timeout) => "timeout",
-    });
+    };
+    tracing::Span::current().record("outcome", outcome);
+    metrics::record_github_post_outcome(outcome);
     result
 }
 

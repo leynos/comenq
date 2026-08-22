@@ -53,8 +53,11 @@ when the file is missing or invalid, or when no usable GitHub credential is
 available.
 
 Structured tracing records socket probes, the selected credential source (but
-never the token value), queue-side opens and task restarts, and each effective
-cooldown wait. Operators and developers can select the emitted detail through
+never the token value), queue-side opens and task restarts, each effective
+cooldown wait, and GitHub post spans. The post span contains only
+`task="worker"` and an `outcome` of `success`, `api_error`, or `timeout`; spans
+exclude credentials, payloads, repository names, paths, request identifiers,
+and raw errors. Operators and developers can select the emitted detail through
 `RUST_LOG`. The credential reader rejects files larger than 64 KiB before
 trimming their contents.
 

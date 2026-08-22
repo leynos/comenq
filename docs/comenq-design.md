@@ -500,17 +500,18 @@ logging. Key events to be logged include:
 
 - New comment request successfully enqueued.
 
-- Attempting to post a comment to a specific PR.
-
-- Comment successfully posted (including the URL of the new comment).
-
-- GitHub API call failed (including the error details).
+- GitHub comment-post outcomes.
 
 - Entering and exiting the cooldown period.
 
 When run as a `systemd` service, these logs will be automatically captured by
 the system's journal, making them easily accessible for administrators via
 `journalctl`.
+
+Each GitHub post runs in a worker span with `task="worker"` and a bounded
+`outcome` of `success`, `api_error`, or `timeout`. Spans never include
+credentials, payloads, repository names, socket or queue paths, request
+identifiers, or raw errors.
 
 The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`:
 
