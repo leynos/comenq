@@ -23,20 +23,26 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 color-eyre = { workspace = true }
 comenq-lib = { path = "../.." }
+comenq-transport = { path = "../comenq-transport" }
 ortho_config = { workspace = true }
 figment = { version = "0.10", default-features = false, features = ["env", "toml"] }
 test-support = { workspace = true, optional = true }
 backon = { workspace = true }
+rand = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
-serial_test = "2"
+serial_test = "3"
 test-support = { workspace = true }
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+metrics-util = { workspace = true }
 
 [features]
 default = []

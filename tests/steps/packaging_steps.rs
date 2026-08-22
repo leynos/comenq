@@ -47,3 +47,45 @@ fn includes_hardening(world: &mut PackagingWorld) -> anyhow::Result<()> {
     assert!(text.contains("NoNewPrivileges=true"));
     Ok(())
 }
+
+#[given("the user systemd unit file")]
+fn the_user_systemd_file(world: &mut PackagingWorld) -> anyhow::Result<()> {
+    let text =
+        fs::read_to_string("packaging/linux/comenqd-user.service").context("read user service")?;
+    world.content = Some(text);
+    Ok(())
+}
+
+#[then("it targets the user session")]
+fn targets_user_session(world: &mut PackagingWorld) -> anyhow::Result<()> {
+    let text = world.content.take().context("service loaded")?;
+    let section = |name: &str| {
+        let heading = format!("[{name}]");
+        text.lines()
+            .skip_while(|line| *line != heading)
+            .skip(1)
+            .take_while(|line| !line.starts_with('['))
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+    };
+    let service = section("Service");
+    let install = section("Install");
+
+    assert!(install.contains(&"WantedBy=default.target"));
+    assert!(service.contains(&"RuntimeDirectory=comenq"));
+    assert!(service.contains(&"RuntimeDirectoryMode=0700"));
+    assert!(service.contains(&"StateDirectory=comenq"));
+    assert!(service.contains(&"StateDirectoryMode=0700"));
+    assert!(service.contains(&"Environment=COMENQD_QUEUE_PATH=%S/comenq/queue"));
+    assert!(service.contains(&"LoadCredential=token:%h/.config/comenqd/token"));
+    assert!(service.contains(&"UMask=0077"));
+    assert!(service.contains(&"ProtectSystem=strict"));
+    assert!(service.contains(&"PrivateTmp=true"));
+    assert!(service.contains(&"ProtectHome=read-only"));
+    assert!(service.contains(&"ReadWritePaths=%S/comenq %t/comenq"));
+    assert!(
+        service
+            .contains(&"ExecStart=%h/.local/bin/comenqd --config %h/.config/comenqd/config.toml")
+    );
+    Ok(())
+}

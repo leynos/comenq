@@ -1,14 +1,10 @@
-//! Shared types for the Comenq project.
+//! Shared protocol types for Comenq.
 //!
-//! This library defines data structures exchanged between the client
-//! and daemon.
+//! This library defines the data structures exchanged between the client and
+//! daemon. Socket discovery belongs to the transport boundary used by those
+//! adapters, keeping this crate free from environment and filesystem concerns.
 
 use serde::{Deserialize, Serialize};
-
-/// Default Unix Domain Socket path for the Comenq daemon.
-///
-/// Shared by the daemon and CLI to avoid configuration drift.
-pub const DEFAULT_SOCKET_PATH: &str = "/run/comenq/comenq.sock";
 
 /// Request sent from the client to the daemon.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

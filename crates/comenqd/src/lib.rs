@@ -16,6 +16,7 @@
 //! println!("socket: {}", cfg.socket_path.display());
 //! ```
 pub mod config;
+pub mod metrics;
 
 mod listener;
 mod supervisor;

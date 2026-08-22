@@ -1,7 +1,7 @@
 //! Cucumber test entry point.
 //!
-//! This module spawns all test worlds concurrently so scenarios run in
-//! parallel.
+//! This module runs independent worlds concurrently and serializes worlds
+//! that mutate process-wide environment variables.
 
 mod steps;
 use cucumber::World as _;
@@ -21,15 +21,18 @@ fn main() -> anyhow::Result<()> {
         .context("failed to build the Tokio runtime for the cucumber test binary")?;
     runtime.block_on(async {
         tokio::join!(
-            CliWorld::run("tests/features/cli.feature"),
             ReleaseWorld::run("tests/features/release.feature"),
-            ClientWorld::run("tests/features/client_main.feature"),
             CommentWorld::run("tests/features/comment_request.feature"),
-            ConfigWorld::run("tests/features/config.feature"),
             ListenerWorld::run("tests/features/listener.feature"),
             PackagingWorld::run("tests/features/packaging.feature"),
             WorkerWorld::run("tests/features/worker.feature"),
         );
+
+        // These worlds temporarily mutate process-wide environment variables.
+        // Run them separately so their environment-dependent assertions cannot race.
+        CliWorld::run("tests/features/cli.feature").await;
+        ClientWorld::run("tests/features/client_main.feature").await;
+        ConfigWorld::run("tests/features/config.feature").await;
     });
     Ok(())
 }

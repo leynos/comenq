@@ -9,6 +9,7 @@ use clap::Parser;
 use cucumber::{World, given, then, when};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use test_support::EnvVarGuard;
 
 use comenq::Args;
 
@@ -16,10 +17,12 @@ use comenq::Args;
 pub struct CliWorld {
     args: Option<Vec<OsString>>,
     result: Option<Result<Args, clap::Error>>,
+    socket_guard: Option<EnvVarGuard>,
 }
 
 #[given("valid CLI arguments")]
 fn valid_cli_arguments(world: &mut CliWorld) {
+    world.socket_guard = Some(EnvVarGuard::remove("COMENQ_SOCKET"));
     world.args = Some(vec![
         OsString::from("comenq"),
         OsString::from("octocat/hello-world"),
@@ -84,5 +87,16 @@ fn the_socket_path_is(world: &mut CliWorld, expected: String) {
         Some(Ok(a)) => a,
         other => panic!("expected parsed args, got {other:?}"),
     };
-    assert_eq!(args.socket, PathBuf::from(expected));
+    assert_eq!(args.socket, Some(PathBuf::from(expected)));
+}
+
+#[then("no socket path override is present")]
+fn no_socket_override(world: &mut CliWorld) {
+    let args = match world.result.take() {
+        Some(Ok(a)) => a,
+        other => panic!("expected parsed args, got {other:?}"),
+    };
+    // Discovery of the actual path is covered by unit tests; the parser
+    // must simply leave the override unset.
+    assert_eq!(args.socket, None);
 }

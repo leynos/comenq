@@ -14,4 +14,4 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-serial_test = "^2"
+serial_test = "3"
