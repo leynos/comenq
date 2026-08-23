@@ -199,7 +199,7 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
     .await
     .map_err(|_| anyhow::anyhow!("client read timed out"))??;
     if buffer.len() > MAX_REQUEST_BYTES {
-        anyhow::bail!("client payload exceeds {} bytes", MAX_REQUEST_BYTES);
+        anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
     let response = match serde_json::from_slice::<Request>(&buffer) {
         Ok(request) => queue.execute(request).await,
