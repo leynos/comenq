@@ -1,11 +1,12 @@
 //! Structured-tracing tests for bounded GitHub post outcomes.
 
 use super::super::post_comment_with_metrics;
-use super::config_with_flutter;
+use crate::config::Config;
 use comenq_lib::CommentRequest;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tempfile::tempdir;
 use test_support::octocrab_for;
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
@@ -19,6 +20,13 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const POST_SPAN: &str = "post_comment_with_metrics";
+
+fn config_with_api_timeout(github_api_timeout_secs: u64) -> Config {
+    let dir = tempdir().expect("create temporary configuration directory");
+    let mut config: Config = test_support::temp_config(&dir).into();
+    config.github_api_timeout_secs = github_api_timeout_secs;
+    config
+}
 
 #[derive(Clone, Default)]
 struct PostSpanCollector {
@@ -104,7 +112,7 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .await;
         let success_client = octocrab_for(&success_server).expect("build success client");
         assert!(
-            post_comment_with_metrics(&success_client, &request, &config_with_flutter(1, 0))
+            post_comment_with_metrics(&success_client, &request, &config_with_api_timeout(1))
                 .await
                 .is_ok()
         );
@@ -117,7 +125,7 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .await;
         let error_client = octocrab_for(&error_server).expect("build error client");
         assert!(
-            post_comment_with_metrics(&error_client, &request, &config_with_flutter(1, 0))
+            post_comment_with_metrics(&error_client, &request, &config_with_api_timeout(1))
                 .await
                 .is_err()
         );
@@ -129,8 +137,7 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .mount(&timeout_server)
             .await;
         let timeout_client = octocrab_for(&timeout_server).expect("build timeout client");
-        let mut timeout_config = config_with_flutter(1, 0);
-        timeout_config.github_api_timeout_secs = 0;
+        let timeout_config = config_with_api_timeout(0);
         assert!(
             post_comment_with_metrics(&timeout_client, &request, &timeout_config)
                 .await
