@@ -13,10 +13,10 @@ use thiserror::Error;
 use tokio::fs;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use yaque::{Receiver, Sender};
 
-use crate::listener::run_listener;
+use crate::listener::{ClientSender, run_listener};
 use crate::metrics;
 use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
 
@@ -142,6 +142,7 @@ pub async fn run(config: Config) -> Result<()> {
         "Queue side opened",
     );
     let (client_tx, client_rx) = mpsc::channel(config.client_channel_capacity);
+    let client_tx: ClientSender = Arc::new(Mutex::new(client_tx));
     let cfg = Arc::new(config);
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
@@ -231,7 +232,7 @@ pub async fn run(config: Config) -> Result<()> {
 
 fn spawn_listener(
     cfg: Arc<Config>,
-    client_tx: mpsc::Sender<Vec<u8>>,
+    client_tx: ClientSender,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     tokio::spawn(run_listener(cfg, client_tx, shutdown))

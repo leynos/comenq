@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use test_support::{SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY, temp_config, wait_for_file};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 
 use comenq_lib::CommentRequest;
 use comenqd::config::Config;
@@ -47,7 +47,9 @@ async fn running_listener(world: &mut ListenerWorld) -> anyhow::Result<()> {
         let _ = queue_writer(sender, writer_rx).await;
     });
     let handle = tokio::spawn(async move {
-        if let Err(error) = run_listener(cfg_clone, client_tx, shutdown_rx).await {
+        if let Err(error) =
+            run_listener(cfg_clone, Arc::new(Mutex::new(client_tx)), shutdown_rx).await
+        {
             panic!("listener task failed: {error}");
         }
     });

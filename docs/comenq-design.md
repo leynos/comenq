@@ -86,10 +86,13 @@ paced, directly addressing the primary goal of avoiding API rate limits.
 
 ### Channels and buffering
 
-The listener sends client requests through a bounded Tokio `mpsc` channel. The
-listener holds its sender, while the queue writer owns the receiver and the
-`yaque::Sender` that persists bytes to disk. The worker owns the matching
-`yaque::Receiver`; each queue side is opened exactly once by its owning task.
+The listener sends client requests through a bounded Tokio `mpsc` channel. Its
+handlers share the current sender state, but clone the sender only after
+reading and serializing a request. The shared-state lock is held only while
+cloning that sender, not during socket I/O, parsing, channel sending, or
+metrics recording. The queue writer owns the receiver and the `yaque::Sender`
+that persists bytes to disk. The worker owns the matching `yaque::Receiver`;
+each queue side is opened exactly once by its owning task.
 
 The supervisor opens the `yaque::Sender` at startup and whenever it restarts
 the writer. Each worker start opens a `yaque::Receiver`. This avoids yaque's
@@ -263,10 +266,11 @@ instrumentation records the task, attempt, queue path, and scheduled delay.
 Supervisor-owned recovery state retains the `mpsc` receiver and any pending
 payload outside the restartable writer task. When the writer fails, the
 supervisor opens a fresh `yaque::Sender`, reuses that state, and restarts the
-writer. This preserves accepted requests across writer task failures and sender
-reopens, but the handoff is at least once: cancellation after an enqueue and
-before clearing the pending payload can cause a retry. Worker restarts open a
-fresh `yaque::Receiver` while the active writer owns the sender.
+writer; it does not replace the bounded client channel. This preserves accepted
+requests across writer task failures and sender reopens, but the handoff is at
+least once: cancellation after an enqueue and before clearing the pending
+payload can cause a retry. Worker restarts open a fresh `yaque::Receiver` while
+the active writer owns the sender.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -366,9 +370,10 @@ Its workflow is as follows:
 
 5. **Handle Client:** The handler reads at most 1 MiB within five seconds,
    rejects larger or slower requests, deserializes the JSON into a
-   `CommentRequest`, and re-encodes it before sending the bytes through the
-   bounded `mpsc::Sender`. The queue writer, not the listener, owns the
-   `yaque::Sender` and persists the request.
+   `CommentRequest`, and re-encodes it before cloning the current bounded
+   `mpsc::Sender` and sending the bytes. The sender-state lock is not held
+   while the handler reads, parses, sends, records metrics, or logs. The queue
+   writer, not the listener, owns the `yaque::Sender` and persists the request.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting

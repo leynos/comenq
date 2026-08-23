@@ -32,7 +32,7 @@ pub mod listener {
     // Keep manual ordering so integration tests import the public API consistently.
     #[rustfmt::skip]
     pub use crate::listener::{
-        handle_client, prepare_listener, run_listener,
+        ClientSender, handle_client, prepare_listener, run_listener,
         CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES,
     };
 }

@@ -25,6 +25,12 @@ The supervisor manages the `yaque::Sender` lifecycle and passes the active
 sender to the queue writer; it opens that side at startup and whenever the
 writer restarts. Each worker start opens only the matching `yaque::Receiver`.
 This one-side-per-task topology avoids yaque's per-side lock contention.
+Client handlers share the bounded channel sender, but clone it only after an
+asynchronous socket read and request serialization. Writer recovery retains
+that channel's receiver, so it reopens only the persistent queue sender without
+invalidating an in-flight handler's sender acquisition. The sender-state lock is
+held only while cloning the sender, never during socket I/O, parsing, channel
+sends, metrics recording, or logging.
 Restart tracing includes the task name, attempt, queue path, queue side, and
 backoff delay where applicable. Writer recovery retains the receiver and
 pending payload across restarts, preserving accepted work with at-least-once
