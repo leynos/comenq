@@ -872,7 +872,7 @@ configuration `packaging/config/comenqd-user.toml`:
   `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
   the unit.
 - The PAT is supplied through the systemd credential system:
-  `LoadCredential=token:%h/pandalump-token` exposes the token file to the
+  `LoadCredential=token:%h/.config/comenqd/token` exposes the token file to the
   service, and the configuration references it as
   `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`, keeping the secret
   out of the unit, the environment, and `ps` output.
