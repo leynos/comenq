@@ -35,3 +35,27 @@ make build
 ```
 
 Queued requests persist on disk and are posted sequentially by the daemon.
+
+## Running as a user service
+
+The daemon also runs unprivileged under `systemd --user`. Install the binaries
+to `~/.local/bin`, copy
+[`packaging/linux/comenqd-user.service`](packaging/linux/comenqd-user.service)
+to `~/.config/systemd/user/comenqd.service` and
+[`packaging/config/comenqd-user.toml`](packaging/config/comenqd-user.toml) to
+`~/.config/comenqd/config.toml`, then enable it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now comenqd.service
+```
+
+The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`. The client probes
+the user socket first and falls back to `/run/comenq/comenq.sock` when the
+connection fails. The GitHub token is supplied through systemd's credential
+system (`LoadCredential=token:%h/.config/comenqd/token` with
+`github_token_file = "${CREDENTIALS_DIRECTORY}/token"`), keeping the secret out
+of the unit file and process environment.
+
+See the [users' guide](docs/users-guide.md) for complete setup and
+configuration details.

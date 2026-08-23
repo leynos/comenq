@@ -4,7 +4,9 @@ use anyhow::Context as _;
 use comenq::{Args, ClientError, run};
 use comenq_lib::CommentRequest;
 use cucumber::{World, given, then, when};
+use std::fs;
 use tempfile::TempDir;
+use test_support::EnvVarGuard;
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixListener;
 
@@ -12,6 +14,7 @@ use tokio::net::UnixListener;
 pub struct ClientWorld {
     args: Option<Args>,
     tempdir: Option<TempDir>,
+    runtime_dir_guard: Option<EnvVarGuard>,
     server: Option<tokio::task::JoinHandle<anyhow::Result<Vec<u8>>>>,
     result: Option<Result<(), ClientError>>,
 }
@@ -22,7 +25,7 @@ fn base_args(socket: std::path::PathBuf) -> anyhow::Result<Args> {
         repo_slug: "octocat/hello-world".parse().context("slug")?,
         pr_number: 1,
         comment_body: "Hi".into(),
-        socket,
+        socket: Some(socket),
     })
 }
 
@@ -40,6 +43,38 @@ fn dummy_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
     });
 
     world.args = Some(base_args(socket)?);
+    world.tempdir = Some(dir);
+    world.server = Some(handle);
+    Ok(())
+}
+
+#[given("a dummy daemon listening on a user runtime socket")]
+fn user_runtime_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
+    let dir = TempDir::new().context("tempdir")?;
+    let socket = dir.path().join("comenq/comenq.sock");
+    let parent = socket.parent().context("socket parent")?;
+    fs::create_dir_all(parent).context("create runtime socket directory")?;
+    let listener = UnixListener::bind(&socket).context("bind")?;
+
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.context("accept")?;
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.context("read")?;
+        Ok(buf)
+    });
+
+    world.args = Some(Args {
+        repo_slug: "octocat/hello-world".parse().context("slug")?,
+        pr_number: 1,
+        comment_body: "Hi".into(),
+        socket: None,
+    });
+    world.runtime_dir_guard = Some(EnvVarGuard::set(
+        "XDG_RUNTIME_DIR",
+        dir.path()
+            .to_str()
+            .context("runtime directory path is UTF-8")?,
+    ));
     world.tempdir = Some(dir);
     world.server = Some(handle);
     Ok(())

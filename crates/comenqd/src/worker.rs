@@ -1,24 +1,25 @@
 //! Queue worker for comenqd.
 //!
 //! Dequeues requests from the persistent queue and posts comments to GitHub
-//! while enforcing a fixed cooldown between attempts.
+//! while enforcing a cooldown between attempts. The cooldown always runs in
+//! full; an optional random flutter lengthens each wait to avoid a perfectly
+//! regular posting cadence.
 
 use crate::config::Config;
+use crate::metrics;
 use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
+use rand::Rng;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 use yaque::Receiver;
 
-#[cfg(any(test, feature = "test-support"))]
-use crate::util::is_metadata_file;
-#[cfg(any(test, feature = "test-support"))]
-use std::fs as stdfs;
-#[cfg(any(test, feature = "test-support"))]
-use std::path::Path;
+mod control;
+pub use control::{WorkerControl, WorkerHooks};
 
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
@@ -29,6 +30,105 @@ enum PostCommentError {
     /// The request timed out.
     #[error("timeout")]
     Timeout,
+}
+
+/// Seconds to wait after processing a request: the configured cooldown plus
+/// a fresh random flutter of up to `cooldown_flutter_seconds`.
+///
+/// Flutter only ever lengthens the wait — the full cooldown always elapses —
+/// so the posting cadence stays below GitHub's secondary rate limits while
+/// avoiding a perfectly regular interval.
+fn cooldown_with_flutter(config: &Config) -> u64 {
+    cooldown_with_flutter_using(config, |range| rand::rng().random_range(range))
+}
+
+/// Calculate the cooldown using a supplied flutter selection.
+fn cooldown_with_flutter_using<F>(config: &Config, select_flutter: F) -> u64
+where
+    F: FnOnce(RangeInclusive<u64>) -> u64,
+{
+    let flutter = config.cooldown_flutter_seconds;
+    if flutter == 0 {
+        return config.cooldown_period_seconds;
+    }
+    let jitter = select_flutter(0..=flutter);
+    cooldown_with_selected_flutter(config, jitter)
+}
+
+/// Apply a selected flutter duration without overflowing the cooldown.
+fn cooldown_with_selected_flutter(config: &Config, jitter: u64) -> u64 {
+    config.cooldown_period_seconds.saturating_add(jitter)
+}
+
+#[tracing::instrument(
+    skip(config, shutdown),
+    fields(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+    )
+)]
+#[cfg(not(test))]
+async fn wait_for_cooldown(config: &Config, shutdown: &mut watch::Receiver<()>) -> bool {
+    let wait_seconds = cooldown_with_flutter(config);
+    tracing::debug!(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+        wait_seconds,
+        "Waiting before the next queue attempt",
+    );
+    metrics::record_cooldown_wait(wait_seconds);
+    WorkerHooks::wait_or_shutdown(wait_seconds, shutdown).await
+}
+
+#[cfg(test)]
+async fn wait_for_cooldown(
+    config: &Config,
+    shutdown: &mut watch::Receiver<()>,
+    hooks: &WorkerHooks,
+    test_flutter: Option<u64>,
+) -> bool {
+    let wait_seconds = test_flutter.map_or_else(
+        || cooldown_with_flutter(config),
+        |jitter| cooldown_with_flutter_using(config, |_| jitter),
+    );
+    tracing::debug!(
+        task = "worker",
+        base_seconds = config.cooldown_period_seconds,
+        flutter_seconds = config.cooldown_flutter_seconds,
+        wait_seconds,
+        "Waiting before the next queue attempt",
+    );
+    metrics::record_cooldown_wait(wait_seconds);
+    let interrupted = wait_or_shutdown_after_cooldown_starts(wait_seconds, shutdown, hooks).await;
+    if !interrupted {
+        hooks.notify_cooldown_complete();
+    }
+    interrupted
+}
+
+#[cfg(test)]
+async fn wait_or_shutdown_after_cooldown_starts(
+    wait_seconds: u64,
+    shutdown: &mut watch::Receiver<()>,
+    hooks: &WorkerHooks,
+) -> bool {
+    let sleep = tokio::time::sleep(Duration::from_secs(wait_seconds));
+    tokio::pin!(sleep);
+    let mut started = false;
+    tokio::select! {
+        biased;
+        _ = shutdown.changed() => true,
+        _ = std::future::poll_fn(|cx| {
+            let poll = sleep.as_mut().poll(cx);
+            if !started {
+                started = true;
+                hooks.notify_cooldown_started();
+            }
+            poll
+        }) => false,
+    }
 }
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
@@ -52,121 +152,27 @@ async fn post_comment(
     }
 }
 
-/// Hooks used to observe worker progress during tests.
-///
-/// Each hook uses [`Notify::notify_one`] which buffers a single permit for
-/// one waiting task. This design supports exactly one waiter per hook; if
-/// multiple tasks await the same hook, only one will be woken per notification.
-#[derive(Default)]
-pub struct WorkerHooks {
-    /// Signalled when a request is retrieved from the queue.
-    ///
-    /// Only one waiter is supported; additional waiters will not be notified.
-    pub enqueued: Option<Arc<Notify>>,
-    /// Signalled after the worker completes processing of a request.
-    ///
-    /// Only one waiter is supported; additional waiters will not be notified.
-    pub idle: Option<Arc<Notify>>,
-    /// Signalled when the queue is empty and the worker is idle.
-    ///
-    /// Only one waiter is supported; additional waiters will not be notified.
-    pub drained: Option<Arc<Notify>>,
-}
-
-impl WorkerHooks {
-    fn notify_enqueued(&self) {
-        if let Some(n) = &self.enqueued {
-            n.notify_one();
-        }
-    }
-
-    fn notify_idle(&self) {
-        if let Some(n) = &self.idle {
-            n.notify_one();
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn notify_drained_if_empty(&self, queue_path: &Path) -> std::io::Result<()> {
-        if let Some(n) = &self.drained {
-            // Ignore sentinel files left by the queue implementation and
-            // consider the directory empty when no other files remain.
-            let empty = !stdfs::read_dir(queue_path)?
-                .filter_map(Result::ok)
-                .any(|e| !is_metadata_file(e.file_name()));
-            if empty {
-                n.notify_one();
-            }
-        }
-        Ok(())
-    }
-
-    /// Waits for the specified number of seconds or until a shutdown is signalled.
-    ///
-    /// Returns `true` if shutdown was signalled, `false` if the timeout expired.
-    ///
-    /// # Arguments
-    ///
-    /// - `secs` - Number of seconds to wait before continuing.
-    /// - `shutdown` - Watch channel signalled when the worker should cease waiting.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use tokio::sync::watch;
-    /// use comenqd::daemon::WorkerHooks;
-    ///
-    /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// let (tx, mut rx) = watch::channel(());
-    ///
-    /// // Wait for the full second when no shutdown signal is sent.
-    /// assert!(!WorkerHooks::wait_or_shutdown(1, &mut rx).await);
-    ///
-    /// // Sending a shutdown signal returns immediately.
-    /// let mut rx = tx.subscribe();
-    /// tx.send(()).expect("notify shutdown");
-    /// assert!(WorkerHooks::wait_or_shutdown(60, &mut rx).await);
-    /// # });
-    /// ```
-    ///
-    /// Passing `secs = 0` returns immediately with `false` unless shutdown was
-    /// already signalled.
-    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
-        tokio::select! {
-            biased;
-            _ = shutdown.changed() => true,
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
-        }
-    }
-}
-
-/// Controls the worker task.
-///
-/// Bundles the shutdown signal and optional test hooks to keep the worker API
-/// concise.
-pub struct WorkerControl {
-    /// Watch channel used to signal graceful shutdown.
-    pub shutdown: watch::Receiver<()>,
-    /// Hooks for observing worker progress during tests.
-    pub hooks: WorkerHooks,
-}
-
-impl WorkerControl {
-    /// Create a new [`WorkerControl`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use comenqd::daemon::{WorkerControl, WorkerHooks};
-    /// use tokio::sync::watch;
-    ///
-    /// let (_tx, rx) = watch::channel(());
-    /// let hooks = WorkerHooks::default();
-    /// let control = WorkerControl::new(rx, hooks);
-    /// ```
-    pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
-        Self { shutdown, hooks }
-    }
+/// Post one queued request while recording its duration and bounded outcome.
+#[tracing::instrument(
+    skip(octocrab, request, config),
+    fields(task = "worker", outcome = tracing::field::Empty)
+)]
+async fn post_comment_with_metrics(
+    octocrab: &Octocrab,
+    request: &CommentRequest,
+    config: &Config,
+) -> Result<(), PostCommentError> {
+    let start = Instant::now();
+    let result = post_comment(octocrab, request, config).await;
+    metrics::record_github_post_duration(start.elapsed());
+    let outcome = match &result {
+        Ok(()) => "success",
+        Err(PostCommentError::Api(_)) => "api_error",
+        Err(PostCommentError::Timeout) => "timeout",
+    };
+    tracing::Span::current().record("outcome", outcome);
+    metrics::record_github_post_outcome(outcome);
+    result
 }
 
 /// Processes queued comment requests and posts them to GitHub, enforcing a cooldown between attempts.
@@ -176,6 +182,8 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
+    #[cfg(test)]
+    let test_flutter = control.test_flutter;
     let hooks = &mut control.hooks;
     let shutdown = &mut control.shutdown;
     loop {
@@ -201,14 +209,18 @@ pub async fn run_worker(
                 if let Err(check_err) = hooks.notify_drained_if_empty(&config.queue_path) {
                     tracing::warn!(error = %check_err, "Queue emptiness check failed after drop");
                 }
-                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+                #[cfg(test)]
+                let interrupted = wait_for_cooldown(&config, shutdown, hooks, test_flutter).await;
+                #[cfg(not(test))]
+                let interrupted = wait_for_cooldown(&config, shutdown).await;
+                if interrupted {
                     break;
                 }
                 continue;
             }
         };
 
-        match post_comment(&octocrab, &request, &config).await {
+        match post_comment_with_metrics(&octocrab, &request, &config).await {
             Ok(_) => {
                 guard.commit()?;
             }
@@ -234,7 +246,11 @@ pub async fn run_worker(
         hooks.notify_idle();
         #[cfg(any(test, feature = "test-support"))]
         hooks.notify_drained_if_empty(&config.queue_path)?;
-        if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
+        #[cfg(test)]
+        let interrupted = wait_for_cooldown(&config, shutdown, hooks, test_flutter).await;
+        #[cfg(not(test))]
+        let interrupted = wait_for_cooldown(&config, shutdown).await;
+        if interrupted {
             break;
         }
     }
@@ -244,110 +260,4 @@ pub async fn run_worker(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-    use tokio::sync::watch;
-
-    #[tokio::test]
-    async fn wait_or_shutdown_returns_false_on_timeout() {
-        let (_tx, mut rx) = watch::channel(());
-        let start = Instant::now();
-        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
-        assert!(!result, "should return false when timeout expires");
-        assert!(
-            start.elapsed().as_millis() < 500,
-            "zero-second wait should return immediately"
-        );
-    }
-
-    #[tokio::test]
-    async fn wait_or_shutdown_returns_true_on_shutdown() {
-        let (tx, mut rx) = watch::channel(());
-        // Signal shutdown before waiting
-        tx.send(()).expect("send shutdown signal");
-        let result = WorkerHooks::wait_or_shutdown(60, &mut rx).await;
-        assert!(result, "should return true when shutdown is signalled");
-    }
-
-    #[tokio::test]
-    async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
-        let (tx, mut rx) = watch::channel(());
-        // Send shutdown signal
-        tx.send(()).expect("send shutdown signal");
-        // Even with zero timeout, shutdown should be detected due to biased select
-        let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
-        assert!(result, "biased select should prioritize shutdown signal");
-    }
-
-    /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
-    ///
-    /// This validates the single-waiter semantics documented on WorkerHooks.
-    #[tokio::test]
-    async fn notify_one_wakes_exactly_one_waiter() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::time::Duration;
-
-        let notify = Arc::new(Notify::new());
-        let wake_count = Arc::new(AtomicUsize::new(0));
-
-        // Spawn three waiters
-        let mut handles = Vec::new();
-        for _ in 0..3 {
-            let n = notify.clone();
-            let count = wake_count.clone();
-            handles.push(tokio::spawn(async move {
-                // Wait with a timeout to avoid hanging the test
-                if tokio::time::timeout(Duration::from_millis(100), n.notified())
-                    .await
-                    .is_ok()
-                {
-                    count.fetch_add(1, Ordering::SeqCst);
-                }
-            }));
-        }
-
-        // Give waiters time to register
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Send exactly one notification
-        notify.notify_one();
-
-        // Wait for all tasks to complete (they'll timeout after 100ms)
-        for h in handles {
-            let _ = h.await;
-        }
-
-        // Only one waiter should have been woken
-        assert_eq!(
-            wake_count.load(Ordering::SeqCst),
-            1,
-            "notify_one should wake exactly one waiter"
-        );
-    }
-
-    /// Tests that notify_one buffers a permit when no waiters exist.
-    ///
-    /// This validates that the notification is not lost if sent before waiting.
-    #[tokio::test]
-    async fn notify_one_buffers_permit_when_no_waiters() {
-        let notify = Arc::new(Notify::new());
-
-        // Send notification before anyone is waiting
-        notify.notify_one();
-
-        // The first waiter should receive the buffered permit immediately
-        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-        assert!(
-            result.is_ok(),
-            "buffered permit should wake first waiter immediately"
-        );
-
-        // Second waiter should NOT receive a permit (it was consumed)
-        let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-        assert!(
-            result.is_err(),
-            "second waiter should timeout with no remaining permit"
-        );
-    }
-}
+mod tests;

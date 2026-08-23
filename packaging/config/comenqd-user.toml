@@ -1,0 +1,28 @@
+# Example configuration for a user-hosted comenqd (systemd --user).
+# Install as ~/.config/comenqd/config.toml and pair with the
+# packaging/linux/comenqd-user.service unit.
+
+# Read the GitHub Personal Access Token from the systemd credential
+# provided by the unit's LoadCredential=token:... directive. The leading
+# ${CREDENTIALS_DIRECTORY} placeholder is expanded from the environment at
+# startup. Alternatively set an absolute path to any readable token file,
+# or provide the token inline via github_token.
+github_token_file = "${CREDENTIALS_DIRECTORY}/token"
+
+# Path to the Unix domain socket for client connections. Defaults to
+# $XDG_RUNTIME_DIR/comenq/comenq.sock for user sessions, which the client
+# discovers automatically.
+# socket_path = "/run/user/1000/comenq/comenq.sock"
+
+# Location for the persistent yaque queue data. The packaged user unit
+# sets COMENQD_QUEUE_PATH to ~/.local/state/comenq/queue, which overrides
+# this file; uncomment to pin a different location.
+# queue_path = "/home/user/.local/state/comenq/queue"
+
+# Cooldown period between posting comments in seconds.
+# cooldown_period_seconds = 960
+
+# Maximum random flutter added to each cooldown in seconds. The full
+# cooldown always elapses; a fresh random duration up to this value is
+# added on top. Zero disables flutter.
+# cooldown_flutter_seconds = 0

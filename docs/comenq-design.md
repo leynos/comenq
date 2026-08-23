@@ -21,7 +21,7 @@ therefore decomposed into two distinct, cooperating processes:
 
 1. `comenqd` **(The Daemon):** A long-running background process that serves as
    the system's engine. It is solely responsible for managing a persistent job
-   queue, interacting with the GitHub API, and enforcing the 16-minute
+   queue, interacting with the GitHub API, and enforcing the configured
    cooling-off period between posts.
 
 2. `comenq` **(The Client):** A lightweight command-line interface (CLI) tool.
@@ -33,7 +33,7 @@ use a daemon-client model over a Unix socket[^1], yields significant advantages:
 
 - **Persistence and Statefulness:** The daemon can maintain the queue and its
   internal timer state across many client invocations, ensuring that the
-  16-minute delay is consistently enforced.
+  configured delay is consistently enforced.
 
 - **Decoupling:** The user's interaction (via the CLI) is immediate. The user
   can submit a comment and receive confirmation that it has been enqueued
@@ -63,8 +63,8 @@ The complete lifecycle of a request is illustrated in the following sequence:
 6. The daemon validates the request and pushes it onto a persistent,
    disk-backed queue.
 
-7. The daemon immediately sends an acknowledgement of receipt back to the
-   client, which then exits.
+7. The client closes the write side of the connection and exits after sending
+   the request; the protocol has no response payload.
 
 8. A separate, dedicated worker task within the daemon continuously monitors
    the queue. It dequeues one job at a time.
@@ -75,8 +75,8 @@ The complete lifecycle of a request is illustrated in the following sequence:
 10. Upon successful posting, the worker commits the job, permanently removing
    it from the queue.
 
-11. The worker task then enters a 16-minute sleep state (the "cooling-off
-   period").
+11. The worker task then waits for the configured cooldown (the "cooling-off
+   period"), with optional flutter added to lengthen the wait.
 
 12. After the sleep period elapses, the worker task returns to step 8, ready to
    process the next job in the queue.
@@ -86,18 +86,26 @@ paced, directly addressing the primary goal of avoiding API rate limits.
 
 ### Channels and buffering
 
-The daemon sends client requests via an unbounded channel. The channel sender
-is recreated whenever the writer task restarts, preserving the existing
-receiver when possible.
+The listener sends client requests through a bounded Tokio `mpsc` channel. The
+listener holds its sender, while the queue writer owns the receiver and the
+`yaque::Sender` that persists bytes to disk. The worker owns the matching
+`yaque::Receiver`; each queue side is opened exactly once by its owning task.
 
-- Operational warning: the channel is unbounded. During writer downtime, the
-  in-memory backlog can grow until the supervisor respawns the writer. Deploy
-  with external backpressure (e.g., rate-limiting clients) if this risk is
-  unacceptable.
+The supervisor opens the `yaque::Sender` at startup and whenever it restarts
+the writer. Each worker start opens a `yaque::Receiver`. This avoids yaque's
+per-side lock contention while allowing the listener, writer, and worker to
+restart independently.
 
-- Lossy path: If the writer task panics, the old receiver is dropped and any
-  buffered items in that channel are lost. This is the only scenario where
-  pending requests may be discarded.
+- Operational warning: the bounded channel applies backpressure while the
+  writer is unavailable. Its capacity is configured by
+  `client_channel_capacity`.
+
+- Recovery path: Supervisor-owned recovery state retains the receiver and any
+  pending payload outside the restartable writer task. After a writer failure,
+  the supervisor reopens only the `yaque::Sender` and reuses that state, so the
+  pending payload is retried. This preserves accepted work across writer
+  failures, but delivery remains at least once: an abort after a successful
+  enqueue and before `pending` is cleared can enqueue the payload again.
 
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
@@ -136,52 +144,17 @@ defines the entire CLI structure declaratively within a Rust `struct`,
 providing clarity and maintainability compared to the more verbose builder
 pattern.[^3]
 
-The CLI will accept three required positional arguments, matching the user's
+The CLI accepts three required positional arguments, matching the user's
 requested invocation format: `comenq <owner/repo> <pr_number> <comment_body>`.
-
-The following code defines the `Args` struct that represents the CLI. This will
-be the core of the `comenq` client's `main.rs`.
-
-```rust
-// In src/bin/comenq/main.rs
-
-use clap::Parser;
-use std::path::PathBuf;
-use comenq::RepoSlug;
-
-/// A CLI client to enqueue a comment for a GitHub Pull Request.
-#
-#
-pub struct Args {
-    /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
-    #
-    repo_slug: RepoSlug,
-
-    /// The pull request number to comment on.
-    #
-    pr_number: u64,
-
-    /// The body of the comment. It is recommended to quote this argument.
-    #
-    comment_body: String,
-
-    /// Path to the daemon's Unix Domain Socket.
-    #
-    socket: PathBuf,
-}
-```
-
-The `#[derive(Parser)]` attribute instructs `clap` to generate all the
-necessary parsing logic.[^5] The doc comments (
-
-`///`) are automatically converted into help messages, which are displayed when
-the user runs `comenq --help`. This feature makes the tool
-self-documenting.[^10] The
-
-`#[arg(...)]` attributes provide fine-grained control over each argument, such
-as defining a `default_value` for the socket path, making the client flexible
-for different environments. The optional `--socket` flag overrides this path
-when specified, giving users a simple way to adapt to custom deployments.[^3]
+The production `Args` type also accepts an optional `--socket` (or
+`COMENQ_SOCKET`) override. Without an override, `socket_candidates()` includes
+the user socket first only when `XDG_RUNTIME_DIR` is a non-empty absolute path,
+followed by the system socket; the client tries each candidate by connecting,
+so a stale socket file does not hide a live daemon. See the `comenq-transport`
+crate for the shared policy,
+[`crates/comenq/src/lib.rs`](../crates/comenq/src/lib.rs) for the parser and
+[`crates/comenq/src/client.rs`](../crates/comenq/src/client.rs) for the
+connection and request-writing code.
 
 ### 2.2. Client-Daemon IPC Protocol
 
@@ -239,117 +212,15 @@ advantages for this application:
   This is inherently more secure than a `localhost` TCP socket, which any local
   user could connect to by default.
 
-### 2.3. Complete Client Implementation Blueprint
+### 2.3. Client implementation
 
-The following is a complete, commented blueprint for the `comenq` client's
-`main.rs` file. It integrates argument parsing via `clap` with asynchronous IPC
-via `tokio` and `UnixStream`.
-
-```rust
-// In src/bin/comenq/main.rs
-
-use clap::Parser;
-use std::path::PathBuf;
-use std::process;
-use tokio::io::AsyncWriteExt;
-use tokio::net::UnixStream;
-
-use tracing::warn;
-use comenq::RepoSlug;
-
-// Assume CommentRequest is in a shared library: `use comenq_lib::CommentRequest;`
-// For this example, we define it here.
-use serde::{Serialize, Deserialize};
-
-#
-pub struct CommentRequest {
-    pub owner: String,
-    pub repo: String,
-    pub pr_number: u64,
-    pub body: String,
-}
-
-/// A CLI client to enqueue a comment for a GitHub Pull Request.
-#
-#
-pub struct Args {
-    /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
-    #
-    repo_slug: RepoSlug,
-
-    /// The pull request number to comment on.
-    #
-    pr_number: u64,
-
-    /// The body of the comment. It is recommended to quote this argument.
-    #
-    comment_body: String,
-
-    /// Path to the daemon's Unix Domain Socket.
-    #
-    socket: PathBuf,
-}
-
-#[tokio::main]
-async fn main() {
-    // 1. Parse command-line arguments using clap's derive macro.
-    let args = Args::parse();
-
-    // 2. Construct the request payload. The slug has already been validated
-    //    and split by `clap`.
-    let request = CommentRequest {
-        owner: args.repo_slug.owner().to_owned(),
-        repo: args.repo_slug.repo().to_owned(),
-        pr_number: args.pr_number,
-        body: args.comment_body,
-    };
-
-    // 3. Serialize the request to JSON.
-    let payload = match serde_json::to_vec(&request) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: Failed to serialize request: {}", e);
-            process::exit(1);
-        }
-    };
-
-    // 5. Connect to the daemon's Unix Domain Socket.
-    let mut stream = match UnixStream::connect(&args.socket).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: Could not connect to the comenqd daemon at {:?}.", args.socket);
-            eprintln!("Details: {}", e);
-            eprintln!("Please ensure the daemon is running and you have the correct permissions.");
-            process::exit(1);
-        }
-    };
-
-    // 6. Write the entire payload to the stream.
-    if let Err(e) = stream.write_all(&payload).await {
-        eprintln!("Error: Failed to send data to the daemon: {}", e);
-        process::exit(1);
-    }
-
-    // 7. Gracefully shut down the write side of the stream.
-    if let Err(e) = stream.shutdown().await {
-        warn!("failed to close connection: {e}");
-    }
-
-    println!("Successfully enqueued comment for PR #{} on {}/{}.", request.pr_number, request.owner, request.repo);
-}
-```
-
-This client is a self-contained, robust utility. It provides clear error
-messages for common failure modes, such as an invalid repository slug or the
-inability to connect to the daemon, guiding the user toward a resolution.
-
-The production code exposes a `run` function in the `comenq` crate. This logic
-resides in a dedicated `client` module to keep the argument parser focused. The
-binary parses the CLI arguments and delegates to `run`, allowing the test suite
-to exercise the network code directly. Any failures to serialize the request or
-communicate with the daemon are surfaced via a small `ClientError` enumeration.
-The repository slug is converted into a structured `RepoSlug` during argument
-handling, so `run` operates on validated data without rechecking it.
+The production client is split between the `Args` parser and the `run` function.
+`run` serializes a validated `CommentRequest`, connects to the first available
+socket candidate, writes the payload, and shuts down the write side. Failures
+are returned through `ClientError`; the CLI binary reports the error and exits.
+The implementation is maintained in
+[`crates/comenq/src/client.rs`](../crates/comenq/src/client.rs), so this design
+document does not duplicate a second client blueprint.
 
 ## Section 3: Design of the `comenqd` Daemon
 
@@ -372,8 +243,8 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 
 2. `task_process_queue`: This is the main worker task. It operates in a
    serialized loop, pulling one job at a time from the queue, processing it
-   (i.e., posting the comment to GitHub), and then observing the mandatory
-   16-minute cooldown period.
+   (i.e., posting the comment to GitHub), and then observing the configured
+   cooldown period.
 
 This concurrent design ensures that the daemon remains responsive to new client
 requests even while the worker task is in its long sleep phase. A request can
@@ -383,15 +254,19 @@ processes the queue at its own deliberate pace.
 All daemon tasks—the listener, worker, and queue writer—are supervised. If any
 task exits unexpectedly, the daemon logs the failure, waits using an
 exponential backoff with jitter (via the `backon` crate) to avoid a tight
-restart loop, and then respawns the task. The minimum delay between restarts is
-configurable via `restart_min_delay_ms`. This keeps the service available
-without relying on an external process supervisor. Restarting the writer
-recreates the listener→writer channel and restarts the listener to attach a
-fresh sender, preserving single-writer semantics. When the writer exits
-cleanly, the supervisor reuses the existing receiver, so buffered bytes are
-preserved. If the writer panics and the receiver is lost, a new channel is
-created, and any bytes buffered in the discarded channel that were not
-persisted to the queue are lost.
+restart loop, and then respawns the task. Queue-writer recovery is bounded to
+five restart attempts; when that limit is exhausted, the supervisor signals
+daemon shutdown instead of scheduling another restart. The minimum delay
+between restarts is configurable via `restart_min_delay_ms`. Restart
+instrumentation records the task, attempt, queue path, and scheduled delay.
+
+Supervisor-owned recovery state retains the `mpsc` receiver and any pending
+payload outside the restartable writer task. When the writer fails, the
+supervisor opens a fresh `yaque::Sender`, reuses that state, and restarts the
+writer. This preserves accepted requests across writer task failures and sender
+reopens, but the handoff is at least once: cancellation after an enqueue and
+before clearing the pending payload can cause a retry. Worker restarts open a
+fresh `yaque::Receiver` while the active writer owns the sender.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -407,10 +282,10 @@ sequenceDiagram
   participant YQ as YaQue
 
   Sup->>Sup: ensure_queue_dir()
-  Sup->>YQ: init Sender
+  Sup->>YQ: open queue sender
   Sup->>QW: spawn queue_writer(rx)
   Sup->>L: spawn run_listener(tx, shutdown)
-  Sup->>W: spawn run_worker(yaque_rx, octocrab, control)
+  Sup->>W: spawn worker and open queue receiver
 
   par Normal flow
     L->>QW: tx.send(bytes)
@@ -422,9 +297,10 @@ sequenceDiagram
     L--x Sup: accept error
     Sup->>L: restart after backoff
     QW--x Sup: enqueue error
-    Sup->>QW: restart after backoff
+    Sup->>YQ: open queue sender after backoff
+    Sup->>QW: restart with preserved mpsc receiver
     W--x Sup: fatal error
-    Sup->>W: restart after backoff
+    Sup->>W: restart and open queue receiver after backoff
   end
 
   OS-->>Sup: SIGINT/SIGTERM
@@ -473,9 +349,9 @@ implemented as an asynchronous function spawned by the main `tokio` runtime.
 
 Its workflow is as follows:
 
-1. **Cleanup and Binding:** The task first attempts to remove any stale socket
-   file from a previous run. It then creates and binds a
-   `tokio::net::UnixListener` to the configured socket path.[^2]
+1. **Prepare and Bind:** The task creates missing parent directories, binds a
+   temporary socket, sets its permissions, and atomically replaces any previous
+   socket at the configured path.[^2]
 
 2. **Set Permissions:** After binding, it must set the permissions on the
    socket file to enforce the security model (e.g., `0o660`), allowing access
@@ -484,17 +360,15 @@ Its workflow is as follows:
 3. **Accept Loop:** The task enters an infinite `loop`, waiting for new client
    connections via `listener.accept().await`.[^13]
 
-4. **Spawn Connection Handler:** To ensure the listener is never blocked, upon
-   accepting a new connection, it immediately spawns a new, short-lived `tokio`
-   task to handle that specific client.
+4. **Spawn Connection Handler:** Upon accepting a connection, the listener
+   spawns a short-lived `tokio` task for `handle_client`, so one slow client
+   does not block acceptance of other connections.
 
-5. **Handle Client:** This per-client task reads at most 1 MiB within
-   `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
-   rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
-   `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
-   adjusted. It deserializes the received JSON into a `CommentRequest` and uses
-   the sender half of the `yaque` channel to enqueue the request. After
-   enqueuing, the task terminates.
+5. **Handle Client:** The handler reads at most 1 MiB within five seconds,
+   rejects larger or slower requests, deserializes the JSON into a
+   `CommentRequest`, and re-encodes it before sending the bytes through the
+   bounded `mpsc::Sender`. The queue writer, not the listener, owns the
+   `yaque::Sender` and persists the request.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -509,7 +383,7 @@ sequenceDiagram
   participant Client as Client
   participant L as Listener
   participant H as handle_client
-  participant TX as mpsc::UnboundedSender
+  participant TX as bounded mpsc::Sender
   participant QW as QueueWriter
 
   Client->>L: connect(socket)
@@ -552,8 +426,8 @@ octocrab.issues("owner", "repo").create_comment(pr_number, "body").await?;
 The worker task's loop consists of the following steps:
 
 1. **Dequeue Job:** It calls `receiver.recv().await?` to receive the next
-   `CommentRequest` wrapped in a `yaque::RecvGuard`. This operation will block
-   asynchronously until a job is available in the queue.
+   `CommentRequest` wrapped in a `yaque::RecvGuard`. This operation waits
+   asynchronously until a job is available or shutdown is signalled.
 
 2. **Post Comment:** It constructs and sends the API request to GitHub using
    the `octocrab` client and the data from the dequeued job.
@@ -571,10 +445,10 @@ The worker task's loop consists of the following steps:
      counter could be added to the `CommentRequest` to prevent infinite loops
      for unfixable errors, eventually moving the job to a "dead-letter" queue.
 
-4. **Cooldown:** After successfully processing a job (or after a failed
-   attempt), the task calls
-   `tokio::time::sleep(Duration::from_secs(960)).await` to enforce the
-   16-minute cooling-off period.
+4. **Cooldown:** After processing a job (including a failed API attempt), the
+   task waits for `cooldown_period_seconds` plus a fresh random duration from
+   zero through `cooldown_flutter_seconds`. The wait is interruptible by the
+   shutdown signal, and flutter never shortens the configured cooldown.
 
 5. The loop then repeats.
 
@@ -588,22 +462,31 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter               | Type    | Description                                                                                | Default Value           |
-| ----------------------- | ------- | ------------------------------------------------------------------------------------------ | ----------------------- |
-| github_token            | String  | The GitHub Personal Access Token (PAT) used for authentication. This is a required field.  | (none)                  |
-| socket_path             | PathBuf | The filesystem path for the Unix Domain Socket.                                            | /run/comenq/comenq.sock |
-| queue_path              | PathBuf | The directory path for the persistent yaque queue data.                                    | /var/lib/comenq/queue   |
-| log_level               | String  | The minimum log level to record (e.g., "info", "debug", "trace").                          | info                    |
-| cooldown_period_seconds | u64     | The cooling-off period in seconds after each comment post.                                 | 960                     |
-| restart_min_delay_ms    | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor). | 100                     |
+| Parameter                | Type    | Description                                                                                                                                                                                                                                                                                                                   | Default Value                                                                                                  |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                                                                                                                   | (none)                                                                                                         |
+| github_token_file        | PathBuf | Optional path to a file containing the PAT. When no CLI token is supplied, its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. An unreadable, whitespace-only, or larger-than-64-KiB file is a configuration error. | (none)                                                                                                         |
+| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                                                                                                                               | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf | The directory path for the persistent yaque queue data.                                                                                                                                                                                                                                                                       | /var/lib/comenq/queue                                                                                          |
+| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                                                                                                                    | 960                                                                                                            |
+| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                                                                                                                                  | 0                                                                                                              |
+| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                                                                                                                    | 100                                                                                                            |
+| github_api_timeout_secs  | u64     | Maximum duration of each GitHub API request before it is treated as a timeout.                                                                                                                                                                                                                                                | 30                                                                                                             |
+| client_channel_capacity  | usize   | Capacity of the bounded client-to-queue-writer channel.                                                                                                                                                                                                                                                                       | 1024                                                                                                           |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
 `Config::load()` which merges values from `/etc/comenqd/config.toml`,
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults, while an absent `github_token` or invalid TOML results in a
-configuration error.
+defaults. The cooldown flutter is configured in TOML or through
+`COMENQD_COOLDOWN_FLUTTER_SECONDS`; it has no CLI override. For credentials,
+`--github-token` wins over every other source. Otherwise, `--github-token-file`
+overrides the configured token-file path, and the selected file's trimmed
+contents override `github_token`. Startup reports a configuration error when
+both `github_token` and `github_token_file` are absent, when the selected token
+file is unreadable or empty after trimming, exceeds 64 KiB, or when the TOML is
+invalid.
 
 Robust logging is non-negotiable for a background process. The `tracing` crate
 with `tracing-subscriber` will be used to provide structured, asynchronous
@@ -617,17 +500,32 @@ logging. Key events to be logged include:
 
 - New comment request successfully enqueued.
 
-- Attempting to post a comment to a specific PR.
-
-- Comment successfully posted (including the URL of the new comment).
-
-- GitHub API call failed (including the error details).
+- GitHub comment-post outcomes.
 
 - Entering and exiting the cooldown period.
 
 When run as a `systemd` service, these logs will be automatically captured by
 the system's journal, making them easily accessible for administrators via
 `journalctl`.
+
+Each GitHub post runs in a worker span with `task="worker"` and a bounded
+`outcome` of `success`, `api_error`, or `timeout`. Spans never include
+credentials, payloads, repository names, socket or queue paths, request
+identifiers, or raw errors.
+
+The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`:
+
+- `comenqd_task_restarts_total{task=listener|worker|writer}` counts supervised
+  task restarts.
+- `comenqd_queue_writer_failures_total{queue_side=sender}` counts queue-writer
+  failures for the sender side.
+- `comenqd_client_channel_depth` reports the bounded client-channel depth
+  proxy, updated when requests enter and leave the channel.
+- `comenqd_requests_total{outcome=accepted|rejected}` counts request outcomes.
+- `comenqd_cooldown_wait_duration_seconds` records cooldown wait durations.
+- `comenqd_github_posts_total{outcome=success|api_error|timeout}` counts GitHub
+  comment-post outcomes.
+- `comenqd_github_post_duration_seconds` records GitHub comment-post durations.
 
 ## Section 4: Deployment and Operationalization
 
@@ -758,6 +656,30 @@ sudo systemctl start comenq.service
 # Check the status of the service
 sudo systemctl status comenq.service
 ```
+
+#### 4.2.1. Running as a per-user service
+
+The daemon also runs unprivileged under `systemd --user`, using the
+`packaging/linux/comenqd-user.service` unit and the matching example
+configuration `packaging/config/comenqd-user.toml`:
+
+- The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when
+  `XDG_RUNTIME_DIR` is a non-empty absolute path; `RuntimeDirectory=comenq`
+  provisions the directory. The client probes the user socket first, then falls
+  back to the system socket when the connection fails. Without a valid user
+  runtime directory, it uses the system socket.
+- The queue lives in `~/.local/state/comenq/queue`, provided through
+  `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
+  the unit.
+- The PAT is supplied through the systemd credential system:
+  `LoadCredential=token:%h/.config/comenqd/token` exposes the token file to the
+  service, and the configuration references it as
+  `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`, keeping the secret
+  out of the unit, the environment, and `ps` output.
+
+Install the unit as `~/.config/systemd/user/comenqd.service`, the configuration
+as `~/.config/comenqd/config.toml`, then enable it with
+`systemctl --user enable --now comenqd.service`.
 
 ### 4.3. Security Posture and Best Practices
 
@@ -893,73 +815,11 @@ pub struct CommentRequest {
 
 ### 5.4. Source Code for `comenq` (Client)
 
-The `crates/comenq/Cargo.toml` would simply list the workspace dependencies.
-The source code is as follows:
-
-```rust
-// crates/comenq/src/main.rs
-use clap::Parser;
-use std::path::PathBuf;
-use std::process;
-use tokio::io::AsyncWriteExt;
-use tokio::net::UnixStream;
-use comenq_lib::CommentRequest; // Using the shared library
-use tracing::warn;
-use comenq::RepoSlug;
-
-#
-#
-struct Args {
-    #
-    repo_slug: RepoSlug,
-    #
-    pr_number: u64,
-    #
-    comment_body: String,
-    #
-    socket: PathBuf,
-}
-
-#[tokio::main]
-async fn main() {
-    let args = Args::parse();
-
-    let request = CommentRequest {
-        owner: args.repo_slug.owner().to_owned(),
-        repo: args.repo_slug.repo().to_owned(),
-        pr_number: args.pr_number,
-        body: args.comment_body,
-    };
-
-    let payload = match serde_json::to_vec(&request) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: Failed to serialize request: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let mut stream = match UnixStream::connect(&args.socket).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: Could not connect to the comenqd daemon at {:?}.", args.socket);
-            eprintln!("Details: {}", e);
-            process::exit(1);
-        }
-    };
-
-    if let Err(e) = stream.write_all(&payload).await {
-        eprintln!("Error: Failed to send data to the daemon: {}", e);
-        process::exit(1);
-    }
-    
-    if let Err(e) = stream.shutdown().await {
-        warn!("failed to close connection: {e}");
-    }
-
-    println!("Successfully enqueued comment for PR #{} on {}/{}.", request.pr_number, request.owner, request.repo);
-}
-```
+The client implementation is maintained in
+[`crates/comenq/src/lib.rs`](../crates/comenq/src/lib.rs) and
+[`crates/comenq/src/client.rs`](../crates/comenq/src/client.rs). The binary
+parses `Args` and delegates to `run`; keeping the source in those modules
+avoids duplicating a stale socket blueprint in this design document.
 
 ### 5.5. Source Code for `comenqd` (Daemon)
 
@@ -1023,19 +883,18 @@ because the notifier may fire before the waiter starts listening.
 
 The repository initializes the workspace with `comenq-lib` at the root and two
 binary crates under `crates/`. `CommentRequest` resides in the library and
-derives both `Serialize` and `Deserialize`. The daemon now spawns a Unix socket
-listener and queue worker as described above. Structured logging is initialized
-using `tracing_subscriber` with JSON output controlled by the `RUST_LOG`
-environment variable. The queue directory is created asynchronously on start if
-it does not already exist before `yaque` opens it. Incoming requests are
-forwarded from the listener to a dedicated queue writer task over a bounded
-Tokio `mpsc` channel sized by `client_channel_capacity`. This task serializes
-writes to the `yaque::Sender`, preserving single-writer semantics without
-per-connection locking.
+derives both `Serialize` and `Deserialize`. The daemon starts a Unix socket
+listener, queue writer, and queue worker as described above. Structured logging
+is initialized using `tracing_subscriber` with filtering controlled by the
+`RUST_LOG` environment variable. The queue directory is created asynchronously
+before `yaque` opens it. Incoming requests flow over a bounded Tokio `mpsc`
+channel sized by `client_channel_capacity`; the writer alone owns the
+`yaque::Sender`, and each worker starts with its own `yaque::Receiver`.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds` and
-defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
-secondary rate limits.
+defaults to 960 seconds. Optional flutter is configured via
+`cooldown_flutter_seconds` in TOML or `COMENQD_COOLDOWN_FLUTTER_SECONDS`; there
+is no CLI flutter override. Flutter only lengthens each wait.
 
 GitHub API calls are wrapped in `tokio::time::timeout` with a configurable
 limit (default 30 seconds) to ensure the worker does not block indefinitely if
@@ -1063,9 +922,6 @@ flag.
       2025.
       <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
        July 24, 2025. <https://github.com/tokahuke/yaque>
-[^10]: codyps/rust-systemd: Rust interface to systemd c apis - GitHub. Accessed
-       on July 24, 2025. <https://github.com/codyps/rust-systemd>
-       <https://docs.rs/clap/latest/clap/_derive/index.html>
 [^12]: Unix sockets, the basics in Rust - Emmanuel Bosquet. Accessed on July
        24, 2025. <https://emmanuelbosquet.com/2022/whatsaunixsocket/>
 [^13]: Example of reading from a Unix socket · Issue #9 · tokio-rs/tokio-uds -
