@@ -73,14 +73,27 @@ fn user_runtime_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
         let (mut stream, _) = listener.accept().await.context("accept")?;
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.context("read")?;
+        let reply = Response::entry(PendingEntry {
+            id: "1a2b3c4d".into(),
+            eta_seconds: 0,
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 1,
+            body: "Hi".into(),
+        });
+        let bytes = serde_json::to_vec(&reply).context("serialize reply")?;
+        stream.write_all(&bytes).await.context("write reply")?;
         Ok(buf)
     });
 
     world.args = Some(Args {
-        repo_slug: "octocat/hello-world".parse().context("slug")?,
-        pr_number: 1,
-        comment_body: "Hi".into(),
         socket: None,
+        command: Command::Put {
+            repo_slug: "octocat/hello-world".parse().context("slug")?,
+            pr_number: 1,
+            comment_body: "Hi".into(),
+            now: false,
+        },
     });
     world.runtime_dir_guard = Some(EnvVarGuard::set(
         "XDG_RUNTIME_DIR",

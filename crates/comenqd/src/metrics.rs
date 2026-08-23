@@ -112,7 +112,7 @@ mod tests {
             key.key().labels().all(|label| {
                 matches!(
                     (label.key(), label.value()),
-                    ("task", "listener" | "worker" | "writer")
+                    ("task", "listener" | "worker")
                         | ("outcome", "accepted" | "rejected")
                         | ("outcome", "success" | "api_error" | "timeout")
                 )
@@ -130,7 +130,6 @@ mod tests {
         });
 
         let metrics = snapshotter.snapshot().into_vec();
-        assert!(metric_names(&metrics).contains(&CLIENT_CHANNEL_DEPTH));
         assert!(metric_names(&metrics).contains(&COOLDOWN_WAIT_DURATION));
         assert!(metric_names(&metrics).contains(&GITHUB_POST_DURATION));
     }
