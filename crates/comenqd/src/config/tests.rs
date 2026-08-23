@@ -1,9 +1,8 @@
 //! Tests for daemon configuration loading, overrides, and defaults.
 
 use super::{
-    DEFAULT_GITHUB_API_TIMEOUT_SECS, DEFAULT_RESTART_MIN_DELAY_MS, MAX_GITHUB_TOKEN_FILE_BYTES,
-    DEFAULT_RESTART_MIN_DELAY_MS,
     CliArgs, Config, DEFAULT_COOLDOWN, DEFAULT_GITHUB_API_TIMEOUT_SECS,
+    DEFAULT_RESTART_MIN_DELAY_MS, MAX_GITHUB_TOKEN_FILE_BYTES,
 };
 use clap::Parser as _;
 use rstest::rstest;
@@ -12,10 +11,6 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use test_support::EnvVarGuard;
-
-
-//! Tests for daemon configuration loading, overrides, and defaults.
-};
 
 #[test]
 fn github_token_file_cli_option_parses() {
@@ -45,7 +40,6 @@ fn apply_cli_overrides_preserves_unset_values_and_applies_set_values() {
         cooldown_flutter_seconds: 20,
         restart_min_delay_ms: 30,
         github_api_timeout_secs: 40,
-        client_channel_capacity: 50,
     };
 
     Config::apply_cli_overrides(&mut cfg, &CliArgs::default());
@@ -60,7 +54,6 @@ fn apply_cli_overrides_preserves_unset_values_and_applies_set_values() {
     assert_eq!(cfg.github_api_timeout_secs, 40);
     assert_eq!(cfg.cooldown_flutter_seconds, 20);
     assert_eq!(cfg.restart_min_delay_ms, 30);
-    assert_eq!(cfg.client_channel_capacity, 50);
 
     let cli = CliArgs::try_parse_from([
         "comenqd",
@@ -88,7 +81,6 @@ fn apply_cli_overrides_preserves_unset_values_and_applies_set_values() {
     assert_eq!(cfg.github_api_timeout_secs, 70);
     assert_eq!(cfg.cooldown_flutter_seconds, 20);
     assert_eq!(cfg.restart_min_delay_ms, 30);
-    assert_eq!(cfg.client_channel_capacity, 50);
 }
 
 #[rstest]
