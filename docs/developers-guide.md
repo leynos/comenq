@@ -28,6 +28,32 @@ mutations. Restart tracing includes the task name, attempt, and backoff delay
 where applicable. Recovery is bounded to five restart attempts; when that limit
 is exhausted, the supervisor signals daemon shutdown.
 
+### Client and daemon API
+
+The `comenq::Args` parser exposes a global `--socket` option and the `put`,
+`list`, `bump`, `bust`, and `del` [`Command`](../crates/comenq/src/lib.rs)
+subcommands. `Command::to_request()` maps each command to the shared
+`comenq_lib::protocol::Request` enum. `comenq::ClientError` distinguishes
+connection, serialization, I/O, daemon-reported, and unexpected-response
+failures; `comenq::run()` renders successful replies for users.
+
+The Unix socket carries exactly one tagged JSON `Request` per connection. The
+daemon returns exactly one tagged JSON `Response`: `Response::Ok` contains an
+`entry` for `put`, an `entries` list for `list`, or neither field for `bump`,
+`bust`, and `del`; `Response::Error` contains the daemon's human-readable
+failure message. `PendingEntry` carries the deterministic eight-character ID,
+ETA in seconds, repository target, pull request number, and full comment body.
+Clients must treat response fields as untrusted and reject a successful reply
+whose payload shape does not match the request.
+
+The listener adapter passes valid requests to `SharedQueue::execute`. It
+performs queue mutations and scheduling through `QueueStore`, then notifies the
+worker after a successful mutation. `SharedQueue::next_due()` selects the head
+entry for posting, and `SharedQueue::complete()` removes an entry after a
+successful GitHub post while recording the posting timestamp. Queue-store
+failures become daemon error responses; failed GitHub posts leave their entries
+in place for a later full-cooldown retry.
+
 When a comment is enqueued, the worker chooses a uniformly distributed flutter
 and stores it with that entry. The stored flutter is added to the complete base
 cooldown and never shortens it, keeping the queue's cooldown-derived ETA
