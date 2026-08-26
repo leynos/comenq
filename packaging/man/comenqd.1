@@ -50,9 +50,10 @@ can reference \fB${CREDENTIALS_DIRECTORY}/token\fR.
 .PP
 The cooldown between comment posts is set by
 .B cooldown_period_seconds
-and may be lengthened by a random flutter of up to
+and each comment receives a random flutter of up to
 .B cooldown_flutter_seconds
-after each post; the full cooldown always elapses.
+when it is enqueued. The flutter is stored with the entry and only lengthens
+the cooldown-derived ETA; the full cooldown always elapses.
 .PP
 The daemon may run as a system service using the packaged systemd unit,
 or as a per-user service (\fBsystemd --user\fR) using the

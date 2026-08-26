@@ -21,7 +21,7 @@ therefore decomposed into two distinct, cooperating processes:
 
 1. `comenqd` **(The Daemon):** A long-running background process that serves as
    the system's engine. It is solely responsible for managing a persistent job
-   queue, interacting with the GitHub API, and enforcing the 16-minute
+   queue, interacting with the GitHub API, and enforcing the configured
    cooling-off period between posts.
 
 2. `comenq` **(The Client):** A lightweight command-line interface (CLI) tool.
@@ -33,7 +33,7 @@ use a daemon-client model over a Unix socket[^1], yields significant advantages:
 
 - **Persistence and Statefulness:** The daemon can maintain the queue and its
   internal timer state across many client invocations, ensuring that the
-  16-minute delay is consistently enforced.
+  configured delay is consistently enforced.
 
 - **Decoupling:** The user's interaction (via the CLI) is immediate. The user
   can submit a comment and receive confirmation that it has been enqueued
@@ -47,7 +47,7 @@ use a daemon-client model over a Unix socket[^1], yields significant advantages:
 The complete lifecycle of a request is illustrated in the following sequence:
 
 1. A user on the host machine invokes the `comenq` client via a command like
-   `ssh mybox comenq owner/repo 123 "My comment"`.
+   `ssh mybox comenq put owner/repo 123 "My comment"`.
 
 2. The `comenq` client parses the command-line arguments.
 
@@ -75,8 +75,8 @@ The complete lifecycle of a request is illustrated in the following sequence:
 10. Upon successful posting, the worker commits the job, permanently removing
    it from the queue.
 
-11. The worker task then enters a 16-minute sleep state (the "cooling-off
-   period").
+11. The worker task then enters a sleep state for the configured cooling-off
+   period.
 
 12. After the sleep period elapses, the worker task returns to step 8, ready to
    process the next job in the queue.
@@ -92,10 +92,10 @@ configuration, and a `tokio::sync::Notify` used to wake the worker promptly
 when the queue changes.
 
 - The listener executes each client request directly against the shared
-  queue (via `SharedQueue::execute`) and writes the reply before the
-  connection closes. A request is durably persisted to disk before the client
-  receives its acknowledgement, so there is no in-memory backlog that could be
-  lost if the daemon exits unexpectedly.
+  queue (via `SharedQueue::execute`) and writes the reply before the connection
+  closes. A request is durably persisted to disk before the client receives its
+  acknowledgement, so there is no in-memory backlog that could be lost if the
+  daemon exits unexpectedly.
 
 - Mutating operations (`put`, `bump`, `bust`, `del`) call `notify_one` on the
   shared `Notify` after the change is written, so the worker interrupts any
@@ -142,52 +142,61 @@ defines the entire CLI structure declaratively within a Rust `struct`,
 providing clarity and maintainability compared to the more verbose builder
 pattern.[^3]
 
-The CLI will accept three required positional arguments, matching the user's
-requested invocation format: `comenq <owner/repo> <pr_number> <comment_body>`.
+The CLI has a global optional `--socket` override (also available through
+`COMENQ_SOCKET`) and five subcommands: `put`, `list`, `bump`, `bust`, and `del`.
+`put` accepts `<owner/repo> <pr_number> <comment_body>` and an optional
+`--now`; the other commands accept no positional arguments (`list`) or an
+eight-character entry identifier (`bump`, `bust`, and `del`).
 
-The following code defines the `Args` struct that represents the CLI. This will
-be the core of the `comenq` client's `main.rs`.
+The following code shows the shape of the shipped `Args` parser and its
+subcommands. The implementation delegates protocol and socket work to the
+client module.
 
 ```rust
 // In src/bin/comenq/main.rs
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use comenq::RepoSlug;
 
 /// A CLI client to enqueue a comment for a GitHub Pull Request.
-#
-#
+#[derive(Debug, Parser)]
+#[command(name = "comenq")]
 pub struct Args {
-    /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
-    #
-    repo_slug: RepoSlug,
-
-    /// The pull request number to comment on.
-    #
-    pr_number: u64,
-
-    /// The body of the comment. It is recommended to quote this argument.
-    #
-    comment_body: String,
-
     /// Path to the daemon's Unix Domain Socket.
-    #
-    socket: PathBuf,
+    #[arg(long, global = true, env = "COMENQ_SOCKET")]
+    pub socket: Option<PathBuf>,
+
+    /// Queue operation to perform.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Enqueue a comment.
+    Put {
+        repo_slug: RepoSlug,
+        pr_number: u64,
+        comment_body: String,
+        #[arg(long)]
+        now: bool,
+    },
+    List,
+    Bump { id: String },
+    Bust { id: String },
+    Del { id: String },
 }
 ```
 
-The `#[derive(Parser)]` attribute instructs `clap` to generate all the
-necessary parsing logic.[^5] The doc comments (
+The `#[derive(Parser)]` and `#[derive(Subcommand)]` attributes instruct `clap`
+to generate all the necessary parsing logic.[^5] The doc comments (`///`) are
+automatically converted into help messages, which are displayed when the user
+runs `comenq --help`. This feature makes the tool self-documenting.[^10] The
 
-`///`) are automatically converted into help messages, which are displayed when
-the user runs `comenq --help`. This feature makes the tool
-self-documenting.[^10] The
-
-`#[arg(...)]` attributes provide fine-grained control over each argument, such
-as defining a `default_value` for the socket path, making the client flexible
-for different environments. The optional `--socket` flag overrides this path
-when specified, giving users a simple way to adapt to custom deployments.[^3]
+`#[arg(...)]` and `#[command(...)]` attributes define the global socket
+override and subcommand fields. Socket discovery itself is resolved at connect
+time, so the client can try the user runtime socket before the system socket.
 
 ### 2.2. Client-Daemon IPC Protocol
 
@@ -206,11 +215,11 @@ daemon to decode it.
 ```rust
 // In src/lib.rs (or a dedicated lib crate)
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// The data structure sent from the client to the daemon over the UDS.
 /// It contains all necessary information to post a GitHub comment.
-#
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommentRequest {
     pub owner: String,
     pub repo: String,
@@ -245,11 +254,12 @@ advantages for this application:
   This is inherently more secure than a `localhost` TCP socket, which any local
   user could connect to by default.
 
-### 2.3. Complete Client Implementation Blueprint
+### 2.3. Historical Client Implementation Blueprint
 
-The following is a complete, commented blueprint for the `comenq` client's
-`main.rs` file. It integrates argument parsing via `clap` with asynchronous IPC
-via `tokio` and `UnixStream`.
+The following historical pseudocode shows the earlier single-purpose client's
+argument parsing and asynchronous IPC. The shipped client uses the subcommand
+and protocol flow described in Section 2.4; this block is retained only to
+explain the original design.
 
 ```rust
 // In src/bin/comenq/main.rs
@@ -265,9 +275,9 @@ use comenq::RepoSlug;
 
 // Assume CommentRequest is in a shared library: `use comenq_lib::CommentRequest;`
 // For this example, we define it here.
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-#
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommentRequest {
     pub owner: String,
     pub repo: String,
@@ -276,23 +286,22 @@ pub struct CommentRequest {
 }
 
 /// A CLI client to enqueue a comment for a GitHub Pull Request.
-#
-#
+#[derive(Debug, Parser)]
 pub struct Args {
     /// The repository in 'owner/repo' format (e.g., "rust-lang/rust").
-    #
+    #[arg(long)]
     repo_slug: RepoSlug,
 
     /// The pull request number to comment on.
-    #
+    #[arg(long)]
     pr_number: u64,
 
     /// The body of the comment. It is recommended to quote this argument.
-    #
+    #[arg(long)]
     comment_body: String,
 
     /// Path to the daemon's Unix Domain Socket.
-    #
+    #[arg(long)]
     socket: PathBuf,
 }
 
@@ -359,22 +368,23 @@ handling, so `run` operates on validated data without rechecking it.
 
 ### 2.4. Client Subcommands and ETA Semantics
 
-The illustrative blueprint above shows a client that only enqueues a comment.
-The shipped client instead exposes five subcommands, one per protocol
-operation, all sharing a global `--socket` flag (also settable via the
-`COMENQ_SOCKET` environment variable):
+The historical blueprint above shows a client that only enqueues a comment. The
+shipped client instead exposes five subcommands, one per protocol operation,
+all sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
+environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
-  prints its identifier and an approximate ETA, e.g. `Queued 1a2b3c4d for
-  octocat/hello-world#7 — posts in ~1h 01m`. By default the comment waits one
-  full cooldown (plus its flutter) from enqueue even when the queue is idle;
-  `--now` lifts that floor so the comment posts as soon as the queue allows.
+  prints its identifier and an approximate ETA, e.g.
+  `Queued 1a2b3c4d for octocat/hello-world#7 — posts in ~1h 01m`. By default
+  the comment waits one full cooldown (plus its flutter) from enqueue even when
+  the queue is idle; `--now` lifts that floor so the comment posts as soon as
+  the queue allows.
 
 - `comenq list`: prints one line per pending comment, in posting order, each
-  showing the identifier, the ETA, the target `owner/repo#pr`, and the
-  comment body collapsed to a single line of at most 60 characters (control
-  characters, including newlines, become spaces; longer bodies are truncated
-  with an ellipsis).
+  showing the identifier, the ETA, the target `owner/repo#pr`, and the comment
+  body collapsed to a single line of at most 60 characters (control characters,
+  including newlines, become spaces; longer bodies are truncated with an
+  ellipsis).
 
 - `comenq bump <id>`: moves the identified comment to the head of the queue.
 
@@ -382,10 +392,9 @@ operation, all sharing a global `--socket` flag (also settable via the
 
 - `comenq del <id>`: removes the identified comment from the queue.
 
-Each subcommand maps directly to one variant of the `Request` enum (see
-§3.2 for the store and §5 for the wire protocol) and prints a short
-confirmation, or the daemon's error message, once the single reply is
-received.
+Each subcommand maps directly to one variant of the `Request` enum (see §3.2
+for the store and §5 for the wire protocol) and prints a short confirmation, or
+the daemon's error message, once the single reply is received.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -393,13 +402,13 @@ reflects three rules enforced by the daemon:
 - **Flutter is fixed at enqueue time.** When a comment is enqueued, a random
   flutter duration (up to `cooldown_flutter_seconds`) is sampled once and
   stored with the entry. It does not change on subsequent `list` calls, so the
-  reported ETA for a given entry only decreases as time passes; it never
-  jumps around.
+  reported ETA for a given entry only decreases as time passes; it never jumps
+  around.
 
 - **The cooldown always runs in full.** The daemon never shortens
-  `cooldown_period_seconds` to catch up; each entry's projected posting time
-  is its predecessor's projected posting time plus a full cooldown plus its
-  own flutter (or, for the head entry, the last successful post plus a full
+  `cooldown_period_seconds` to catch up; each entry's projected posting time is
+  its predecessor's projected posting time plus a full cooldown plus its own
+  flutter (or, for the head entry, the last successful post plus a full
   cooldown plus its own flutter). This keeps the reported ETA consistent with
   what the worker will actually do.
 
@@ -426,9 +435,9 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 
 1. **Listener** (`run_listener`): This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
-   `comenq` clients. For each connection it reads one JSON `Request`,
-   executes it directly against the shared queue, and writes back one JSON
-   `Response` before closing the connection.
+   `comenq` clients. For each connection it reads one JSON `Request`, executes
+   it directly against the shared queue, and writes back one JSON `Response`
+   before closing the connection.
 
 2. **Worker** (`run_worker`): This is the main worker task. It operates in a
    loop, recomputing the head entry's due time on every iteration, waiting
@@ -436,24 +445,24 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
    signalled), posting the comment to GitHub, and recording the post before
    moving on to the next entry.
 
-This concurrent design ensures that the daemon remains responsive to new
-client requests even while the worker task is in its long sleep phase. A
-request can be accepted, persisted, and acknowledged in milliseconds, while
-the worker task independently processes the queue at its own deliberate pace.
+This concurrent design ensures that the daemon remains responsive to new client
+requests even while the worker task is in its long sleep phase. A request can
+be accepted, persisted, and acknowledged in milliseconds, while the worker task
+independently processes the queue at its own deliberate pace.
 
-Both tasks share the queue through an `Arc<SharedQueue>` rather than a
-channel: there is no intermediate queue-writer task. The listener performs
-each mutation directly, and the worker is woken (via a `tokio::sync::Notify`)
-whenever a mutation occurs.
+Both tasks share the queue through an `Arc<SharedQueue>` rather than a channel:
+there is no intermediate queue-writer task. The listener performs each mutation
+directly, and the worker is woken (via a `tokio::sync::Notify`) whenever a
+mutation occurs.
 
 Both the listener and the worker are supervised. If either task exits
 unexpectedly, the daemon logs the failure, waits using an exponential backoff
 with jitter (via the `backon` crate) to avoid a tight restart loop, and then
 respawns the task. The minimum delay between restarts is configurable via
-`restart_min_delay_ms`. This keeps the service available without relying on
-an external process supervisor. Because both tasks operate on the same
-on-disk store rather than an in-memory buffer, restarting either task after a
-panic does not discard any pending request.
+`restart_min_delay_ms`. This keeps the service available without relying on an
+external process supervisor. Because both tasks operate on the same on-disk
+store rather than an in-memory buffer, restarting either task after a panic
+does not discard any pending request.
 
 The supervision and restart behaviour is illustrated in the sequence diagram
 below.
@@ -516,10 +525,10 @@ time of the most recent successful post. Each entry (a `StoredEntry`) carries:
   existing entry unchanged rather than creating a duplicate.
 
 - **An explicit integer ordering key.** New entries are appended after the
-  current tail. `bump` sets the key to one less than the current head's key
-  (or leaves it unchanged if the entry is already the head); `bust` sets it to
-  one more than the current tail's key. Repeated bumps or busts can drive the
-  key negative or arbitrarily large; entries are always read back sorted by
+  current tail. `bump` sets the key to one less than the current head's key (or
+  leaves it unchanged if the entry is already the head); `bust` sets it to one
+  more than the current tail's key. Repeated bumps or busts can drive the key
+  negative or arbitrarily large; entries are always read back sorted by
   `(order, enqueued_at, id)`.
 
 - **The flutter sampled at enqueue time.** A random duration up to
@@ -531,10 +540,10 @@ time of the most recent successful post. Each entry (a `StoredEntry`) carries:
 - **The enqueue time**, used both as a tiebreaker for ordering and as an input
   to the identifier hash.
 
-Entries are written to a temporary sibling file and then renamed into place,
-so a reader never observes a half-written entry. `bump`, `bust`, and `del`
-mutate or remove a single entry file the same way. `complete` removes the
-posted entry and atomically rewrites `last_post` with the current Unix time.
+Entries are written to a temporary sibling file and then renamed into place, so
+a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
+or remove a single entry file the same way. `complete` removes the posted entry
+and atomically rewrites `last_post` with the current Unix time.
 
 Because an entry is only removed from disk after a successful post
 (`complete`), and a failed post simply leaves the entry in place for the next
@@ -574,8 +583,8 @@ Its workflow is as follows:
    adjusted. It deserializes the received JSON into a `Request`, executes it
    directly against the shared queue (`SharedQueue::execute`), and writes the
    resulting `Response` back to the client before closing the connection. A
-   request that fails to deserialize receives an error `Response` rather than
-   a silently dropped connection.
+   request that fails to deserialize receives an error `Response` rather than a
+   silently dropped connection.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -605,9 +614,8 @@ sequenceDiagram
 
 ### 3.4. The GitHub Comment-Posting Worker (`run_worker`)
 
-This task implements the core business logic of the service. It runs in a
-loop, ensuring that comments are processed one by one with the required
-delay.
+This task implements the core business logic of the service. It runs in a loop,
+ensuring that comments are processed one by one with the required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
@@ -642,9 +650,9 @@ The worker task's loop consists of the following steps:
 2. **Wait until due:** If nothing is queued, the worker waits for the shared
    queue's change signal or a shutdown signal. If the head entry is not yet
    due, the worker sleeps for the remaining time, but the sleep is
-   interruptible: a queue change (e.g. a `bump` promoting a different entry)
-   or shutdown wakes it early, and it loops back to recompute the due entry
-   rather than blindly posting whichever entry it started waiting for.
+   interruptible: a queue change (e.g. a `bump` promoting a different entry) or
+   shutdown wakes it early, and it loops back to recompute the due entry rather
+   than blindly posting whichever entry it started waiting for.
 
 3. **Post Comment:** Once an entry is due, the worker constructs and sends the
    API request to GitHub using the `octocrab` client and the data from the
@@ -669,16 +677,16 @@ The worker task's loop consists of the following steps:
 **ETA projection.** The store computes, for each pending entry, an estimated
 number of seconds until it is posted (`schedule` in `QueueStore`). The head
 entry is due one full `cooldown_period_seconds` plus its own sampled flutter
-after the last successful post, or immediately if nothing has been posted
-yet. Each subsequent entry is due a further cooldown plus its own flutter
-after its predecessor's projected posting time. Because flutter is sampled
-once, at enqueue time, and the cooldown always runs in full, the ETA reported
-to a client by `put` or `list` matches what the worker will actually do, and
-does not drift as time passes.
+after the last successful post, or immediately if nothing has been posted yet.
+Each subsequent entry is due a further cooldown plus its own flutter after its
+predecessor's projected posting time. Because flutter is sampled once, at
+enqueue time, and the cooldown always runs in full, the ETA reported to a
+client by `put` or `list` matches what the worker will actually do, and does
+not drift as time passes.
 
 This workflow gives a highly resilient system that can tolerate both network
-failures and process crashes without losing data: an entry is only ever
-removed from the store once GitHub has confirmed the post.
+failures and process crashes without losing data: an entry is only ever removed
+from the store once GitHub has confirmed the post.
 
 ### 3.5. Daemon Configuration and Logging
 
@@ -693,8 +701,8 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
 | queue_path               | PathBuf | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                    | /var/lib/comenq/queue                                                                                          |
 | log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
-| cooldown_period_seconds  | u64     | The cooling-off period in seconds after each comment post.                                                                                                                                                                 | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds added to each cooldown. The full cooldown always elapses; a fresh random duration up to this value is added on top. Zero disables flutter.                                               | 0                                                                                                              |
+| cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
+| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
 | restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
@@ -866,8 +874,9 @@ The daemon also runs unprivileged under `systemd --user`, using the
 configuration `packaging/config/comenqd-user.toml`:
 
 - The socket defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock`;
-  `RuntimeDirectory=comenq` provisions the directory, and the client discovers
-  whichever socket (user or system) exists.
+  `RuntimeDirectory=comenq` provisions the directory. Without an explicit
+  override, the client tries this user socket first and then
+  `/run/comenq/comenq.sock` if the user-socket connection fails.
 - The queue lives in `~/.local/state/comenq/queue`, provided through
   `StateDirectory=comenq` and the `COMENQD_QUEUE_PATH` environment variable in
   the unit.
@@ -1006,7 +1015,7 @@ use serde::{Deserialize, Serialize};
 
 /// The data structure sent from the client to the daemon over the UDS.
 /// It contains all necessary information to post a GitHub comment.
-#
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CommentRequest {
     pub owner: String,
     pub repo: String,
@@ -1015,10 +1024,12 @@ pub struct CommentRequest {
 }
 ```
 
-### 5.4. Source Code for `comenq` (Client)
+### 5.4. Historical Source for `comenq` (Client)
 
-The `crates/comenq/Cargo.toml` would simply list the workspace dependencies.
-The source code is as follows:
+The following is historical pseudocode for the original single-purpose client;
+it is not the shipped implementation. The current client uses the five
+subcommands described in Section 2.4 and sends tagged `Request` values, then
+reads and handles a `Response` from the daemon.
 
 ```rust
 // crates/comenq/src/main.rs
@@ -1031,16 +1042,11 @@ use comenq_lib::CommentRequest; // Using the shared library
 use tracing::warn;
 use comenq::RepoSlug;
 
-#
-#
+// Historical pseudocode; the shipped client is in crates/comenq/src/main.rs.
 struct Args {
-    #
     repo_slug: RepoSlug,
-    #
     pr_number: u64,
-    #
     comment_body: String,
-    #
     socket: PathBuf,
 }
 
@@ -1122,9 +1128,12 @@ sequenceDiagram
         Worker->>Queue: next_due()
         alt Nothing queued
             Worker->>WorkerHooks: (optional) drained.notify_one()
-            Worker->>WatchChannel: select: shutdown.changed() or queue.changed()
+            Worker->>WatchChannel: shutdown.changed() (watch signal)
+            Worker->>Queue: queue.changed() (Notify signal)
         else Head not yet due
-            Worker->>WatchChannel: select: shutdown, queue.changed(), or sleep(wait_seconds)
+            Worker->>WatchChannel: shutdown.changed() (watch signal)
+            Worker->>Queue: queue.changed() (Notify signal)
+            Worker->>Worker: sleep(wait_seconds)
         else Head due now
             Worker->>WorkerHooks: (optional) enqueued.notify_one()
             Worker->>Worker: post to GitHub
@@ -1132,7 +1141,9 @@ sequenceDiagram
                 Worker->>Queue: complete(id)
             else Failure
                 Worker->>WorkerHooks: (optional) idle.notify_one()
-                Worker->>WatchChannel: wait_or_shutdown(cooldown_period_seconds)
+                Worker->>WatchChannel: shutdown.changed() (watch signal)
+                Worker->>Queue: queue.changed() (Notify signal)
+                Worker->>Worker: sleep(cooldown_period_seconds)
             end
             Worker->>WorkerHooks: (optional) idle.notify_one()
         end
@@ -1161,9 +1172,10 @@ and worker both hold an `Arc<SharedQueue>`, which wraps the store in a
 per-connection lock or a writer task, gives the same single-writer semantics
 for on-disk mutations while keeping the concurrency model simple.
 
-The worker's cooling-off period is configured via `cooldown_period_seconds` and
-defaults to 960 seconds (16 minutes) to provide ample headroom against GitHub's
-secondary rate limits.
+The worker's cooling-off period is configured via `cooldown_period_seconds`,
+which defaults to 960 seconds. This value is the base interval used for the ETA
+projections returned by `put` and `list` and provides ample headroom against
+GitHub's secondary rate limits.
 
 GitHub API calls are wrapped in `tokio::time::timeout` with a configurable
 limit (default 30 seconds) to ensure the worker does not block indefinitely if
@@ -1190,8 +1202,7 @@ flag.
 [^8]: octocrab/examples/custom_client.rs at main - GitHub. Accessed on July 24,
       2025.
       <https://github.com/XAMPPRocky/octocrab/blob/main/examples/custom_client.rs>
-[^10]: codyps/rust-systemd: Rust interface to systemd c apis - GitHub. Accessed
-       on July 24, 2025. <https://github.com/codyps/rust-systemd>
+[^10]: clap derive reference - Docs.rs. Accessed on July 24, 2025.
        <https://docs.rs/clap/latest/clap/_derive/index.html>
 [^12]: Unix sockets, the basics in Rust - Emmanuel Bosquet. Accessed on July
        24, 2025. <https://emmanuelbosquet.com/2022/whatsaunixsocket/>
