@@ -16,6 +16,7 @@ enum EtaUnit {
     Hours,
 }
 
+/// Classify an ETA before rendering its compact duration.
 fn classify_eta(seconds: u64) -> EtaUnit {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
@@ -92,13 +93,25 @@ pub fn one_line_summary(body: &str) -> String {
     truncated
 }
 
+/// Escape reply fields that could otherwise alter terminal output.
+fn terminal_safe(value: &str) -> String {
+    value.chars().fold(String::new(), |mut safe, character| {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            safe.extend(character.escape_default());
+        } else {
+            safe.push(character);
+        }
+        safe
+    })
+}
+
 /// Render the `put` confirmation line.
 pub(crate) fn render_put(entry: &PendingEntry) -> String {
     format!(
         "Queued {} for {}/{}#{} — posts in ~{}",
-        entry.id,
-        entry.owner,
-        entry.repo,
+        terminal_safe(&entry.id),
+        terminal_safe(&entry.owner),
+        terminal_safe(&entry.repo),
         entry.pr_number,
         format_eta(entry.eta_seconds)
     )
@@ -108,10 +121,10 @@ pub(crate) fn render_put(entry: &PendingEntry) -> String {
 pub(crate) fn render_entry(entry: &PendingEntry) -> String {
     format!(
         "{}  {:>7}  {}/{}#{}  {}",
-        entry.id,
+        terminal_safe(&entry.id),
         format_eta(entry.eta_seconds),
-        entry.owner,
-        entry.repo,
+        terminal_safe(&entry.owner),
+        terminal_safe(&entry.repo),
         entry.pr_number,
         one_line_summary(&entry.body)
     )
@@ -199,5 +212,21 @@ mod tests {
         assert!(line.contains("octocat/hello-world#7"));
         assert!(line.ends_with('…'));
         assert!(!line.contains('\n'));
+    }
+
+    #[rstest]
+    fn escapes_untrusted_reply_target_fields() {
+        let mut entry = entry("Hi", 0);
+        entry.id = "1a2b\u{1b}[2J".into();
+        entry.owner = "octo\ncat".into();
+        entry.repo = "hello\u{2028}world".into();
+
+        let rendered = render_put(&entry);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\u{2028}'));
+        assert!(rendered.contains("\\u{1b}"));
+        assert!(rendered.contains("\\n"));
+        assert!(rendered.contains("\\u{2028}"));
     }
 }

@@ -12,11 +12,12 @@ use anyhow::Result;
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use thiserror::Error;
 #[cfg(any(test, feature = "test-support"))]
 use tokio::sync::Notify;
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
@@ -37,6 +38,7 @@ pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
         .build()
 }
 
+/// Submit a comment to GitHub with the configured API deadline.
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -116,12 +118,28 @@ impl WorkerHooks {
     }
 }
 
-/// Wait for a retry cooldown unless the daemon is shutting down.
-async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
-    tokio::select! {
-        biased;
-        _ = shutdown.changed() => true,
-        _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
+/// Wait for a failed post's retry deadline while still consuming queue changes.
+///
+/// Queue changes must not move this deadline earlier: otherwise an immediate
+/// entry whose post failed could retry as soon as another client mutates the
+/// queue. Consuming the notification here preserves the change signal without
+/// allowing it to bypass the API-protection cooldown.
+async fn wait_for_retry_deadline(
+    deadline: Instant,
+    changed: &Notify,
+    shutdown: &mut watch::Receiver<()>,
+) -> bool {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => return true,
+            () = changed.notified() => {}
+            _ = tokio::time::sleep(remaining) => return false,
+        }
     }
 }
 
@@ -237,16 +255,11 @@ pub async fn run_worker(
                 control.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.
                 metrics::record_cooldown_wait(config.cooldown_period_seconds);
-                tokio::select! {
-                    should_shutdown = wait_or_shutdown(
-                        config.cooldown_period_seconds,
-                        &mut control.shutdown,
-                    ) => {
-                        if should_shutdown {
-                            break;
-                        }
-                    }
-                    () = queue.changed() => {}
+                let deadline = Instant::now() + Duration::from_secs(config.cooldown_period_seconds);
+                if wait_for_retry_deadline(deadline, queue.change_notifier(), &mut control.shutdown)
+                    .await
+                {
+                    break;
                 }
                 continue;
             }

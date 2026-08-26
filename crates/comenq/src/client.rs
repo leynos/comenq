@@ -7,6 +7,7 @@
 
 use comenq_lib::protocol::{Request, Response};
 use std::path::PathBuf;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,6 +17,9 @@ use tracing::{debug, warn};
 
 use crate::output::{render_entry, render_put};
 use crate::{Args, Command};
+
+/// Maximum time to wait for a complete daemon reply.
+const CLIENT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Errors that can occur when interacting with the daemon.
 #[derive(Debug, Error)]
@@ -35,6 +39,9 @@ pub enum ClientError {
     /// Reading the daemon's reply failed.
     #[error("failed to read daemon reply: {0}")]
     Read(#[source] std::io::Error),
+    /// The daemon did not finish its reply before the client deadline.
+    #[error("timed out waiting for daemon reply")]
+    ReplyTimeout,
     /// The daemon reported a failure.
     #[error("daemon refused the request: {0}")]
     Daemon(String),
@@ -79,8 +86,17 @@ async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError
     })))
 }
 
-/// Send `request` to the first reachable candidate and parse the reply.
+/// Send `request` to the first reachable candidate and parse its bounded reply.
 async fn transact(candidates: &[PathBuf], request: &Request) -> Result<Response, ClientError> {
+    transact_with_timeout(candidates, request, CLIENT_REPLY_TIMEOUT).await
+}
+
+/// Send one request and require the daemon to finish its reply within `timeout`.
+async fn transact_with_timeout(
+    candidates: &[PathBuf],
+    request: &Request,
+    timeout: Duration,
+) -> Result<Response, ClientError> {
     let payload = serde_json::to_vec(request)?;
     let mut stream = connect_first(candidates).await?;
     stream
@@ -89,9 +105,9 @@ async fn transact(candidates: &[PathBuf], request: &Request) -> Result<Response,
         .map_err(ClientError::Write)?;
     stream.shutdown().await.map_err(ClientError::Shutdown)?;
     let mut reply = Vec::new();
-    stream
-        .read_to_end(&mut reply)
+    tokio::time::timeout(timeout, stream.read_to_end(&mut reply))
         .await
+        .map_err(|_| ClientError::ReplyTimeout)?
         .map_err(ClientError::Read)?;
     Ok(serde_json::from_slice(&reply)?)
 }
@@ -143,12 +159,15 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 #[cfg(test)]
 mod tests {
     //! Round-trip tests for the client transport.
-    use super::{ClientError, run};
+    use super::{ClientError, run, transact_with_timeout};
     use crate::{Args, Command};
     use comenq_lib::protocol::{PendingEntry, Request, Response};
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixListener;
+    use tokio::sync::Notify;
 
     fn put_args(socket: std::path::PathBuf) -> Args {
         Args {
@@ -314,6 +333,32 @@ mod tests {
 
         let err = run(put_args(socket)).await.expect_err("should error");
         assert!(matches!(err, ClientError::Connect(_)));
+    }
+
+    #[tokio::test]
+    async fn transaction_times_out_when_the_daemon_keeps_the_reply_open() {
+        let dir = tempdir().expect("temp dir");
+        let socket = dir.path().join("sock");
+        let listener = UnixListener::bind(&socket).expect("bind socket");
+        let request_received = Arc::new(Notify::new());
+        let peer_received = Arc::clone(&request_received);
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            stream
+                .read_to_end(&mut request)
+                .await
+                .expect("read request");
+            peer_received.notify_one();
+            std::future::pending::<()>().await;
+        });
+
+        let err = transact_with_timeout(&[socket], &Request::List, Duration::from_millis(10))
+            .await
+            .expect_err("open reply must time out");
+        assert!(matches!(err, ClientError::ReplyTimeout));
+        request_received.notified().await;
+        peer.abort();
     }
 
     /// A stale socket file must not shadow a live daemon later in the list.
