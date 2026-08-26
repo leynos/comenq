@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 const ENTRIES_DIR: &str = "entries";
 /// File recording the Unix time of the most recent successful post.
 const LAST_POST_FILE: &str = "last_post";
-
+/// Recovery record for a GitHub post that succeeded before its queue cleanup.
+const COMPLETION_FILE: &str = "completion";
 /// A queued comment with its scheduling metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredEntry {
@@ -34,10 +35,9 @@ pub struct StoredEntry {
     pub enqueued_at: u64,
     /// Earliest Unix time the entry may post.
     ///
-    /// A default `put` sets this one cooldown plus the entry's flutter
-    /// after enqueue, so even an idle queue paces a fresh comment; an
-    /// immediate put (and entries persisted before this field existed)
-    /// leave it at zero.
+    /// A default `put` waits one cooldown plus flutter after enqueue, even
+    /// while idle. Immediate puts and entries persisted before this field
+    /// existed use zero.
     #[serde(default)]
     pub not_before: u64,
     /// The comment to post.
@@ -58,7 +58,6 @@ impl StoredEntry {
         }
     }
 }
-
 /// Errors raised by queue store operations.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -74,6 +73,9 @@ pub enum StoreError {
     /// An identifier is not safe to use as a queue-entry filename.
     #[error("queue entry id '{0}' must be eight hexadecimal characters")]
     InvalidId(String),
+    /// A GitHub repository component is unsafe to persist or render.
+    #[error("GitHub repository {0} contains unsafe characters")]
+    InvalidRepositoryComponent(&'static str),
     /// The persisted last-post marker cannot be parsed as a Unix timestamp.
     #[error("last-post marker is invalid: {0}")]
     LastPost(#[from] ParseIntError),
@@ -81,10 +83,8 @@ pub enum StoreError {
     #[error("queue operation task failed: {0}")]
     BlockingTask(#[from] tokio::task::JoinError),
 }
-
 /// Result alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
-
 /// Scheduling inputs for [`QueueStore::put`].
 #[derive(Debug, Clone, Copy)]
 pub struct PutOptions {
@@ -102,6 +102,7 @@ pub struct PutOptions {
 pub struct QueueStore {
     entries_dir: PathBuf,
     last_post_path: PathBuf,
+    completion_path: PathBuf,
 }
 
 /// Compute the deterministic eight-character identifier for an entry.
@@ -143,10 +144,13 @@ impl QueueStore {
     pub fn open(queue_path: &Path) -> Result<Self> {
         let entries_dir = queue_path.join(ENTRIES_DIR);
         fs::create_dir_all(&entries_dir)?;
-        Ok(Self {
+        let store = Self {
             entries_dir,
             last_post_path: queue_path.join(LAST_POST_FILE),
-        })
+            completion_path: queue_path.join(COMPLETION_FILE),
+        };
+        store.reconcile_completion()?;
+        Ok(store)
     }
 
     /// Enqueue `request` at the tail, sampling its flutter now.
@@ -200,6 +204,7 @@ impl QueueStore {
 
     /// All pending entries in posting order.
     pub fn entries(&self) -> Result<Vec<StoredEntry>> {
+        self.reconcile_completion()?;
         let mut entries = Vec::new();
         for dirent in fs::read_dir(&self.entries_dir)? {
             let path = dirent?.path();
@@ -279,13 +284,6 @@ impl QueueStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Remove the posted head entry and record the posting time.
-    pub fn complete(&self, id: &str, now: u64) -> Result<()> {
-        self.del(id)?;
-        self.write_atomic(&self.last_post_path, now.to_string().as_bytes())?;
-        Ok(())
     }
 
     /// Pending entries paired with their estimated seconds-until-post.
@@ -395,6 +393,8 @@ impl QueueStore {
 fn is_valid_id(id: &str) -> bool {
     id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
+
+mod completion;
 
 #[cfg(test)]
 mod tests;

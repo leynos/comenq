@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{Request, Response};
 use tokio::sync::Notify;
 
@@ -77,6 +78,11 @@ impl SharedQueue {
         self.changed.notified().await;
     }
 
+    /// Expose the change notifier to the worker's retry deadline wait.
+    pub(crate) fn change_notifier(&self) -> &Notify {
+        &self.changed
+    }
+
     /// The head entry and its estimated seconds-until-post, when any.
     pub async fn next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
         let cooldown = self.cfg.cooldown_period_seconds;
@@ -131,11 +137,9 @@ impl SharedQueue {
         }
     }
 
-    async fn execute_put(
-        &self,
-        request: comenq_lib::CommentRequest,
-        immediate: bool,
-    ) -> StoreResult<Response> {
+    /// Persist a put request and return its schedule-stable pending entry.
+    async fn execute_put(&self, request: CommentRequest, immediate: bool) -> StoreResult<Response> {
+        validate_request(&request)?;
         let cooldown = self.cfg.cooldown_period_seconds;
         let flutter_max = self.cfg.cooldown_flutter_seconds;
         let now = self.clock.unix_now();
@@ -157,6 +161,7 @@ impl SharedQueue {
         .await
     }
 
+    /// Convert the current persisted schedule into a list response.
     async fn execute_list(&self) -> StoreResult<Response> {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
@@ -173,6 +178,7 @@ impl SharedQueue {
         .await
     }
 
+    /// Run synchronous store work outside Tokio's asynchronous executor.
     async fn with_store<T, F>(&self, operation: F) -> StoreResult<T>
     where
         T: Send + 'static,
@@ -187,6 +193,28 @@ impl SharedQueue {
         })
         .await?
     }
+}
+
+/// Reject repository components that could alter paths, URLs, or terminal output.
+fn validate_request(request: &CommentRequest) -> StoreResult<()> {
+    if !is_safe_repository_component(&request.owner) {
+        return Err(crate::store::StoreError::InvalidRepositoryComponent(
+            "owner",
+        ));
+    }
+    if !is_safe_repository_component(&request.repo) {
+        return Err(crate::store::StoreError::InvalidRepositoryComponent("name"));
+    }
+    Ok(())
+}
+
+/// Report whether a GitHub owner or repository name is safe at this boundary.
+fn is_safe_repository_component(component: &str) -> bool {
+    !component.is_empty()
+        && component.chars().all(|character| {
+            !character.is_control()
+                && !matches!(character, '/' | '\\' | '?' | '#' | '\u{2028}' | '\u{2029}')
+        })
 }
 
 #[cfg(test)]
@@ -245,5 +273,37 @@ mod tests {
             panic!("expected queued entry, got {response:?}");
         };
         assert_eq!(entry.eta_seconds, 600);
+    }
+
+    #[tokio::test]
+    async fn put_rejects_unsafe_repository_components() {
+        let dir = tempdir().expect("create temporary queue directory");
+        let queue = SharedQueue::open(Arc::new(Config {
+            github_token: "token".into(),
+            github_token_file: None,
+            socket_path: dir.path().join("comenq.sock"),
+            queue_path: dir.path().join("queue"),
+            cooldown_period_seconds: 600,
+            cooldown_flutter_seconds: 0,
+            restart_min_delay_ms: 1,
+            github_api_timeout_secs: 1,
+        }))
+        .expect("open queue");
+
+        let response = queue
+            .execute(Request::Put {
+                request: CommentRequest {
+                    owner: "octocat\u{1b}[2J".into(),
+                    repo: "hello-world".into(),
+                    pr_number: 7,
+                    body: "comment".into(),
+                },
+                immediate: true,
+            })
+            .await;
+        assert!(matches!(response, Response::Error { .. }));
+        assert!(
+            matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
+        );
     }
 }

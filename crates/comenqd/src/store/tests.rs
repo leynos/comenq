@@ -184,6 +184,24 @@ fn complete_records_last_post_and_removes_entry() {
 }
 
 #[rstest]
+fn reopen_reconciles_a_persisted_completion_before_scheduling() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
+    fs::write(
+        dir.path().join("completion"),
+        format!(r#"{{"id":"{}","posted_at":4242}}"#, entry.id),
+    )
+    .expect("persist completion record");
+    drop(store);
+
+    let reopened = open_store(&dir);
+    assert!(ids(&reopened).is_empty());
+    assert_eq!(reopened.last_post().expect("read last post"), Some(4242));
+    assert!(!dir.path().join("completion").exists());
+}
+
+#[rstest]
 fn next_due_returns_the_head() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
