@@ -1,8 +1,10 @@
 //! Tests for the reorderable persistent queue store.
 
-use super::{PutOptions, QueueStore, StoreError, entry_id};
+use super::{PutOptions, QueueStore, StoreError, StoredEntry, entry_id};
 use comenq_lib::CommentRequest;
+use proptest::prelude::*;
 use rstest::rstest;
+use std::fs;
 use tempfile::TempDir;
 
 fn request(body: &str) -> CommentRequest {
@@ -175,9 +177,9 @@ fn complete_records_last_post_and_removes_entry() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let a = store.put(request("a"), &immediate(0), 1000).expect("put a");
-    assert_eq!(store.last_post(), None);
+    assert_eq!(store.last_post().expect("read last post"), None);
     store.complete(&a.id, 4242).expect("complete a");
-    assert_eq!(store.last_post(), Some(4242));
+    assert_eq!(store.last_post().expect("read last post"), Some(4242));
     assert!(ids(&store).is_empty());
 }
 
@@ -279,4 +281,123 @@ fn deferred_floor_includes_the_entry_flutter() {
         1600 + entry.flutter_seconds,
         "floor must be enqueue + cooldown + sampled flutter"
     );
+}
+
+#[rstest]
+fn malformed_last_post_marker_is_an_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    fs::write(dir.path().join("last_post"), "not a timestamp").expect("write marker");
+    assert!(matches!(store.last_post(), Err(StoreError::LastPost(_))));
+}
+
+#[rstest]
+fn id_collision_with_a_different_request_uses_a_salted_id() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let original_request = request("original");
+    let colliding_id = entry_id(&original_request, 1000);
+    store
+        .write_entry(&StoredEntry {
+            id: colliding_id.clone(),
+            order: 0,
+            flutter_seconds: 0,
+            enqueued_at: 1000,
+            not_before: 0,
+            request: request("different"),
+        })
+        .expect("seed colliding entry");
+
+    let inserted = store
+        .put(original_request, &immediate(0), 1000)
+        .expect("put after collision");
+    let repeated = store
+        .put(request("original"), &immediate(0), 1000)
+        .expect("repeat put after collision");
+
+    assert_ne!(inserted.id, colliding_id);
+    assert_eq!(repeated, inserted);
+    assert_eq!(ids(&store).len(), 2);
+}
+
+#[rstest]
+fn unsafe_stored_identifiers_are_skipped_without_path_traversal() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let unsafe_entry = StoredEntry {
+        id: "../../outside".into(),
+        order: 0,
+        flutter_seconds: 0,
+        enqueued_at: 1000,
+        not_before: 0,
+        request: request("unsafe"),
+    };
+    let bytes = serde_json::to_vec(&unsafe_entry).expect("serialize unsafe entry");
+    fs::write(dir.path().join("entries/deadbeef.json"), bytes).expect("write unsafe entry");
+
+    assert!(store.entries().expect("list entries").is_empty());
+    assert!(matches!(
+        store.del("../../outside"),
+        Err(StoreError::InvalidId(id)) if id == "../../outside"
+    ));
+}
+
+proptest! {
+    #[test]
+    fn arbitrary_queue_operations_preserve_order_and_schedule(
+        operations in prop::collection::vec((0_u8..3, 0_usize..16), 1..48),
+        cooldown in any::<u64>(),
+        flutter_max in any::<u64>(),
+    ) {
+        let dir = TempDir::new().expect("tempdir");
+        let store = open_store(&dir);
+        let options = PutOptions {
+            cooldown,
+            flutter_max,
+            immediate: true,
+        };
+        let mut expected = Vec::new();
+
+        for index in 0..4 {
+            let entry = store
+                .put(request(&format!("initial {index}")), &options, 1_000 + index)
+                .expect("put initial entry");
+            expected.push(entry.id);
+        }
+
+        for (step, (operation, selection)) in operations.into_iter().enumerate() {
+            if expected.is_empty() {
+                let entry = store
+                    .put(request(&format!("replacement {step}")), &options, 2_000 + step as u64)
+                    .expect("put replacement entry");
+                expected.push(entry.id);
+            }
+            let index = selection % expected.len();
+            let id = expected[index].clone();
+            match operation {
+                0 => {
+                    store.bump(&id).expect("bump entry");
+                    expected.remove(index);
+                    expected.insert(0, id);
+                }
+                1 => {
+                    store.bust(&id).expect("bust entry");
+                    expected.remove(index);
+                    expected.push(id);
+                }
+                _ => {
+                    store.del(&id).expect("delete entry");
+                    expected.remove(index);
+                }
+            }
+            prop_assert_eq!(ids(&store), expected.clone());
+            let etas: Vec<u64> = store
+                .schedule(cooldown, 3_000)
+                .expect("schedule")
+                .into_iter()
+                .map(|(_, eta)| eta)
+                .collect();
+            prop_assert!(etas.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
 }

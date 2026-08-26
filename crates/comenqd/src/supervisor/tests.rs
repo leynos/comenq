@@ -1,12 +1,33 @@
 //! Tests for task supervision and failure logging.
 
 use super::log_task_failure;
+use crate::config::Config;
 use anyhow::anyhow;
 use rstest::rstest;
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinError;
+
+/// Convert a test configuration into the runtime configuration in all builds.
+#[cfg(feature = "test-support")]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config::from(cfg)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config {
+        github_token: cfg.github_token,
+        github_token_file: None,
+        socket_path: cfg.socket_path,
+        queue_path: cfg.queue_path,
+        cooldown_period_seconds: cfg.cooldown_period_seconds,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: cfg.restart_min_delay_ms,
+        github_api_timeout_secs: cfg.github_api_timeout_secs,
+    }
+}
 
 /// In-memory writer used to capture JSON-formatted tracing events.
 #[derive(Clone, Default)]
@@ -84,8 +105,7 @@ fn logs_failures(
 #[tokio::test]
 async fn worker_starts_and_stops_cleanly() {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let cfg: std::sync::Arc<crate::config::Config> =
-        std::sync::Arc::new(test_support::temp_config(&dir).into());
+    let cfg = std::sync::Arc::new(cfg_from(test_support::temp_config(&dir)));
     super::ensure_queue_dir(&cfg.queue_path)
         .await
         .expect("create queue dir");

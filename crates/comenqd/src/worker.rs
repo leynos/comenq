@@ -14,7 +14,9 @@ use octocrab::Octocrab;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::{Notify, watch};
+#[cfg(any(test, feature = "test-support"))]
+use tokio::sync::Notify;
+use tokio::sync::watch;
 
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
@@ -77,6 +79,7 @@ async fn post_comment_with_metrics(
 /// one waiting task. This design supports exactly one waiter per hook; if
 /// multiple tasks await the same hook, only one will be woken per notification.
 #[derive(Default)]
+#[cfg(any(test, feature = "test-support"))]
 pub struct WorkerHooks {
     /// Signalled when the worker picks up a due entry for posting.
     ///
@@ -92,6 +95,7 @@ pub struct WorkerHooks {
     pub drained: Option<Arc<Notify>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl WorkerHooks {
     fn notify_enqueued(&self) {
         if let Some(n) = &self.enqueued {
@@ -110,43 +114,14 @@ impl WorkerHooks {
             n.notify_one();
         }
     }
+}
 
-    /// Waits for the specified number of seconds or until a shutdown is signalled.
-    ///
-    /// Returns `true` if shutdown was signalled, `false` if the timeout expired.
-    ///
-    /// # Arguments
-    ///
-    /// - `secs` - Number of seconds to wait before continuing.
-    /// - `shutdown` - Watch channel signalled when the worker should cease waiting.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use tokio::sync::watch;
-    /// use comenqd::daemon::WorkerHooks;
-    ///
-    /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// let (tx, mut rx) = watch::channel(());
-    ///
-    /// // Wait for the full second when no shutdown signal is sent.
-    /// assert!(!WorkerHooks::wait_or_shutdown(1, &mut rx).await);
-    ///
-    /// // Sending a shutdown signal returns immediately.
-    /// let mut rx = tx.subscribe();
-    /// tx.send(()).expect("notify shutdown");
-    /// assert!(WorkerHooks::wait_or_shutdown(60, &mut rx).await);
-    /// # });
-    /// ```
-    ///
-    /// Passing `secs = 0` returns immediately with `false` unless shutdown was
-    /// already signalled.
-    pub async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
-        tokio::select! {
-            biased;
-            _ = shutdown.changed() => true,
-            _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
-        }
+/// Wait for a retry cooldown unless the daemon is shutting down.
+async fn wait_or_shutdown(secs: u64, shutdown: &mut watch::Receiver<()>) -> bool {
+    tokio::select! {
+        biased;
+        _ = shutdown.changed() => true,
+        _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
     }
 }
 
@@ -157,26 +132,61 @@ impl WorkerHooks {
 pub struct WorkerControl {
     /// Watch channel used to signal graceful shutdown.
     pub shutdown: watch::Receiver<()>,
+    /// Optional test-observation hooks.
+    #[cfg(any(test, feature = "test-support"))]
     /// Hooks for observing worker progress during tests.
     pub hooks: WorkerHooks,
 }
 
 impl WorkerControl {
-    /// Create a new [`WorkerControl`].
+    /// Create worker control without test-observation hooks.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use comenqd::daemon::{WorkerControl, WorkerHooks};
+    /// use comenqd::daemon::WorkerControl;
     /// use tokio::sync::watch;
     ///
     /// let (_tx, rx) = watch::channel(());
-    /// let hooks = WorkerHooks::default();
-    /// let control = WorkerControl::new(rx, hooks);
+    /// let control = WorkerControl::without_hooks(rx);
     /// ```
+    pub fn without_hooks(shutdown: watch::Receiver<()>) -> Self {
+        Self {
+            shutdown,
+            #[cfg(any(test, feature = "test-support"))]
+            hooks: WorkerHooks::default(),
+        }
+    }
+
+    /// Create worker control with hooks for test observation.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(shutdown: watch::Receiver<()>, hooks: WorkerHooks) -> Self {
         Self { shutdown, hooks }
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_enqueued(&self) {
+        self.hooks.notify_enqueued();
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn notify_enqueued(&self) {}
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_idle(&self) {
+        self.hooks.notify_idle();
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn notify_idle(&self) {}
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_drained(&self) {
+        self.hooks.notify_drained();
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn notify_drained(&self) {}
 }
 
 /// Posts queued comments as they fall due, enforcing the scheduled cooldowns.
@@ -189,16 +199,14 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
-    let hooks = &control.hooks;
-    let shutdown = &mut control.shutdown;
     let config = queue.config().clone();
     loop {
         let due = queue.next_due().await?;
         let Some((entry, wait_seconds)) = due else {
-            hooks.notify_drained();
+            control.notify_drained();
             tokio::select! {
                 biased;
-                _ = shutdown.changed() => break,
+                _ = control.shutdown.changed() => break,
                 () = queue.changed() => continue,
             }
         };
@@ -206,13 +214,13 @@ pub async fn run_worker(
             metrics::record_cooldown_wait(wait_seconds);
             tokio::select! {
                 biased;
-                _ = shutdown.changed() => break,
+                _ = control.shutdown.changed() => break,
                 () = queue.changed() => {}
                 _ = tokio::time::sleep(Duration::from_secs(wait_seconds)) => {}
             }
             continue;
         }
-        hooks.notify_enqueued();
+        control.notify_enqueued();
         match post_comment_with_metrics(&octocrab, &entry.request, &config).await {
             Ok(()) => {
                 queue.complete(&entry.id).await?;
@@ -226,16 +234,24 @@ pub async fn run_worker(
                     pr = entry.request.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
-                hooks.notify_idle();
+                control.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.
                 metrics::record_cooldown_wait(config.cooldown_period_seconds);
-                if WorkerHooks::wait_or_shutdown(config.cooldown_period_seconds, shutdown).await {
-                    break;
+                tokio::select! {
+                    should_shutdown = wait_or_shutdown(
+                        config.cooldown_period_seconds,
+                        &mut control.shutdown,
+                    ) => {
+                        if should_shutdown {
+                            break;
+                        }
+                    }
+                    () = queue.changed() => {}
                 }
                 continue;
             }
         }
-        hooks.notify_idle();
+        control.notify_idle();
     }
     Ok(())
 }

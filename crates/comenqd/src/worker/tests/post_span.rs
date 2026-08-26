@@ -21,11 +21,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const POST_SPAN: &str = "post_comment_with_metrics";
 
-fn config_with_api_timeout(github_api_timeout_secs: u64) -> Config {
+fn config_with_api_timeout(github_api_timeout_secs: u64) -> (tempfile::TempDir, Config) {
     let dir = tempdir().expect("create temporary configuration directory");
     let mut config: Config = test_support::temp_config(&dir).into();
     config.github_api_timeout_secs = github_api_timeout_secs;
-    config
+    (dir, config)
 }
 
 #[derive(Clone, Default)]
@@ -111,8 +111,9 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .mount(&success_server)
             .await;
         let success_client = octocrab_for(&success_server).expect("build success client");
+        let (_success_dir, success_config) = config_with_api_timeout(1);
         assert!(
-            post_comment_with_metrics(&success_client, &request, &config_with_api_timeout(1))
+            post_comment_with_metrics(&success_client, &request, &success_config)
                 .await
                 .is_ok()
         );
@@ -124,8 +125,9 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .mount(&error_server)
             .await;
         let error_client = octocrab_for(&error_server).expect("build error client");
+        let (_error_dir, error_config) = config_with_api_timeout(1);
         assert!(
-            post_comment_with_metrics(&error_client, &request, &config_with_api_timeout(1))
+            post_comment_with_metrics(&error_client, &request, &error_config)
                 .await
                 .is_err()
         );
@@ -137,7 +139,7 @@ async fn github_post_span_records_only_bounded_outcomes() {
             .mount(&timeout_server)
             .await;
         let timeout_client = octocrab_for(&timeout_server).expect("build timeout client");
-        let timeout_config = config_with_api_timeout(0);
+        let (_timeout_dir, timeout_config) = config_with_api_timeout(0);
         assert!(
             post_comment_with_metrics(&timeout_client, &request, &timeout_config)
                 .await

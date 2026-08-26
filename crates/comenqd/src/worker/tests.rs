@@ -1,9 +1,17 @@
 //! Tests for the worker's shutdown waits and notification hooks.
 
-use super::{Notify, WorkerHooks};
+use super::{Notify, WorkerControl, WorkerHooks, run_worker, wait_or_shutdown};
+use crate::config::Config;
+use crate::queue::SharedQueue;
+use comenq_lib::CommentRequest;
+use comenq_lib::protocol::Request;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tempfile::tempdir;
+use test_support::{octocrab_for, temp_config};
 use tokio::sync::watch;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod post_span;
 
@@ -11,7 +19,7 @@ mod post_span;
 async fn wait_or_shutdown_returns_false_on_timeout() {
     let (_tx, mut rx) = watch::channel(());
     let start = Instant::now();
-    let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+    let result = wait_or_shutdown(0, &mut rx).await;
     assert!(!result, "should return false when timeout expires");
     assert!(
         start.elapsed().as_millis() < 500,
@@ -24,7 +32,7 @@ async fn wait_or_shutdown_returns_true_on_shutdown() {
     let (tx, mut rx) = watch::channel(());
     // Signal shutdown before waiting
     tx.send(()).expect("send shutdown signal");
-    let result = WorkerHooks::wait_or_shutdown(60, &mut rx).await;
+    let result = wait_or_shutdown(60, &mut rx).await;
     assert!(result, "should return true when shutdown is signalled");
 }
 
@@ -34,7 +42,7 @@ async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
     // Send shutdown signal
     tx.send(()).expect("send shutdown signal");
     // Even with zero timeout, shutdown should be detected due to biased select
-    let result = WorkerHooks::wait_or_shutdown(0, &mut rx).await;
+    let result = wait_or_shutdown(0, &mut rx).await;
     assert!(result, "biased select should prioritize shutdown signal");
 }
 
@@ -105,5 +113,69 @@ async fn notify_one_buffers_permit_when_no_waiters() {
     assert!(
         result.is_err(),
         "second waiter should timeout with no remaining permit"
+    );
+}
+
+#[tokio::test]
+async fn failed_post_retries_after_a_full_cooldown() {
+    let dir = tempdir().expect("create temporary queue directory");
+    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
+    let queue = SharedQueue::open(cfg).expect("open queue");
+    let response = queue
+        .execute(Request::Put {
+            request: CommentRequest {
+                owner: "octocat".into(),
+                repo: "hello-world".into(),
+                pr_number: 7,
+                body: "retry".into(),
+            },
+            immediate: true,
+        })
+        .await;
+    assert!(matches!(
+        response,
+        comenq_lib::protocol::Response::Ok { .. }
+    ));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/octocat/hello-world/issues/7/comments"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(2..)
+        .mount(&server)
+        .await;
+    let octocrab = octocrab_for(&server).expect("create GitHub client");
+    let idle = Arc::new(Notify::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let worker = tokio::spawn(run_worker(
+        Arc::clone(&queue),
+        octocrab,
+        WorkerControl::new(
+            shutdown_rx,
+            WorkerHooks {
+                enqueued: None,
+                idle: Some(Arc::clone(&idle)),
+                drained: None,
+            },
+        ),
+    ));
+
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(5), idle.notified())
+            .await
+            .expect("worker should complete a failed post attempt");
+    }
+    shutdown_tx.send(()).expect("signal shutdown");
+    worker
+        .await
+        .expect("worker task should not panic")
+        .expect("worker should exit cleanly");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("read requests")
+            .len()
+            >= 2
     );
 }
