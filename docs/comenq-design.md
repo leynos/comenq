@@ -192,7 +192,7 @@ pub enum Command {
 The `#[derive(Parser)]` and `#[derive(Subcommand)]` attributes instruct `clap`
 to generate all the necessary parsing logic.[^5] The doc comments (`///`) are
 automatically converted into help messages, which are displayed when the user
-runs `comenq --help`. This feature makes the tool self-documenting.[^10] The
+runs `comenq --help`. This feature makes the tool self-documenting.[^10]
 
 `#[arg(...)]` and `#[command(...)]` attributes define the global socket
 override and subcommand fields. Socket discovery itself is resolved at connect
@@ -402,8 +402,9 @@ reflects three rules enforced by the daemon:
 - **Flutter is fixed at enqueue time.** When a comment is enqueued, a random
   flutter duration (up to `cooldown_flutter_seconds`) is sampled once and
   stored with the entry. It does not change on subsequent `list` calls, so the
-  reported ETA for a given entry only decreases as time passes; it never jumps
-  around.
+  reported ETA for a given entry decreases as time passes. Queue mutations such
+  as `bump`, `bust`, and `del` can reorder predecessors, so the scheduler
+  recomputes an entry's ETA and it may increase or decrease after a mutation.
 
 - **The cooldown always runs in full.** The daemon never shortens
   `cooldown_period_seconds` to catch up; each entry's projected posting time is
@@ -676,13 +677,17 @@ The worker task's loop consists of the following steps:
 
 **ETA projection.** The store computes, for each pending entry, an estimated
 number of seconds until it is posted (`schedule` in `QueueStore`). The head
-entry is due one full `cooldown_period_seconds` plus its own sampled flutter
-after the last successful post, or immediately if nothing has been posted yet.
-Each subsequent entry is due a further cooldown plus its own flutter after its
-predecessor's projected posting time. Because flutter is sampled once, at
-enqueue time, and the cooldown always runs in full, the ETA reported to a
-client by `put` or `list` matches what the worker will actually do, and does
-not drift as time passes.
+entry is due no earlier than its `not_before` floor. A normal `put` sets that
+floor to its enqueue time plus one full `cooldown_period_seconds` and its
+sampled flutter; immediate posting without an earlier schedule applies only to
+`put --now` (and entries persisted before the floor was introduced). When a
+previous post exists, the head also respects the last successful post plus a
+full cooldown and its own flutter. Each subsequent entry is due a further
+cooldown plus its own flutter after its predecessor's projected posting time,
+while still respecting its own `not_before` floor. Because flutter is sampled
+once at enqueue time and the cooldown always runs in full, the ETA reported to
+a client by `put` or `list` matches what the worker will actually do, subject
+to queue mutations recomputing predecessor order.
 
 This workflow gives a highly resilient system that can tolerate both network
 failures and process crashes without losing data: an entry is only ever removed
