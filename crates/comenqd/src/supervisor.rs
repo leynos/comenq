@@ -8,7 +8,7 @@ use backon::{ExponentialBackoff, ExponentialBuilder};
 use octocrab::Octocrab;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::fs;
 #[cfg(unix)]
@@ -19,7 +19,7 @@ use crate::listener::run_listener;
 use crate::metrics;
 use crate::queue::SharedQueue;
 use crate::store::StoreError;
-use crate::worker::{WorkerControl, WorkerHooks, build_octocrab, run_worker};
+use crate::worker::{WorkerControl, build_octocrab, run_worker};
 
 mod observability;
 
@@ -48,6 +48,8 @@ pub async fn ensure_queue_dir(path: &Path) -> Result<()> {
 /// The builders here never cap attempts, so exhaustion should not occur;
 /// the fallback keeps restart pacing sane without panicking.
 pub(crate) const BACKOFF_FALLBACK_DELAY: Duration = Duration::from_secs(1);
+/// A task must run this long before a later failure resets its restart backoff.
+pub(crate) const STABLE_TASK_RUN: Duration = Duration::from_secs(60);
 
 /// Build a jittered exponential backoff with no maximum attempt count.
 ///
@@ -74,17 +76,17 @@ async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> b
 
 /// Supervise a task that returns `Result<()>` and respawn it on failure.
 #[tracing::instrument(skip_all, fields(task = name))]
-async fn supervise_task<F, B>(
+async fn supervise_task<F>(
     name: &'static str,
     mut handle: tokio::task::JoinHandle<anyhow::Result<()>>,
-    mut backoff: ExponentialBackoff,
+    mut restart_backoff: ExponentialBackoff,
     mut spawn_fn: F,
     mut shutdown: watch::Receiver<()>,
-    mut backoff_builder: B,
+    min_delay: Duration,
 ) where
     F: FnMut() -> tokio::task::JoinHandle<anyhow::Result<()>>,
-    B: FnMut() -> ExponentialBackoff,
 {
+    let mut started_at = Instant::now();
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -102,12 +104,15 @@ async fn supervise_task<F, B>(
                 }
                 log_task_failure(name, &res);
                 metrics::record_task_restart(name);
-                let delay = backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
+                if started_at.elapsed() >= STABLE_TASK_RUN {
+                    restart_backoff = backoff(min_delay);
+                }
+                let delay = restart_backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
-                backoff = backoff_builder();
                 handle = spawn_fn();
+                started_at = Instant::now();
             }
         }
     }
@@ -169,7 +174,7 @@ pub async fn run(config: Config) -> Result<()> {
             listener_backoff,
             || spawn_listener(listener_queue.clone(), shutdown_listener.clone()),
             shutdown_listener.clone(),
-            || backoff(min_delay),
+            min_delay,
         ),
         supervise_task(
             "worker",
@@ -177,7 +182,7 @@ pub async fn run(config: Config) -> Result<()> {
             worker_backoff,
             || spawn_worker(queue.clone(), octocrab.clone(), shutdown_worker.clone()),
             shutdown_worker.clone(),
-            || backoff(min_delay),
+            min_delay,
         ),
     );
 
@@ -196,7 +201,7 @@ fn spawn_worker(
     octocrab: Arc<Octocrab>,
     shutdown: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    let control = WorkerControl::new(shutdown, WorkerHooks::default());
+    let control = WorkerControl::without_hooks(shutdown);
     tokio::spawn(run_worker(queue, octocrab, control))
 }
 

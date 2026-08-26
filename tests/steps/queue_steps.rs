@@ -6,15 +6,20 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Context as _;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::SharedQueue;
+use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
-use test_support::temp_config;
+use test_support::{octocrab_for, temp_config};
+use tokio::sync::{Notify, watch};
+use tokio::time::timeout;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request as WiremockRequest, Respond, ResponseTemplate};
 
 /// Cooldown used by these scenarios, in seconds.
 ///
@@ -32,6 +37,37 @@ pub struct QueueWorld {
     immediate_puts: bool,
     last_put: Option<PendingEntry>,
     last_response: Option<Response>,
+    server: Option<MockServer>,
+    attempts: Option<Arc<AtomicUsize>>,
+    worker: Option<tokio::task::JoinHandle<()>>,
+    shutdown: Option<watch::Sender<()>>,
+}
+
+impl Drop for QueueWorld {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FailThenSucceed {
+    attempts: Arc<AtomicUsize>,
+    success: serde_json::Value,
+}
+
+impl Respond for FailThenSucceed {
+    fn respond(&self, _request: &WiremockRequest) -> ResponseTemplate {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            ResponseTemplate::new(500)
+        } else {
+            ResponseTemplate::new(201).set_body_json(self.success.clone())
+        }
+    }
 }
 
 impl std::fmt::Debug for QueueWorld {
@@ -89,10 +125,17 @@ impl QueueWorld {
 
 #[given("an empty comment queue")]
 fn empty_queue(world: &mut QueueWorld) -> anyhow::Result<()> {
+    initialize_queue(world, COOLDOWN_SECONDS)
+}
+
+#[given(regex = r"^a comment queue with a ([0-9]+) second cooldown$")]
+fn queue_with_cooldown(world: &mut QueueWorld, cooldown: u64) -> anyhow::Result<()> {
+    initialize_queue(world, cooldown)
+}
+
+fn initialize_queue(world: &mut QueueWorld, cooldown: u64) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
-    let cfg = Arc::new(Config::from(
-        temp_config(&dir).with_cooldown(COOLDOWN_SECONDS),
-    ));
+    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(cooldown)));
     world.queue = Some(SharedQueue::open(cfg).context("open queue")?);
     world.dir = Some(dir);
     Ok(())
@@ -273,5 +316,69 @@ fn daemon_reports_error(world: &mut QueueWorld) -> anyhow::Result<()> {
         }
         other => anyhow::bail!("expected error reply, got {other:?}"),
     }
+    Ok(())
+}
+
+#[given("GitHub fails the first queue post and then succeeds")]
+async fn github_fails_then_succeeds(world: &mut QueueWorld) -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let success: serde_json::Value = serde_json::from_str(include_str!(
+        "../../crates/comenqd/tests/fixtures/github_comment_response.json"
+    ))
+    .context("parse GitHub comment response fixture")?;
+    Mock::given(method("POST"))
+        .and(path("/repos/octocat/hello-world/issues/7/comments"))
+        .respond_with(FailThenSucceed {
+            attempts: Arc::clone(&attempts),
+            success,
+        })
+        .mount(&server)
+        .await;
+    world.server = Some(server);
+    world.attempts = Some(attempts);
+    Ok(())
+}
+
+#[when("the worker retries after one cooldown")]
+async fn worker_retries_after_cooldown(world: &mut QueueWorld) -> anyhow::Result<()> {
+    let queue = world.queue()?.clone();
+    let server = world
+        .server
+        .as_ref()
+        .context("GitHub server not configured")?;
+    let octocrab = octocrab_for(server).context("create GitHub client")?;
+    let idle = Arc::new(Notify::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let control = WorkerControl::new(
+        shutdown_rx,
+        WorkerHooks {
+            enqueued: None,
+            idle: Some(Arc::clone(&idle)),
+            drained: None,
+        },
+    );
+    let worker = tokio::spawn(async move {
+        let _ = run_worker(queue, octocrab, control).await;
+    });
+
+    for _ in 0..2 {
+        timeout(std::time::Duration::from_secs(5), idle.notified())
+            .await
+            .context("worker should reach idle after each attempt")?;
+    }
+    world.shutdown = Some(shutdown_tx);
+    world.worker = Some(worker);
+    Ok(())
+}
+
+#[then("the queued comment has been retried and removed")]
+async fn queued_comment_was_retried_and_removed(world: &mut QueueWorld) -> anyhow::Result<()> {
+    let attempts = world
+        .attempts
+        .as_ref()
+        .context("attempt counter not configured")?;
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(world.entries().await?.is_empty());
     Ok(())
 }

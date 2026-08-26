@@ -1,24 +1,20 @@
 //! Persistent, reorderable comment queue.
 //!
-//! Each pending comment lives in its own JSON file under
-//! `<queue_path>/entries`, carrying an explicit ordering key so entries can
-//! be moved to the head (`bump`) or tail (`bust`) of the queue, or removed
-//! (`del`). The Unix timestamp of the most recent successful post is kept in
-//! `<queue_path>/last_post` so estimated posting times survive restarts.
+//! Pending comments use one JSON file beneath `<queue_path>/entries`, with an
+//! ordering key for `bump`, `bust`, and `del`. `<queue_path>/last_post`
+//! persists the last successful post for restart-stable ETAs.
 //!
-//! The store itself holds no in-memory state; callers serialize mutations
-//! (the daemon wraps it in a `tokio::sync::Mutex`). Files are written to a
-//! temporary sibling and renamed into place so entries are never observed
-//! half-written.
+//! The store holds no in-memory state; callers serialize mutations. It writes
+//! temporary siblings and renames them so entries are never half-written.
 
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::PendingEntry;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
+use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
-
 /// Sub-directory of the queue path holding one JSON file per entry.
 const ENTRIES_DIR: &str = "entries";
 /// File recording the Unix time of the most recent successful post.
@@ -75,6 +71,15 @@ pub enum StoreError {
     /// No entry carries the requested identifier.
     #[error("no queued comment has id '{0}'")]
     UnknownId(String),
+    /// An identifier is not safe to use as a queue-entry filename.
+    #[error("queue entry id '{0}' must be eight hexadecimal characters")]
+    InvalidId(String),
+    /// The persisted last-post marker cannot be parsed as a Unix timestamp.
+    #[error("last-post marker is invalid: {0}")]
+    LastPost(#[from] ParseIntError),
+    /// The blocking queue operation did not complete.
+    #[error("queue operation task failed: {0}")]
+    BlockingTask(#[from] tokio::task::JoinError),
 }
 
 /// Result alias for store operations.
@@ -106,6 +111,10 @@ pub struct QueueStore {
 /// derived, so an entry keeps the same identifier for its whole life and
 /// across daemon restarts.
 fn entry_id(request: &CommentRequest, enqueued_at: u64) -> String {
+    entry_id_with_salt(request, enqueued_at, None)
+}
+
+fn entry_id_with_salt(request: &CommentRequest, enqueued_at: u64, salt: Option<u64>) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = FNV_OFFSET;
@@ -122,6 +131,9 @@ fn entry_id(request: &CommentRequest, enqueued_at: u64) -> String {
     eat(&request.pr_number.to_le_bytes());
     eat(request.body.as_bytes());
     eat(&enqueued_at.to_le_bytes());
+    if let Some(salt) = salt {
+        eat(&salt.to_le_bytes());
+    }
     let hex = format!("{hash:016x}");
     hex.chars().take(8).collect()
 }
@@ -155,8 +167,8 @@ impl QueueStore {
         options: &PutOptions,
         now: u64,
     ) -> Result<StoredEntry> {
-        let id = entry_id(&request, now);
-        if let Ok(existing) = self.find(&id) {
+        let (id, existing) = self.resolve_entry_id(&request, now)?;
+        if let Some(existing) = existing {
             return Ok(existing);
         }
         let flutter_seconds = if options.flutter_max == 0 {
@@ -192,9 +204,26 @@ impl QueueStore {
         for dirent in fs::read_dir(&self.entries_dir)? {
             let path = dirent?.path();
             if path.extension().is_some_and(|e| e == "json") {
-                let text = fs::read_to_string(&path)?;
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(e) => {
+                        tracing::error!(
+                            path = %path.display(),
+                            error = %e,
+                            "Skipping unreadable queue entry"
+                        );
+                        continue;
+                    }
+                };
                 match serde_json::from_str::<StoredEntry>(&text) {
-                    Ok(entry) => entries.push(entry),
+                    Ok(entry) if is_valid_id(&entry.id) => entries.push(entry),
+                    Ok(entry) => {
+                        tracing::error!(
+                            path = %path.display(),
+                            id = %entry.id,
+                            "Skipping queue entry with an unsafe identifier"
+                        );
+                    }
                     Err(e) => {
                         tracing::error!(
                             path = %path.display(),
@@ -238,15 +267,18 @@ impl QueueStore {
 
     /// Remove the identified entry from the queue.
     pub fn del(&self, id: &str) -> Result<()> {
-        let entry = self.find(id)?;
-        fs::remove_file(self.entry_path(&entry.id))?;
+        self.find(id)?;
+        fs::remove_file(self.entry_path(id)?)?;
         Ok(())
     }
 
     /// Unix time of the most recent successful post, when any.
-    pub fn last_post(&self) -> Option<u64> {
-        let text = fs::read_to_string(&self.last_post_path).ok()?;
-        text.trim().parse().ok()
+    pub fn last_post(&self) -> Result<Option<u64>> {
+        match fs::read_to_string(&self.last_post_path) {
+            Ok(text) => Ok(Some(text.trim().parse()?)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Remove the posted head entry and record the posting time.
@@ -264,7 +296,7 @@ impl QueueStore {
     /// the projected posting time of its predecessor. An entry additionally
     /// never posts before its own `not_before` floor.
     pub fn schedule(&self, cooldown: u64, now: u64) -> Result<Vec<(StoredEntry, u64)>> {
-        let mut previous_post = self.last_post();
+        let mut previous_post = self.last_post()?;
         let mut scheduled = Vec::new();
         for entry in self.entries()? {
             let due = previous_post.map_or(now, |prev| {
@@ -283,15 +315,28 @@ impl QueueStore {
         Ok(self.schedule(cooldown, now)?.into_iter().next())
     }
 
-    fn entry_path(&self, id: &str) -> PathBuf {
-        self.entries_dir.join(format!("{id}.json"))
+    fn entry_path(&self, id: &str) -> Result<PathBuf> {
+        if is_valid_id(id) {
+            Ok(self.entries_dir.join(format!("{id}.json")))
+        } else {
+            Err(StoreError::InvalidId(id.to_owned()))
+        }
     }
 
     fn find(&self, id: &str) -> Result<StoredEntry> {
-        self.entries()?
-            .into_iter()
-            .find(|entry| entry.id == id)
-            .ok_or_else(|| StoreError::UnknownId(id.to_owned()))
+        let path = self.entry_path(id)?;
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(StoreError::UnknownId(id.to_owned()));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let entry: StoredEntry = serde_json::from_str(&text)?;
+        if entry.id != id {
+            return Err(StoreError::InvalidId(entry.id));
+        }
+        Ok(entry)
     }
 
     fn reorder(
@@ -300,26 +345,55 @@ impl QueueStore {
         new_order: impl Fn(&StoredEntry, &[StoredEntry]) -> i64,
     ) -> Result<()> {
         let all = self.entries()?;
-        let mut entry = all
-            .iter()
-            .find(|entry| entry.id == id)
-            .cloned()
-            .ok_or_else(|| StoreError::UnknownId(id.to_owned()))?;
+        let mut entry = self.find(id)?;
         entry.order = new_order(&entry, &all);
         self.write_entry(&entry)
     }
 
     fn write_entry(&self, entry: &StoredEntry) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(entry)?;
-        self.write_atomic(&self.entry_path(&entry.id), &bytes)
+        self.write_atomic(&self.entry_path(&entry.id)?, &bytes)
     }
 
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, bytes)?;
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "entry path has no parent")
+        })?;
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        let directory = fs::File::open(parent)?;
+        directory.sync_all()?;
         fs::rename(&tmp, path)?;
+        directory.sync_all()?;
         Ok(())
     }
+
+    fn resolve_entry_id(
+        &self,
+        request: &CommentRequest,
+        now: u64,
+    ) -> Result<(String, Option<StoredEntry>)> {
+        let mut salt = None;
+        loop {
+            let id = salt.map_or_else(
+                || entry_id(request, now),
+                |value| entry_id_with_salt(request, now, Some(value)),
+            );
+            match self.find(&id) {
+                Ok(existing) if existing.request == *request => return Ok((id, Some(existing))),
+                Ok(_) => salt = Some(salt.map_or(1, |value| value.saturating_add(1))),
+                Err(StoreError::UnknownId(_)) => return Ok((id, None)),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+fn is_valid_id(id: &str) -> bool {
+    id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

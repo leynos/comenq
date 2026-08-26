@@ -164,6 +164,14 @@ pub async fn run_listener(
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
 /// Seconds a client has to transmit its request.
 pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
+/// Seconds a client has to receive the daemon response and close cleanly.
+pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;
+
+#[derive(Clone, Copy)]
+enum ClientOutcome {
+    Accepted,
+    Failed,
+}
 
 /// Read a single request from `stream`, execute it, and reply.
 ///
@@ -178,17 +186,17 @@ pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 #[tracing::instrument(skip(stream, queue), fields(task = "listener", outcome = tracing::field::Empty))]
 pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
     let result = handle_client_inner(stream, queue).await;
-    let outcome = if result.is_ok() {
-        "accepted"
-    } else {
-        "rejected"
+    let outcome = match &result {
+        Ok(ClientOutcome::Accepted) => "accepted",
+        Ok(ClientOutcome::Failed) => "failed",
+        Err(_) => "rejected",
     };
     tracing::Span::current().record("outcome", outcome);
     metrics::record_request_outcome(outcome);
-    result
+    result.map(|_| ())
 }
 
-async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
+async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<ClientOutcome> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -201,20 +209,42 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let response = match serde_json::from_slice::<Request>(&buffer) {
-        Ok(request) => queue.execute(request).await,
-        Err(e) => Response::error(format!("invalid request: {e}")),
+    let (response, outcome) = match serde_json::from_slice::<Request>(&buffer) {
+        Ok(request) => {
+            let response = queue.execute(request).await;
+            let outcome = if matches!(&response, Response::Error { .. }) {
+                ClientOutcome::Failed
+            } else {
+                ClientOutcome::Accepted
+            };
+            (response, outcome)
+        }
+        Err(e) => (
+            Response::error(format!("invalid request: {e}")),
+            ClientOutcome::Accepted,
+        ),
     };
     let bytes = serde_json::to_vec(&response)?;
     let mut stream = limited.into_inner();
-    stream.write_all(&bytes).await.context("write response")?;
-    stream.shutdown().await.context("close connection")?;
-    Ok(())
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
+        stream.write_all(&bytes),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client response write timed out"))??;
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
+        stream.shutdown(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
+    Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::fs::OpenOptions;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::sync::Arc;
@@ -222,17 +252,29 @@ mod tests {
     use std::thread;
     use tempfile::tempdir;
 
+    #[rstest]
+    #[case::missing("missing/nested", None, 0o700)]
+    #[case::existing("existing", Some(0o755), 0o755)]
     #[tokio::test]
-    async fn prepare_listener_creates_missing_parent_directory() {
+    async fn prepare_listener_preserves_or_sets_parent_directory_mode(
+        #[case] parent_path: &str,
+        #[case] existing_mode: Option<u32>,
+        #[case] expected_mode: u32,
+    ) {
         let dir = tempdir().expect("create tempdir");
-        let sock = dir.path().join("missing/nested/comenq.sock");
+        let parent = dir.path().join(parent_path);
+        if let Some(mode) = existing_mode {
+            std::fs::create_dir_all(&parent).expect("create parent directory");
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(mode))
+                .expect("set parent directory mode");
+        }
+        let sock = parent.join("comenq.sock");
         let listener = prepare_listener(&sock).expect("prepare listener");
         let meta = std::fs::symlink_metadata(&sock).expect("metadata");
         assert!(meta.file_type().is_socket());
         assert_eq!(meta.permissions().mode() & 0o777, 0o660);
-        let parent = sock.parent().expect("socket parent");
-        let parent_meta = std::fs::symlink_metadata(parent).expect("parent metadata");
-        assert_eq!(parent_meta.permissions().mode() & 0o777, 0o700);
+        let parent_meta = std::fs::symlink_metadata(&parent).expect("parent metadata");
+        assert_eq!(parent_meta.permissions().mode() & 0o777, expected_mode);
         drop(listener);
     }
 
