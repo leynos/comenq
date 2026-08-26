@@ -119,13 +119,11 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
         Response::Ok { entry, entries } => (entry, entries),
     };
-    match &args.command {
-        Command::Put { .. } => {
-            let entry = entry.ok_or(ClientError::UnexpectedResponse)?;
+    match (&args.command, entry, entries) {
+        (Command::Put { .. }, Some(entry), None) => {
             println!("{}", render_put(&entry));
         }
-        Command::List => {
-            let entries = entries.ok_or(ClientError::UnexpectedResponse)?;
+        (Command::List, None, Some(entries)) => {
             if entries.is_empty() {
                 println!("No comments queued.");
             } else {
@@ -134,9 +132,10 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
                 }
             }
         }
-        Command::Bump { id } => println!("Moved {id} to the head of the queue."),
-        Command::Bust { id } => println!("Moved {id} to the tail of the queue."),
-        Command::Del { id } => println!("Removed {id} from the queue."),
+        (Command::Bump { id }, None, None) => println!("Moved {id} to the head of the queue."),
+        (Command::Bust { id }, None, None) => println!("Moved {id} to the tail of the queue."),
+        (Command::Del { id }, None, None) => println!("Removed {id} from the queue."),
+        _ => return Err(ClientError::UnexpectedResponse),
     }
     Ok(())
 }
@@ -163,6 +162,24 @@ mod tests {
         }
     }
 
+    fn args(socket: std::path::PathBuf, command: Command) -> Args {
+        Args {
+            socket: Some(socket),
+            command,
+        }
+    }
+
+    fn sample_entry() -> PendingEntry {
+        PendingEntry {
+            id: "1a2b3c4d".into(),
+            eta_seconds: 0,
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 1,
+            body: "Hi".into(),
+        }
+    }
+
     /// Accept one connection, capture the request, and reply.
     fn spawn_daemon(listener: UnixListener, reply: Response) -> tokio::task::JoinHandle<Request> {
         tokio::spawn(async move {
@@ -181,14 +198,7 @@ mod tests {
         let dir = tempdir().expect("temp dir");
         let socket = dir.path().join("sock");
         let listener = UnixListener::bind(&socket).expect("bind socket");
-        let reply = Response::entry(PendingEntry {
-            id: "1a2b3c4d".into(),
-            eta_seconds: 0,
-            owner: "octocat".into(),
-            repo: "hello-world".into(),
-            pr_number: 1,
-            body: "Hi".into(),
-        });
+        let reply = Response::entry(sample_entry());
         let accept = spawn_daemon(listener, reply);
 
         run(put_args(socket)).await.expect("run succeeds");
@@ -226,6 +236,75 @@ mod tests {
         let err = run(put_args(socket)).await.expect_err("should error");
         assert!(matches!(err, ClientError::UnexpectedResponse));
         accept.await.expect("join");
+    }
+
+    #[tokio::test]
+    async fn run_rejects_surplus_response_payloads() {
+        let commands_and_replies = [
+            (
+                Command::Put {
+                    repo_slug: "octocat/hello-world".parse().expect("slug"),
+                    pr_number: 1,
+                    comment_body: "Hi".into(),
+                    now: false,
+                },
+                Response::Ok {
+                    entry: Some(sample_entry()),
+                    entries: Some(vec![]),
+                },
+            ),
+            (
+                Command::List,
+                Response::Ok {
+                    entry: Some(sample_entry()),
+                    entries: Some(vec![]),
+                },
+            ),
+            (
+                Command::Bump {
+                    id: "1a2b3c4d".into(),
+                },
+                Response::entry(sample_entry()),
+            ),
+        ];
+
+        for (command, reply) in commands_and_replies {
+            let dir = tempdir().expect("temp dir");
+            let socket = dir.path().join("sock");
+            let listener = UnixListener::bind(&socket).expect("bind socket");
+            let accept = spawn_daemon(listener, reply);
+
+            let err = run(args(socket, command))
+                .await
+                .expect_err("surplus payload must fail");
+            assert!(matches!(err, ClientError::UnexpectedResponse));
+            accept.await.expect("join");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_accepts_mutation_responses_without_payloads() {
+        let commands = [
+            Command::Bump {
+                id: "1a2b3c4d".into(),
+            },
+            Command::Bust {
+                id: "1a2b3c4d".into(),
+            },
+            Command::Del {
+                id: "1a2b3c4d".into(),
+            },
+        ];
+
+        for command in commands {
+            let dir = tempdir().expect("temp dir");
+            let socket = dir.path().join("sock");
+            let listener = UnixListener::bind(&socket).expect("bind socket");
+            let accept = spawn_daemon(listener, Response::ok());
+
+            run(args(socket, command)).await.expect("run succeeds");
+            accept.await.expect("join");
+        }
     }
 
     #[tokio::test]

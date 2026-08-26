@@ -8,6 +8,25 @@ use comenq_lib::protocol::PendingEntry;
 /// Maximum characters of comment text shown by `list`.
 const SUMMARY_LIMIT: usize = 60;
 
+#[derive(Clone, Copy)]
+enum EtaUnit {
+    Now,
+    Seconds,
+    Minutes,
+    Hours,
+}
+
+fn classify_eta(seconds: u64) -> EtaUnit {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    match seconds {
+        0 => EtaUnit::Now,
+        1..MINUTE => EtaUnit::Seconds,
+        MINUTE..HOUR => EtaUnit::Minutes,
+        _ => EtaUnit::Hours,
+    }
+}
+
 /// Render an ETA in seconds as a compact human duration.
 ///
 /// # Examples
@@ -22,20 +41,20 @@ const SUMMARY_LIMIT: usize = 60;
 pub fn format_eta(seconds: u64) -> String {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
-    if seconds == 0 {
-        return "now".to_owned();
+    match classify_eta(seconds) {
+        EtaUnit::Now => "now".to_owned(),
+        EtaUnit::Seconds => format!("{seconds}s"),
+        EtaUnit::Minutes => {
+            let minutes = seconds / MINUTE;
+            let rest = seconds % MINUTE;
+            format!("{minutes}m {rest:02}s")
+        }
+        EtaUnit::Hours => {
+            let hours = seconds / HOUR;
+            let minutes = (seconds % HOUR) / MINUTE;
+            format!("{hours}h {minutes:02}m")
+        }
     }
-    if seconds < MINUTE {
-        return format!("{seconds}s");
-    }
-    if seconds < HOUR {
-        let minutes = seconds / MINUTE;
-        let rest = seconds % MINUTE;
-        return format!("{minutes}m {rest:02}s");
-    }
-    let hours = seconds / HOUR;
-    let minutes = (seconds % HOUR) / MINUTE;
-    format!("{hours}h {minutes:02}m")
 }
 
 /// Collapse a comment body to a single line of at most 60 characters.
@@ -57,7 +76,13 @@ pub fn format_eta(seconds: u64) -> String {
 pub fn one_line_summary(body: &str) -> String {
     let flat: String = body
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     if flat.chars().count() <= SUMMARY_LIMIT {
         return flat;
@@ -127,6 +152,7 @@ mod tests {
     #[rstest]
     #[case("short", "short")]
     #[case("line\nbreaks\tand\rreturns", "line breaks and returns")]
+    #[case("line\u{2028}and\u{2029}paragraph", "line and paragraph")]
     fn summarises_one_line(#[case] body: &str, #[case] expected: &str) {
         assert_eq!(one_line_summary(body), expected);
     }
@@ -143,6 +169,16 @@ mod tests {
     fn sixty_character_bodies_are_untouched() {
         let body = "a".repeat(60);
         assert_eq!(one_line_summary(&body), body);
+    }
+
+    #[rstest]
+    #[case('\u{2028}')]
+    #[case('\u{2029}')]
+    fn truncation_normalizes_unicode_line_separators(#[case] separator: char) {
+        let body = format!("{}{}tail", "a".repeat(59), separator);
+        let summary = one_line_summary(&body);
+        assert_eq!(summary.chars().count(), 60);
+        assert_eq!(summary.chars().nth(59), Some('…'));
     }
 
     #[rstest]

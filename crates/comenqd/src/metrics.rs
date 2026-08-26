@@ -84,6 +84,7 @@ mod tests {
             record_task_restart("worker");
             record_request_outcome("accepted");
             record_request_outcome("rejected");
+            record_request_outcome("failed");
             record_github_post_outcome("success");
             record_github_post_outcome("api_error");
             record_github_post_outcome("timeout");
@@ -99,7 +100,7 @@ mod tests {
                 .iter()
                 .filter(|(key, _, _, _)| key.key().name() == REQUESTS)
                 .count(),
-            2
+            3
         );
         assert_eq!(
             metrics
@@ -113,7 +114,7 @@ mod tests {
                 matches!(
                     (label.key(), label.value()),
                     ("task", "listener" | "worker")
-                        | ("outcome", "accepted" | "rejected")
+                        | ("outcome", "accepted" | "failed" | "rejected")
                         | ("outcome", "success" | "api_error" | "timeout")
                 )
             })
