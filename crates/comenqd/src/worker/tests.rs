@@ -1,50 +1,22 @@
 //! Tests for the worker's shutdown waits and notification hooks.
 
-use super::{Notify, WorkerControl, WorkerHooks, run_worker, wait_or_shutdown};
+use super::{Notify, WorkerControl, WorkerHooks, run_worker, wait_for_retry_deadline};
 use crate::config::Config;
 use crate::queue::SharedQueue;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::Request;
+use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 use tempfile::tempdir;
 use test_support::{octocrab_for, temp_config};
 use tokio::sync::watch;
+use tokio::time::Instant;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod post_span;
-
-#[tokio::test]
-async fn wait_or_shutdown_returns_false_on_timeout() {
-    let (_tx, mut rx) = watch::channel(());
-    let start = Instant::now();
-    let result = wait_or_shutdown(0, &mut rx).await;
-    assert!(!result, "should return false when timeout expires");
-    assert!(
-        start.elapsed().as_millis() < 500,
-        "zero-second wait should return immediately"
-    );
-}
-
-#[tokio::test]
-async fn wait_or_shutdown_returns_true_on_shutdown() {
-    let (tx, mut rx) = watch::channel(());
-    // Signal shutdown before waiting
-    tx.send(()).expect("send shutdown signal");
-    let result = wait_or_shutdown(60, &mut rx).await;
-    assert!(result, "should return true when shutdown is signalled");
-}
-
-#[tokio::test]
-async fn wait_or_shutdown_prioritises_shutdown_over_timeout() {
-    let (tx, mut rx) = watch::channel(());
-    // Send shutdown signal
-    tx.send(()).expect("send shutdown signal");
-    // Even with zero timeout, shutdown should be detected due to biased select
-    let result = wait_or_shutdown(0, &mut rx).await;
-    assert!(result, "biased select should prioritize shutdown signal");
-}
 
 /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
 ///
@@ -178,4 +150,99 @@ async fn failed_post_retries_after_a_full_cooldown() {
             .len()
             >= 2
     );
+}
+
+#[tokio::test]
+async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
+    let dir = tempdir().expect("create temporary queue directory");
+    let cooldown = 1;
+    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(cooldown)));
+    let queue = SharedQueue::open(cfg).expect("open queue");
+    let failed_request = CommentRequest {
+        owner: "octocat".into(),
+        repo: "hello-world".into(),
+        pr_number: 7,
+        body: "retry".into(),
+    };
+    queue
+        .execute(Request::Put {
+            request: failed_request,
+            immediate: true,
+        })
+        .await;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/octocat/hello-world/issues/7/comments"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let octocrab = octocrab_for(&server).expect("create GitHub client");
+    let idle = Arc::new(Notify::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let worker = tokio::spawn(run_worker(
+        Arc::clone(&queue),
+        octocrab,
+        WorkerControl::new(
+            shutdown_rx,
+            WorkerHooks {
+                enqueued: None,
+                idle: Some(Arc::clone(&idle)),
+                drained: None,
+            },
+        ),
+    ));
+
+    idle.notified().await;
+    queue
+        .execute(Request::Put {
+            request: CommentRequest {
+                owner: "octocat".into(),
+                repo: "hello-world".into(),
+                pr_number: 8,
+                body: "queue mutation".into(),
+            },
+            immediate: true,
+        })
+        .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), idle.notified())
+            .await
+            .is_err(),
+        "a queue mutation must not trigger an immediate retry"
+    );
+
+    tokio::time::timeout(Duration::from_secs(cooldown + 1), idle.notified())
+        .await
+        .expect("worker should retry after the cooldown");
+
+    shutdown_tx.send(()).expect("signal shutdown");
+    worker
+        .await
+        .expect("worker task should not panic")
+        .expect("worker should exit cleanly");
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_deadline_ignores_queue_notifications_until_it_expires() {
+    let changed = Notify::new();
+    let (_shutdown_tx, mut shutdown_rx) = watch::channel(());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut wait = Box::pin(wait_for_retry_deadline(
+        deadline,
+        &changed,
+        &mut shutdown_rx,
+    ));
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+
+    changed.notify_one();
+    assert!(matches!(wait.as_mut().poll(&mut context), Poll::Pending));
+    tokio::time::advance(Duration::from_secs(59)).await;
+    assert!(matches!(wait.as_mut().poll(&mut context), Poll::Pending));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(false)
+    ));
 }

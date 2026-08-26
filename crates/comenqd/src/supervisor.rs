@@ -124,7 +124,10 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
     let octocrab = Arc::new(build_octocrab(&config.github_token)?);
     let cfg = Arc::new(config);
-    let queue = SharedQueue::open(cfg.clone())?;
+    let queue_config = Arc::clone(&cfg);
+    let queue = tokio::task::spawn_blocking(move || SharedQueue::open(queue_config))
+        .await
+        .map_err(|error| std::io::Error::other(format!("opening queue task failed: {error}")))??;
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     // Initial task spawns and backoff builders.

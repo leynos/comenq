@@ -49,8 +49,8 @@ fn open_queue(dir: &tempfile::TempDir) -> Arc<SharedQueue> {
 fn payload_of_size(target: usize) -> Vec<u8> {
     let base = Request::Put {
         request: CommentRequest {
-            owner: String::new(),
-            repo: String::new(),
+            owner: "o".into(),
+            repo: "r".into(),
             pr_number: 0,
             body: String::new(),
         },
@@ -60,8 +60,8 @@ fn payload_of_size(target: usize) -> Vec<u8> {
     let body_len = target - base_len;
     let request = Request::Put {
         request: CommentRequest {
-            owner: String::new(),
-            repo: String::new(),
+            owner: "o".into(),
+            repo: "r".into(),
             pr_number: 0,
             body: "a".repeat(body_len),
         },

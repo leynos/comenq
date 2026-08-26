@@ -117,7 +117,10 @@ pub async fn run_listener(
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
     let cfg = queue.config();
-    let listener = prepare_listener(&cfg.socket_path)?;
+    let socket_path = cfg.socket_path.clone();
+    let listener = tokio::task::spawn_blocking(move || prepare_listener(&socket_path))
+        .await
+        .context("joining socket preparation task")??;
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let mut accept_backoff = backoff(min_delay);
 
