@@ -73,7 +73,7 @@ absolute path. It falls back to `/run/comenq/comenq.sock` when the user socket
 cannot be used, so a stale user socket does not hide a healthy system service.
 
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
-instead. Otherwise use the queue-management subcommands:
+instead. Otherwise, use the queue-management subcommands:
 
 ```bash
 comenq put owner/repository 123 "Please review this change"
@@ -89,6 +89,11 @@ comenq del 1a2b3c4d
 targets, and one-line summaries. `bump` and `bust` move an entry to the head or
 tail, and `del` removes it. The `--now` option lifts the default one-cooldown
 delay for a fresh `put`; it does not bypass an earlier queued entry's schedule.
+
+`list` summaries are at most 60 characters long. Control characters, including
+line breaks, become spaces; longer summaries end with an ellipsis. If a GitHub
+post fails, its entry remains queued and the worker retries it after a full
+configured cooldown. A successful retry removes the entry from the queue.
 
 ## Inspect local metrics
 
