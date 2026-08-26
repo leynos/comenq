@@ -50,3 +50,10 @@ Feature: Queue management
     And the comments "First", "Second" and "Third" are queued
     When the unknown identifier "deadbeef" is bumped
     Then the daemon reports an unknown identifier error
+
+  Scenario: a failed post retries after the configured cooldown
+    Given a comment queue with a 1 second cooldown
+    And the comment "Retry" is put immediately
+    And GitHub fails the first queue post and then succeeds
+    When the worker retries after one cooldown
+    Then the queued comment has been retried and removed

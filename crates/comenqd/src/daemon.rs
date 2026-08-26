@@ -14,10 +14,13 @@ pub use crate::supervisor::run;
 /// Shared queue state used by the listener and worker.
 pub use crate::queue::SharedQueue;
 
+/// Control handle for the worker task.
+pub use crate::worker::WorkerControl;
+/// Lifecycle hooks exposed to test and test-support builds.
+#[cfg(any(test, feature = "test-support"))]
+pub use crate::worker::WorkerHooks;
 /// Run the worker that drains the queue and talks to the GitHub API.
 pub use crate::worker::run_worker;
-/// Control handle and lifecycle hooks for the worker task.
-pub use crate::worker::{WorkerControl, WorkerHooks};
 
 pub mod listener {
     //! Listener utilities for accepting client connections.
@@ -30,6 +33,6 @@ pub mod listener {
     #[rustfmt::skip]
     pub use crate::listener::{
         handle_client, prepare_listener, run_listener,
-        CLIENT_READ_TIMEOUT_SECS, MAX_REQUEST_BYTES,
+        CLIENT_READ_TIMEOUT_SECS, CLIENT_WRITE_TIMEOUT_SECS, MAX_REQUEST_BYTES,
     };
 }
