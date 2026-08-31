@@ -543,8 +543,11 @@ time of the most recent successful post. Each entry (a `StoredEntry`) carries:
 
 Entries are written to a temporary sibling file and then renamed into place, so
 a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
-or remove a single entry file the same way. `complete` removes the posted entry
-and atomically rewrites `last_post` with the current Unix time.
+or remove a single entry file the same way. `complete` first writes a durable
+`completion` recovery record containing the entry identifier and posting time.
+It then removes the posted entry, atomically rewrites `last_post`, and clears
+the recovery record. `QueueStore::open` reconciles a record left by an
+interrupted completion before the worker schedules entries.
 
 Because an entry is only removed from disk after a successful post
 (`complete`), and a failed post simply leaves the entry in place for the next
@@ -1170,12 +1173,14 @@ binary crates under `crates/`. `CommentRequest` and the `protocol` module
 described above. Structured logging is initialized using `tracing_subscriber`
 with JSON output controlled by the `RUST_LOG` environment variable. The queue
 directory is created asynchronously on start if it does not already exist,
-before `QueueStore::open` reads or creates the `entries` sub-directory within
-it. There is no dedicated queue-writer task or inter-task channel: the listener
-and worker both hold an `Arc<SharedQueue>`, which wraps the store in a
-`tokio::sync::Mutex`. Serializing access through this mutex, rather than a
-per-connection lock or a writer task, gives the same single-writer semantics
-for on-disk mutations while keeping the concurrency model simple.
+before `QueueStore::open` runs in a blocking task and reads or creates the
+`entries` sub-directory within it. There is no dedicated queue-writer task or
+inter-task channel: the listener and worker both hold an `Arc<SharedQueue>`,
+which wraps the store in a `std::sync::Mutex`. `SharedQueue` runs each
+synchronous store operation in `spawn_blocking`, preserving single-writer
+semantics without blocking Tokio runtime threads. `QueueStore::open` also
+reconciles any durable `completion` record before the worker can schedule
+entries.
 
 The worker's cooling-off period is configured via `cooldown_period_seconds`,
 which defaults to 960 seconds. This value is the base interval used for the ETA

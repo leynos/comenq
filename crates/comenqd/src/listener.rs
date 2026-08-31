@@ -4,7 +4,7 @@
 //! against the shared queue, and writes the JSON reply back to the client.
 
 use anyhow::{Context, Result};
-use comenq_lib::protocol::{Request, Response};
+use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -212,7 +212,7 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let (response, outcome) = match serde_json::from_slice::<Request>(&buffer) {
+    let (response, mut outcome) = match serde_json::from_slice::<Request>(&buffer) {
         Ok(request) => {
             let response = queue.execute(request).await;
             let outcome = if matches!(&response, Response::Error { .. }) {
@@ -227,7 +227,13 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
             ClientOutcome::Accepted,
         ),
     };
-    let bytes = serde_json::to_vec(&response)?;
+    let mut bytes = serde_json::to_vec(&response)?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        outcome = ClientOutcome::Failed;
+        bytes = serde_json::to_vec(&Response::error(format!(
+            "response exceeds {MAX_RESPONSE_BYTES} bytes"
+        )))?;
+    }
     let mut stream = limited.into_inner();
     tokio::time::timeout(
         Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
@@ -246,6 +252,8 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
 
 #[cfg(test)]
 mod tests {
+    //! Socket preparation tests for the listener adapter.
+
     use super::*;
     use rstest::rstest;
     use std::fs::OpenOptions;
