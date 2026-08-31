@@ -202,6 +202,21 @@ fn reopen_reconciles_a_persisted_completion_before_scheduling() {
 }
 
 #[rstest]
+fn entries_does_not_apply_completion_recovery() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
+    fs::write(
+        dir.path().join("completion"),
+        format!(r#"{{"id":"{}","posted_at":4242}}"#, entry.id),
+    )
+    .expect("persist completion record");
+
+    assert_eq!(ids(&store), vec![entry.id]);
+    assert!(dir.path().join("completion").exists());
+}
+
+#[rstest]
 fn next_due_returns_the_head() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);

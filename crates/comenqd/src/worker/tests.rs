@@ -17,6 +17,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod post_span;
+mod scheduling;
 
 /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
 ///
