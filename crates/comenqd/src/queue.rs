@@ -149,14 +149,9 @@ impl SharedQueue {
                 flutter_max,
                 immediate,
             };
-            store.put(request, &options, now).and_then(|entry| {
-                let eta = store
-                    .schedule(cooldown, now)?
-                    .into_iter()
-                    .find(|(scheduled, _)| scheduled.id == entry.id)
-                    .map_or(0, |(_, eta)| eta);
-                Ok(Response::entry(entry.to_pending(eta)))
-            })
+            store
+                .put_with_eta(request, &options, now)
+                .map(|(entry, eta)| Response::entry(entry.to_pending(eta)))
         })
         .await
     }
@@ -225,6 +220,7 @@ mod tests {
     use crate::config::Config;
     use comenq_lib::CommentRequest;
     use comenq_lib::protocol::{Request, Response};
+    use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -302,6 +298,42 @@ mod tests {
             })
             .await;
         assert!(matches!(response, Response::Error { .. }));
+        assert!(
+            matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn put_does_not_persist_when_eta_projection_fails() {
+        let dir = tempdir().expect("create temporary queue directory");
+        let queue_path = dir.path().join("queue");
+        let queue = SharedQueue::open(Arc::new(Config {
+            github_token: "token".into(),
+            github_token_file: None,
+            socket_path: dir.path().join("comenq.sock"),
+            queue_path: queue_path.clone(),
+            cooldown_period_seconds: 600,
+            cooldown_flutter_seconds: 0,
+            restart_min_delay_ms: 1,
+            github_api_timeout_secs: 1,
+        }))
+        .expect("open queue");
+        fs::write(queue_path.join("last_post"), "not a timestamp").expect("write malformed marker");
+
+        let response = queue
+            .execute(Request::Put {
+                request: CommentRequest {
+                    owner: "octocat".into(),
+                    repo: "hello-world".into(),
+                    pr_number: 7,
+                    body: "comment".into(),
+                },
+                immediate: true,
+            })
+            .await;
+        assert!(matches!(response, Response::Error { .. }));
+
+        fs::remove_file(queue_path.join("last_post")).expect("remove malformed marker");
         assert!(
             matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
         );

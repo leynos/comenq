@@ -15,8 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 #[cfg(any(test, feature = "test-support"))]
-use tokio::sync::Notify;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 /// Errors returned when posting a comment to GitHub.

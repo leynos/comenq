@@ -9,7 +9,6 @@
 
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::PendingEntry;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write as _};
@@ -153,58 +152,8 @@ impl QueueStore {
         Ok(store)
     }
 
-    /// Enqueue `request` at the tail, sampling its flutter now.
-    ///
-    /// The flutter is fixed at enqueue time so the entry's estimated posting
-    /// time is stable from the moment it is reported to the client. By
-    /// default the entry may not post until one full cooldown plus its
-    /// flutter after enqueue; `options.immediate` lifts that floor so the
-    /// entry posts as soon as the queue allows.
-    ///
-    /// Identifiers derive from the request content and enqueue second, so an
-    /// identical request repeated within the same second maps to the same
-    /// identifier; the operation is idempotent and returns the existing
-    /// entry unchanged.
-    pub fn put(
-        &self,
-        request: CommentRequest,
-        options: &PutOptions,
-        now: u64,
-    ) -> Result<StoredEntry> {
-        let (id, existing) = self.resolve_entry_id(&request, now)?;
-        if let Some(existing) = existing {
-            return Ok(existing);
-        }
-        let flutter_seconds = if options.flutter_max == 0 {
-            0
-        } else {
-            rand::rng().random_range(0..=options.flutter_max)
-        };
-        let not_before = if options.immediate {
-            0
-        } else {
-            now.saturating_add(options.cooldown)
-                .saturating_add(flutter_seconds)
-        };
-        let order = self
-            .entries()?
-            .last()
-            .map_or(0, |e| e.order.saturating_add(1));
-        let entry = StoredEntry {
-            id,
-            order,
-            flutter_seconds,
-            enqueued_at: now,
-            not_before,
-            request,
-        };
-        self.write_entry(&entry)?;
-        Ok(entry)
-    }
-
     /// All pending entries in posting order.
     pub fn entries(&self) -> Result<Vec<StoredEntry>> {
-        self.reconcile_completion()?;
         let mut entries = Vec::new();
         for dirent in fs::read_dir(&self.entries_dir)? {
             let path = dirent?.path();
@@ -284,33 +233,6 @@ impl QueueStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Pending entries paired with their estimated seconds-until-post.
-    ///
-    /// The head is due one full cooldown plus its own flutter after the most
-    /// recent post (immediately when nothing has been posted yet); each
-    /// subsequent entry follows a further cooldown plus its own flutter after
-    /// the projected posting time of its predecessor. An entry additionally
-    /// never posts before its own `not_before` floor.
-    pub fn schedule(&self, cooldown: u64, now: u64) -> Result<Vec<(StoredEntry, u64)>> {
-        let mut previous_post = self.last_post()?;
-        let mut scheduled = Vec::new();
-        for entry in self.entries()? {
-            let due = previous_post.map_or(now, |prev| {
-                prev.saturating_add(cooldown)
-                    .saturating_add(entry.flutter_seconds)
-            });
-            let post_at = due.max(entry.not_before).max(now);
-            previous_post = Some(post_at);
-            scheduled.push((entry, post_at.saturating_sub(now)));
-        }
-        Ok(scheduled)
-    }
-
-    /// The head entry and its estimated seconds-until-post, when any.
-    pub fn next_due(&self, cooldown: u64, now: u64) -> Result<Option<(StoredEntry, u64)>> {
-        Ok(self.schedule(cooldown, now)?.into_iter().next())
     }
 
     fn entry_path(&self, id: &str) -> Result<PathBuf> {
@@ -395,6 +317,7 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 mod completion;
+mod scheduling;
 
 #[cfg(test)]
 mod tests;

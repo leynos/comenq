@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::CommentRequest;
 
+/// Maximum JSON response size accepted by the client and emitted by the daemon.
+pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
 /// Operation requested by the client.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]

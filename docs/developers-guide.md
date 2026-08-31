@@ -23,10 +23,12 @@ explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate.
 
 The supervisor starts the listener and worker against the same
 `Arc<SharedQueue>`. `SharedQueue` serializes access to the filesystem-backed
-`QueueStore`, while a `tokio::sync::Notify` wakes the worker after queue
-mutations. Restart tracing includes the task name, attempt, and backoff delay
-where applicable. Recovery is bounded to five restart attempts; when that limit
-is exhausted, the supervisor signals daemon shutdown.
+`QueueStore` with a `std::sync::Mutex`; each synchronous store operation runs
+inside `spawn_blocking` so filesystem work does not occupy Tokio runtime
+threads. A `tokio::sync::Notify` wakes the worker after queue mutations.
+Restart tracing includes the task name, attempt, and backoff delay where
+applicable. Recovery is bounded to five restart attempts; when that limit is
+exhausted, the supervisor signals daemon shutdown.
 
 ### Client and daemon API
 
@@ -50,9 +52,12 @@ The listener adapter passes valid requests to `SharedQueue::execute`. It
 performs queue mutations and scheduling through `QueueStore`, then notifies the
 worker after a successful mutation. `SharedQueue::next_due()` selects the head
 entry for posting, and `SharedQueue::complete()` removes an entry after a
-successful GitHub post while recording the posting timestamp. Queue-store
-failures become daemon error responses; failed GitHub posts leave their entries
-in place for a later full-cooldown retry.
+successful GitHub post while recording the posting timestamp. Completion first
+writes a durable recovery record containing the entry identifier and posting
+time; startup reconciliation finishes the deletion and `last_post` update
+before clearing that record. Queue-store failures become daemon error
+responses; failed GitHub posts leave their entries in place for a later
+full-cooldown retry.
 
 When a comment is enqueued, the worker chooses a uniformly distributed flutter
 and stores it with that entry. The stored flutter is added to the complete base

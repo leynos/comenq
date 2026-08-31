@@ -5,7 +5,8 @@
 //! `lib.rs` so that argument parsing remains focused and the network logic
 //! is easily testable.
 
-use comenq_lib::protocol::{Request, Response};
+use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
@@ -39,6 +40,9 @@ pub enum ClientError {
     /// Reading the daemon's reply failed.
     #[error("failed to read daemon reply: {0}")]
     Read(#[source] std::io::Error),
+    /// The daemon reply exceeds the protocol size limit.
+    #[error("daemon reply exceeds {MAX_RESPONSE_BYTES} bytes")]
+    ReplyTooLarge,
     /// The daemon did not finish its reply before the client deadline.
     #[error("timed out waiting for daemon reply")]
     ReplyTimeout,
@@ -48,6 +52,9 @@ pub enum ClientError {
     /// The daemon's reply did not match the request.
     #[error("unexpected reply from daemon")]
     UnexpectedResponse,
+    /// Writing the command result to standard output failed.
+    #[error("failed to write command output: {0}")]
+    Output(#[source] std::io::Error),
 }
 
 /// Connect to the first candidate socket that accepts a connection.
@@ -104,11 +111,15 @@ async fn transact_with_timeout(
         .await
         .map_err(ClientError::Write)?;
     stream.shutdown().await.map_err(ClientError::Shutdown)?;
-    let mut reply = Vec::new();
-    tokio::time::timeout(timeout, stream.read_to_end(&mut reply))
+    let mut reply = Vec::with_capacity(8 * 1024);
+    let mut limited = stream.take((MAX_RESPONSE_BYTES as u64) + 1);
+    tokio::time::timeout(timeout, limited.read_to_end(&mut reply))
         .await
         .map_err(|_| ClientError::ReplyTimeout)?
         .map_err(ClientError::Read)?;
+    if reply.len() > MAX_RESPONSE_BYTES {
+        return Err(ClientError::ReplyTooLarge);
+    }
     Ok(serde_json::from_slice(&reply)?)
 }
 
@@ -129,270 +140,65 @@ async fn transact_with_timeout(
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
+    let stdout = std::io::stdout();
+    run_with_writer(args, &mut stdout.lock()).await
+}
+
+/// Execute the parsed command and render its result through `writer`.
+async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
     let request = args.command.to_request();
     let response = transact(&args.socket_candidates(), &request).await?;
     let (entry, entries) = match response {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
         Response::Ok { entry, entries } => (entry, entries),
     };
-    match (&args.command, entry, entries) {
+    render_response(&args.command, entry, entries, writer)
+}
+
+/// Render a response whose shape has already been checked against `command`.
+fn render_response<W: Write>(
+    command: &Command,
+    entry: Option<comenq_lib::protocol::PendingEntry>,
+    entries: Option<Vec<comenq_lib::protocol::PendingEntry>>,
+    writer: &mut W,
+) -> Result<(), ClientError> {
+    match (command, entry, entries) {
         (Command::Put { .. }, Some(entry), None) => {
-            println!("{}", render_put(&entry));
+            let _ = write_line(writer, &render_put(&entry))?;
         }
         (Command::List, None, Some(entries)) => {
             if entries.is_empty() {
-                println!("No comments queued.");
+                let _ = write_line(writer, "No comments queued.")?;
             } else {
-                for entry in &entries {
-                    println!("{}", render_entry(entry));
+                for entry in entries {
+                    if !write_line(writer, &render_entry(&entry))? {
+                        break;
+                    }
                 }
             }
         }
-        (Command::Bump { id }, None, None) => println!("Moved {id} to the head of the queue."),
-        (Command::Bust { id }, None, None) => println!("Moved {id} to the tail of the queue."),
-        (Command::Del { id }, None, None) => println!("Removed {id} from the queue."),
+        (Command::Bump { id }, None, None) => {
+            let _ = write_line(writer, &format!("Moved {id} to the head of the queue."))?;
+        }
+        (Command::Bust { id }, None, None) => {
+            let _ = write_line(writer, &format!("Moved {id} to the tail of the queue."))?;
+        }
+        (Command::Del { id }, None, None) => {
+            let _ = write_line(writer, &format!("Removed {id} from the queue."))?;
+        }
         _ => return Err(ClientError::UnexpectedResponse),
     }
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    //! Round-trip tests for the client transport.
-    use super::{ClientError, run, transact_with_timeout};
-    use crate::{Args, Command};
-    use comenq_lib::protocol::{PendingEntry, Request, Response};
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tempfile::tempdir;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixListener;
-    use tokio::sync::Notify;
-
-    fn put_args(socket: std::path::PathBuf) -> Args {
-        Args {
-            socket: Some(socket),
-            command: Command::Put {
-                repo_slug: "octocat/hello-world".parse().expect("slug"),
-                pr_number: 1,
-                comment_body: "Hi".into(),
-                now: false,
-            },
-        }
-    }
-
-    fn args(socket: std::path::PathBuf, command: Command) -> Args {
-        Args {
-            socket: Some(socket),
-            command,
-        }
-    }
-
-    fn sample_entry() -> PendingEntry {
-        PendingEntry {
-            id: "1a2b3c4d".into(),
-            eta_seconds: 0,
-            owner: "octocat".into(),
-            repo: "hello-world".into(),
-            pr_number: 1,
-            body: "Hi".into(),
-        }
-    }
-
-    /// Accept one connection, capture the request, and reply.
-    fn spawn_daemon(listener: UnixListener, reply: Response) -> tokio::task::JoinHandle<Request> {
-        tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let mut buf = Vec::new();
-            stream.read_to_end(&mut buf).await.expect("read");
-            let request = serde_json::from_slice::<Request>(&buf).expect("deserialize");
-            let bytes = serde_json::to_vec(&reply).expect("serialize reply");
-            stream.write_all(&bytes).await.expect("write reply");
-            request
-        })
-    }
-
-    #[tokio::test]
-    async fn run_sends_put_request_and_accepts_reply() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let listener = UnixListener::bind(&socket).expect("bind socket");
-        let reply = Response::entry(sample_entry());
-        let accept = spawn_daemon(listener, reply);
-
-        run(put_args(socket)).await.expect("run succeeds");
-        let request = accept.await.expect("join");
-        let Request::Put { request, immediate } = request else {
-            panic!("expected put request, got {request:?}");
-        };
-        assert_eq!(request.owner, "octocat");
-        assert_eq!(request.repo, "hello-world");
-        assert_eq!(request.pr_number, 1);
-        assert_eq!(request.body, "Hi");
-        assert!(!immediate, "put must default to deferred posting");
-    }
-
-    #[tokio::test]
-    async fn run_surfaces_daemon_errors() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let listener = UnixListener::bind(&socket).expect("bind socket");
-        let accept = spawn_daemon(listener, Response::error("queue unavailable"));
-
-        let err = run(put_args(socket)).await.expect_err("should error");
-        assert!(matches!(err, ClientError::Daemon(m) if m == "queue unavailable"));
-        accept.await.expect("join");
-    }
-
-    #[tokio::test]
-    async fn run_rejects_mismatched_reply() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let listener = UnixListener::bind(&socket).expect("bind socket");
-        // A bare Ok reply lacks the entry a put expects.
-        let accept = spawn_daemon(listener, Response::ok());
-
-        let err = run(put_args(socket)).await.expect_err("should error");
-        assert!(matches!(err, ClientError::UnexpectedResponse));
-        accept.await.expect("join");
-    }
-
-    #[tokio::test]
-    async fn run_rejects_surplus_response_payloads() {
-        let commands_and_replies = [
-            (
-                Command::Put {
-                    repo_slug: "octocat/hello-world".parse().expect("slug"),
-                    pr_number: 1,
-                    comment_body: "Hi".into(),
-                    now: false,
-                },
-                Response::Ok {
-                    entry: Some(sample_entry()),
-                    entries: Some(vec![]),
-                },
-            ),
-            (
-                Command::List,
-                Response::Ok {
-                    entry: Some(sample_entry()),
-                    entries: Some(vec![]),
-                },
-            ),
-            (
-                Command::Bump {
-                    id: "1a2b3c4d".into(),
-                },
-                Response::entry(sample_entry()),
-            ),
-        ];
-
-        for (command, reply) in commands_and_replies {
-            let dir = tempdir().expect("temp dir");
-            let socket = dir.path().join("sock");
-            let listener = UnixListener::bind(&socket).expect("bind socket");
-            let accept = spawn_daemon(listener, reply);
-
-            let err = run(args(socket, command))
-                .await
-                .expect_err("surplus payload must fail");
-            assert!(matches!(err, ClientError::UnexpectedResponse));
-            accept.await.expect("join");
-        }
-    }
-
-    #[tokio::test]
-    async fn run_accepts_mutation_responses_without_payloads() {
-        let commands = [
-            Command::Bump {
-                id: "1a2b3c4d".into(),
-            },
-            Command::Bust {
-                id: "1a2b3c4d".into(),
-            },
-            Command::Del {
-                id: "1a2b3c4d".into(),
-            },
-        ];
-
-        for command in commands {
-            let dir = tempdir().expect("temp dir");
-            let socket = dir.path().join("sock");
-            let listener = UnixListener::bind(&socket).expect("bind socket");
-            let accept = spawn_daemon(listener, Response::ok());
-
-            run(args(socket, command)).await.expect("run succeeds");
-            accept.await.expect("join");
-        }
-    }
-
-    #[tokio::test]
-    async fn run_errors_when_socket_missing() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("nosock");
-
-        let err = run(put_args(socket)).await.expect_err("should error");
-        assert!(matches!(err, ClientError::Connect(_)));
-    }
-
-    #[tokio::test]
-    async fn transaction_times_out_when_the_daemon_keeps_the_reply_open() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let listener = UnixListener::bind(&socket).expect("bind socket");
-        let request_received = Arc::new(Notify::new());
-        let peer_received = Arc::clone(&request_received);
-        let peer = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let mut request = Vec::new();
-            stream
-                .read_to_end(&mut request)
-                .await
-                .expect("read request");
-            peer_received.notify_one();
-            std::future::pending::<()>().await;
-        });
-
-        let err = transact_with_timeout(&[socket], &Request::List, Duration::from_millis(10))
-            .await
-            .expect_err("open reply must time out");
-        assert!(matches!(err, ClientError::ReplyTimeout));
-        request_received.notified().await;
-        peer.abort();
-    }
-
-    /// A stale socket file must not shadow a live daemon later in the list.
-    #[tokio::test]
-    async fn connect_first_skips_stale_sockets() {
-        let dir = tempdir().expect("temp dir");
-        let stale = dir.path().join("stale.sock");
-        drop(UnixListener::bind(&stale).expect("bind stale socket"));
-        assert!(stale.exists(), "stale socket file should remain on disk");
-
-        let live = dir.path().join("live.sock");
-        let listener = UnixListener::bind(&live).expect("bind live socket");
-
-        let stream = super::connect_first(&[stale, live])
-            .await
-            .expect("should fall back to the live socket");
-        drop(stream);
-        drop(listener);
-    }
-
-    /// Every failed candidate must still report a connection error.
-    #[tokio::test]
-    async fn connect_first_reports_failure_when_all_candidates_fail() {
-        let dir = tempdir().expect("temp dir");
-        let stale = dir.path().join("stale.sock");
-        drop(UnixListener::bind(&stale).expect("bind stale socket"));
-        let missing = dir.path().join("missing.sock");
-
-        let err = super::connect_first(&[stale, missing])
-            .await
-            .expect_err("all candidates should fail");
-        let ClientError::Connect(source) = err else {
-            panic!("expected connection error, got {err:?}");
-        };
-        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+/// Write one line, treating a closed output pipe as successful completion.
+fn write_line(writer: &mut impl Write, line: &str) -> Result<bool, ClientError> {
+    match writeln!(writer, "{line}") {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(ClientError::Output(error)),
     }
 }
+
+#[cfg(test)]
+mod tests;
