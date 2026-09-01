@@ -22,7 +22,9 @@ def test_repository_owned_linux_job_uses_shared_namespace_profile(
     """Require each direct Linux job to retain its reviewed runner profile."""
     workflow_path = _REPO_ROOT / ".github" / "workflows" / workflow_name
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-    assert workflow["jobs"][job_name]["runs-on"] == _NAMESPACE_RUNNER
+    assert workflow["jobs"][job_name]["runs-on"] == _NAMESPACE_RUNNER, (
+        f"{workflow_name}:{job_name} must use {_NAMESPACE_RUNNER}"
+    )
 
 
 def test_ci_uses_github_hosted_linux_for_the_whitaker_toolchain() -> None:

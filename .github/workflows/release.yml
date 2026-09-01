@@ -42,6 +42,8 @@ concurrency:
 jobs:
   metadata:
     runs-on: namespace-profile-default
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.ensure_version.outputs.crate-version }}
       should_publish: ${{ steps.release_modes.outputs.should-publish }}
@@ -67,6 +69,8 @@ jobs:
     name: Build ${{ matrix.bin }} for ${{ matrix.target }}
     needs: metadata
     runs-on: namespace-profile-default
+    permissions:
+      contents: read
     env:
       PACKAGE_DEB_DEPENDS: ${{ matrix.bin == 'comenqd' && 'bash, systemd' || '' }}
       PACKAGE_RPM_DEPENDS: ${{ matrix.bin == 'comenqd' && 'bash, shadow-utils, systemd' || '' }}
