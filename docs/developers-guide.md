@@ -94,11 +94,13 @@ timeout, after which `make test` runs the Cucumber test target separately.
 
 ### Namespace GitHub Actions runners
 
-Comenq's repository-owned Linux CI, release, and delayed-comment jobs run on
+Comenq's repository-owned Linux release and delayed-comment jobs run on
 `namespace-profile-default`: the shared Ubuntu 22.04 Linux/amd64 profile with
 4 vCPU and 16 GB memory. Its Namespace cache volume is disabled for this
 baseline rollout. Existing workflow cache actions remain unchanged; they are
-not backed by a Namespace cache volume. The mutation workflow remains an
+not backed by a Namespace cache volume. CI remains on GitHub-hosted Linux
+because Whitaker's prebuilt `cargo-dylint` does not verify on the shared Ubuntu
+22.04 profile. The mutation workflow remains an
 externally owned reusable-workflow boundary and retains its caller-controlled
 runner selection.
 
