@@ -15,13 +15,13 @@
 # Path to the Unix domain socket for client connections
 # socket_path = "/run/comenq/comenq.sock"
 
-# Location for the persistent yaque queue data
+# Location for the persistent queue data
 # queue_path = "/var/lib/comenq/queue"
 
 # Cooldown period between posting comments in seconds
 # cooldown_period_seconds = 960
 
-# Maximum random flutter added to each cooldown in seconds. The full
-# cooldown always elapses; a fresh random duration up to this value is
-# added on top. Zero (the default) disables flutter.
+# Maximum random flutter in seconds, sampled when each comment is enqueued
+# and stored with its entry. It only lengthens the cooldown-derived ETA.
+# Zero (the default) disables flutter.
 # cooldown_flutter_seconds = 0

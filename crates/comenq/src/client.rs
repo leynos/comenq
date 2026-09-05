@@ -1,17 +1,26 @@
 //! Client-side communication with the `comenqd` daemon.
 //!
-//! This module contains the logic to serialize a comment request and send it to
-//! the daemon over its Unix Domain Socket. It is separated from `lib.rs` so
-//! that argument parsing remains focused and the network logic is easily
-//! testable.
+//! This module serializes a protocol request, sends it to the daemon over
+//! its Unix Domain Socket, and renders the reply. It is separated from
+//! `lib.rs` so that argument parsing remains focused and the network logic
+//! is easily testable.
 
-use comenq_lib::CommentRequest;
+use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
+use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::{io::AsyncWriteExt, net::UnixStream};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixStream,
+};
 use tracing::{debug, warn};
 
-use crate::Args;
+use crate::output::{render_entry, render_put};
+use crate::{Args, Command};
+
+/// Maximum time to wait for a complete daemon reply.
+const CLIENT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Errors that can occur when interacting with the daemon.
 #[derive(Debug, Error)]
@@ -19,8 +28,8 @@ pub enum ClientError {
     /// Connecting to the daemon failed.
     #[error("failed to connect to daemon: {0}")]
     Connect(#[from] std::io::Error),
-    /// Serializing the request failed.
-    #[error("failed to serialize request: {0}")]
+    /// Serializing the request or parsing the reply failed.
+    #[error("failed to encode or decode a daemon message: {0}")]
     Serialize(#[from] serde_json::Error),
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
@@ -28,6 +37,24 @@ pub enum ClientError {
     /// Shutting down the socket failed.
     #[error("failed to close connection: {0}")]
     Shutdown(#[source] std::io::Error),
+    /// Reading the daemon's reply failed.
+    #[error("failed to read daemon reply: {0}")]
+    Read(#[source] std::io::Error),
+    /// The daemon reply exceeds the protocol size limit.
+    #[error("daemon reply exceeds {MAX_RESPONSE_BYTES} bytes")]
+    ReplyTooLarge,
+    /// The daemon did not finish its reply before the client deadline.
+    #[error("timed out waiting for daemon reply")]
+    ReplyTimeout,
+    /// The daemon reported a failure.
+    #[error("daemon refused the request: {0}")]
+    Daemon(String),
+    /// The daemon's reply did not match the request.
+    #[error("unexpected reply from daemon")]
+    UnexpectedResponse,
+    /// Writing the command result to standard output failed.
+    #[error("failed to write command output: {0}")]
+    Output(#[source] std::io::Error),
 }
 
 /// Connect to the first candidate socket that accepts a connection.
@@ -48,16 +75,16 @@ async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError
                 debug!(attempt, socket = %candidate.display(), "socket candidate selected");
                 return Ok(stream);
             }
-            Err(e) => {
+            Err(error) => {
                 if matches!(
-                    e.kind(),
+                    error.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
                 ) {
-                    debug!(attempt, socket = %candidate.display(), error_kind = ?e.kind(), error = %e, "socket candidate unavailable");
+                    debug!(attempt, socket = %candidate.display(), error_kind = ?error.kind(), error = %error, "socket candidate unavailable");
                 } else {
-                    warn!(attempt, socket = %candidate.display(), error_kind = ?e.kind(), error = %e, "socket candidate failed");
+                    warn!(attempt, socket = %candidate.display(), error_kind = ?error.kind(), error = %error, "socket candidate failed");
                 }
-                last_error = Some(e);
+                last_error = Some(error);
             }
         }
     }
@@ -66,141 +93,112 @@ async fn connect_first(candidates: &[PathBuf]) -> Result<UnixStream, ClientError
     })))
 }
 
-/// Send a `CommentRequest` to the daemon.
+/// Send `request` to the first reachable candidate and parse its bounded reply.
+async fn transact(candidates: &[PathBuf], request: &Request) -> Result<Response, ClientError> {
+    transact_with_timeout(candidates, request, CLIENT_REPLY_TIMEOUT).await
+}
+
+/// Send one request and require the daemon to finish its reply within `timeout`.
+async fn transact_with_timeout(
+    candidates: &[PathBuf],
+    request: &Request,
+    timeout: Duration,
+) -> Result<Response, ClientError> {
+    let payload = serde_json::to_vec(request)?;
+    let mut stream = connect_first(candidates).await?;
+    stream
+        .write_all(&payload)
+        .await
+        .map_err(ClientError::Write)?;
+    stream.shutdown().await.map_err(ClientError::Shutdown)?;
+    let mut reply = Vec::with_capacity(8 * 1024);
+    let mut limited = stream.take((MAX_RESPONSE_BYTES as u64) + 1);
+    tokio::time::timeout(timeout, limited.read_to_end(&mut reply))
+        .await
+        .map_err(|_| ClientError::ReplyTimeout)?
+        .map_err(ClientError::Read)?;
+    if reply.len() > MAX_RESPONSE_BYTES {
+        return Err(ClientError::ReplyTooLarge);
+    }
+    Ok(serde_json::from_slice(&reply)?)
+}
+
+/// Execute the parsed command against the daemon and print the outcome.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// # use comenq::{Args, run};
+/// # use comenq::{Args, Command, run};
 /// # use std::path::PathBuf;
-/// # use comenq_transport::DEFAULT_SOCKET_PATH;
 /// # async fn try_run() -> Result<(), comenq::ClientError> {
 /// let args = Args {
-///     repo_slug: "owner/repo".parse().expect("slug"),
-///     pr_number: 1,
-///     comment_body: String::from("Hi"),
-///     socket: Some(PathBuf::from(DEFAULT_SOCKET_PATH)),
+///     socket: Some(PathBuf::from("/tmp/comenq.sock")),
+///     command: Command::List,
 /// };
 /// run(args).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    let candidates = args.socket_candidates();
-    let request = CommentRequest {
-        owner: args.repo_slug.owner().to_owned(),
-        repo: args.repo_slug.repo().to_owned(),
-        pr_number: args.pr_number,
-        body: args.comment_body,
+    let stdout = std::io::stdout();
+    run_with_writer(args, &mut stdout.lock()).await
+}
+
+/// Execute the parsed command and render its result through `writer`.
+async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
+    let request = args.command.to_request();
+    let response = transact(&args.socket_candidates(), &request).await?;
+    let (entry, entries) = match response {
+        Response::Error { message } => return Err(ClientError::Daemon(message)),
+        Response::Ok { entry, entries } => (entry, entries),
     };
+    render_response(&args.command, entry, entries, writer)
+}
 
-    let payload = serde_json::to_vec(&request)?;
-
-    let mut stream = connect_first(&candidates).await?;
-    stream
-        .write_all(&payload)
-        .await
-        .map_err(ClientError::Write)?;
-    if let Err(e) = stream.shutdown().await {
-        warn!("failed to close connection: {e}");
-        return Err(ClientError::Shutdown(e));
+/// Render a response whose shape has already been checked against `command`.
+fn render_response<W: Write>(
+    command: &Command,
+    entry: Option<comenq_lib::protocol::PendingEntry>,
+    entries: Option<Vec<comenq_lib::protocol::PendingEntry>>,
+    writer: &mut W,
+) -> Result<(), ClientError> {
+    match (command, entry, entries) {
+        (Command::Put { .. }, Some(entry), None) => {
+            let _ = write_line(writer, &render_put(&entry))?;
+        }
+        (Command::List, None, Some(entries)) => {
+            if entries.is_empty() {
+                let _ = write_line(writer, "No comments queued.")?;
+            } else {
+                for entry in entries {
+                    if !write_line(writer, &render_entry(&entry))? {
+                        break;
+                    }
+                }
+            }
+        }
+        (Command::Bump { id }, None, None) => {
+            let _ = write_line(writer, &format!("Moved {id} to the head of the queue."))?;
+        }
+        (Command::Bust { id }, None, None) => {
+            let _ = write_line(writer, &format!("Moved {id} to the tail of the queue."))?;
+        }
+        (Command::Del { id }, None, None) => {
+            let _ = write_line(writer, &format!("Removed {id} from the queue."))?;
+        }
+        _ => return Err(ClientError::UnexpectedResponse),
     }
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ClientError, run};
-    use crate::{Args, RepoSlug};
-    use comenq_lib::CommentRequest;
-    use tempfile::tempdir;
-    use tokio::io::AsyncReadExt;
-    use tokio::net::UnixListener;
-
-    #[tokio::test]
-    async fn run_sends_request() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("sock");
-        let listener = UnixListener::bind(&socket).expect("bind socket");
-
-        let accept = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let mut buf = Vec::new();
-            stream.read_to_end(&mut buf).await.expect("read");
-            serde_json::from_slice::<CommentRequest>(&buf).expect("deserialize")
-        });
-
-        let args = Args {
-            repo_slug: "octocat/hello-world".parse().expect("slug"),
-            pr_number: 1,
-            comment_body: "Hi".into(),
-            socket: Some(socket.clone()),
-        };
-
-        run(args).await.expect("run succeeds");
-        let req = accept.await.expect("join");
-        assert_eq!(req.owner, "octocat");
-        assert_eq!(req.repo, "hello-world");
-        assert_eq!(req.pr_number, 1);
-        assert_eq!(req.body, "Hi");
-    }
-
-    /// A stale socket file (bound once, listener dropped, file left behind)
-    /// must not shadow a live daemon later in the candidate list.
-    #[tokio::test]
-    async fn connect_first_skips_stale_sockets() {
-        let dir = tempdir().expect("temp dir");
-        let stale = dir.path().join("stale.sock");
-        drop(UnixListener::bind(&stale).expect("bind stale socket"));
-        assert!(stale.exists(), "stale socket file should remain on disk");
-
-        let live = dir.path().join("live.sock");
-        let listener = UnixListener::bind(&live).expect("bind live socket");
-
-        let stream = super::connect_first(&[stale.clone(), live.clone()])
-            .await
-            .expect("should fall back to the live socket");
-        drop(stream);
-        drop(listener);
-    }
-
-    /// Every candidate failing yields the connection error.
-    #[tokio::test]
-    async fn connect_first_reports_failure_when_all_candidates_fail() {
-        let dir = tempdir().expect("temp dir");
-        let stale = dir.path().join("stale.sock");
-        drop(UnixListener::bind(&stale).expect("bind stale socket"));
-        let missing = dir.path().join("missing.sock");
-
-        let err = super::connect_first(&[stale, missing])
-            .await
-            .expect_err("all candidates should fail");
-        let ClientError::Connect(source) = err else {
-            panic!("expected connection error, got {err:?}");
-        };
-        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-    }
-
-    #[tokio::test]
-    async fn run_errors_when_socket_missing() {
-        let dir = tempdir().expect("temp dir");
-        let socket = dir.path().join("nosock");
-
-        let args = Args {
-            repo_slug: "octocat/hello-world".parse().expect("slug"),
-            pr_number: 1,
-            comment_body: "Hi".into(),
-            socket: Some(socket.clone()),
-        };
-
-        let err = run(args).await.expect_err("should error");
-        assert!(matches!(err, ClientError::Connect(_)));
-    }
-
-    #[test]
-    fn slug_parses() {
-        let slug: RepoSlug = "octocat/hello-world".parse().expect("slug");
-        assert_eq!(slug.owner(), "octocat");
-        assert_eq!(slug.repo(), "hello-world");
+/// Write one line, treating a closed output pipe as successful completion.
+fn write_line(writer: &mut impl Write, line: &str) -> Result<bool, ClientError> {
+    match writeln!(writer, "{line}") {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(ClientError::Output(error)),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -73,12 +73,27 @@ absolute path. It falls back to `/run/comenq/comenq.sock` when the user socket
 cannot be used, so a stale user socket does not hide a healthy system service.
 
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
-instead:
+instead. Otherwise, use the queue-management subcommands:
 
 ```bash
-comenq owner/repository 123 "Please review this change"
-comenq --socket /run/comenq/comenq.sock owner/repository 123 "Queued"
+comenq put owner/repository 123 "Please review this change"
+comenq put --now owner/repository 123 "Post as soon as possible"
+comenq list
+comenq bump 1a2b3c4d
+comenq bust 1a2b3c4d
+comenq del 1a2b3c4d
 ```
+
+`put` prints a deterministic eight-character identifier and an approximate ETA.
+`list` shows pending entries in posting order with their identifiers, ETAs,
+targets, and one-line summaries. `bump` and `bust` move an entry to the head or
+tail, and `del` removes it. The `--now` option lifts the default one-cooldown
+delay for a fresh `put`; it does not bypass an earlier queued entry's schedule.
+
+`list` summaries are at most 60 characters long. Control characters, including
+line breaks, become spaces; longer summaries end with an ellipsis. If a GitHub
+post fails, its entry remains queued and the worker retries it after a full
+configured cooldown. A successful retry removes the entry from the queue.
 
 ## Inspect local metrics
 
@@ -93,12 +108,10 @@ curl http://127.0.0.1:9000/metrics
 
 The stable metric names and labels are:
 
-- `comenqd_task_restarts_total{task=listener|worker|writer}` for supervised
+- `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
-- `comenqd_queue_writer_failures_total{queue_side=sender}` for queue-writer
-  failures.
-- `comenqd_client_channel_depth` for the bounded client-channel depth proxy.
-- `comenqd_requests_total{outcome=accepted|rejected}` for request outcomes.
+- `comenqd_requests_total{outcome=accepted|failed|rejected}` for request
+  outcomes.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 - `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
   comment-post outcomes.
@@ -107,13 +120,14 @@ The stable metric names and labels are:
 ## Configure the cooldown
 
 `cooldown_period_seconds` sets the minimum delay after a comment is posted. It
-defaults to 960 seconds. The daemon's `--cooldown-period-seconds` option takes
-precedence over the environment and configuration file.
+defaults to 960 seconds and is used in the ETA reported by `put` and `list`.
+The daemon's `--cooldown-period-seconds` option takes precedence over the
+environment and configuration file.
 
-`cooldown_flutter_seconds` adds a fresh uniformly random delay from zero up to
-the configured number of seconds to every cooldown. Flutter only lengthens the
-wait; zero disables it. Configure flutter in the TOML file or through
-`COMENQD_COOLDOWN_FLUTTER_SECONDS`.
+`cooldown_flutter_seconds` sets the maximum uniformly random delay sampled when
+each comment is enqueued. The sampled flutter is stored with that entry and
+only lengthens its cooldown-derived ETA; zero disables it. Configure flutter in
+the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
 [Comenq design](comenq-design.md). For an existing deployment, see
