@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC workflow-source resolution
-    uses: leynos/shared-actions/.github/workflows/mutation-cargo.yml@794e4801babcf68065c660fdf4781ad62be5d061
+    uses: leynos/shared-actions/.github/workflows/mutation-cargo.yml@197d04cbc6f20cd7d1a08b4e445a5c35910e5364
     with:
       # The root comenq-lib crate lives under src/; the comenq client
       # and comenqd daemon crates live under crates/. The vendored
