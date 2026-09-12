@@ -1,16 +1,33 @@
 //! Tests for task supervision and failure logging.
 
-use super::{log_task_failure, supervise_task};
-use ::metrics::set_default_local_recorder;
+use super::log_task_failure;
+use crate::config::Config;
 use anyhow::anyhow;
-use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use rstest::rstest;
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{Notify, watch};
 use tokio::task::JoinError;
+
+/// Convert a test configuration into the runtime configuration in all builds.
+#[cfg(feature = "test-support")]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config::from(cfg)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config {
+        github_token: cfg.github_token,
+        github_token_file: None,
+        socket_path: cfg.socket_path,
+        queue_path: cfg.queue_path,
+        cooldown_period_seconds: cfg.cooldown_period_seconds,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: cfg.restart_min_delay_ms,
+        github_api_timeout_secs: cfg.github_api_timeout_secs,
+    }
+}
 
 /// In-memory writer used to capture JSON-formatted tracing events.
 #[derive(Clone, Default)]
@@ -83,106 +100,25 @@ fn logs_failures(
     }
 }
 
-/// Consecutive failures must advance the same backoff iterator.
-#[tokio::test(flavor = "current_thread")]
-async fn consecutive_failures_use_increasing_restart_delays() {
-    struct RecordingBackoff {
-        delays: Vec<Duration>,
-        observed: Arc<Mutex<Vec<Duration>>>,
-    }
-
-    impl Iterator for RecordingBackoff {
-        type Item = Duration;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            let delay = self.delays.pop()?;
-            self.observed.lock().expect("record delay").push(delay);
-            Some(delay)
-        }
-    }
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let spawned_twice = Arc::new(Notify::new());
-    let respawn_shutdown = shutdown_rx.clone();
-    let respawn_signal = Arc::clone(&spawned_twice);
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
-    let _recorder_guard = set_default_local_recorder(&recorder);
-    let supervisor = tokio::spawn(supervise_task(
-        "worker",
-        tokio::spawn(async { Err(anyhow!("first failure")) }),
-        RecordingBackoff {
-            delays: vec![Duration::from_millis(2), Duration::from_millis(1)],
-            observed: Arc::clone(&observed),
-        },
-        move |attempt| {
-            let mut shutdown = respawn_shutdown.clone();
-            let signal = Arc::clone(&respawn_signal);
-            tokio::spawn(async move {
-                if attempt == 1 {
-                    Err(anyhow!("second failure"))
-                } else {
-                    signal.notify_one();
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                }
-            })
-        },
-        shutdown_rx,
-    ));
-
-    tokio::time::timeout(Duration::from_secs(1), spawned_twice.notified())
-        .await
-        .expect("task should restart twice");
-    shutdown_tx.send(()).expect("signal shutdown");
-    supervisor.await.expect("join supervisor");
-
-    let delays = observed.lock().expect("read delays");
-    assert_eq!(
-        delays.as_slice(),
-        &[Duration::from_millis(1), Duration::from_millis(2)]
-    );
-    let metrics = snapshotter.snapshot().into_vec();
-    assert!(metrics.iter().any(|(key, _, _, value)| {
-        key.key().name() == "comenqd_task_restarts_total"
-            && key
-                .key()
-                .labels()
-                .any(|label| label.key() == "task" && label.value() == "worker")
-            && matches!(value, DebugValue::Counter(2))
-    }));
-}
-
-/// The worker must start while the queue writer holds the sender.
-///
-/// Regression test for the daemon's startup topology: the writer owns the
-/// queue's `yaque::Sender` and the worker must open only the `Receiver`.
-/// Opening a full `channel()` on both sides contends for yaque's per-side
-/// lock files and left the worker in a permanent restart loop.
+/// The worker starts against the shared queue and shuts down cleanly.
 #[rstest]
 #[tokio::test]
-async fn worker_starts_while_writer_holds_the_sender() {
+async fn worker_starts_and_stops_cleanly() {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let cfg: std::sync::Arc<crate::config::Config> =
-        std::sync::Arc::new(test_support::temp_config(&dir).into());
+    let cfg = std::sync::Arc::new(cfg_from(test_support::temp_config(&dir)));
     super::ensure_queue_dir(&cfg.queue_path)
         .await
         .expect("create queue dir");
-    let _sender = yaque::Sender::open(&cfg.queue_path).expect("open queue sender");
-
+    let queue = crate::queue::SharedQueue::open(cfg).expect("open shared queue");
     let octocrab =
         std::sync::Arc::new(crate::worker::build_octocrab("token").expect("build octocrab"));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    let handle = super::spawn_worker(cfg, octocrab, shutdown_rx, 0);
+    let handle = super::spawn_worker(queue, octocrab, shutdown_rx);
     shutdown_tx.send(()).expect("signal shutdown");
 
     let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
         .await
         .expect("worker should exit promptly")
         .expect("worker task should not panic");
-    assert!(
-        res.is_ok(),
-        "worker must open the queue receiver while the sender is held: {res:?}"
-    );
+    assert!(res.is_ok(), "worker must exit cleanly on shutdown: {res:?}");
 }

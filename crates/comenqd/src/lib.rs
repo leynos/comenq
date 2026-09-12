@@ -6,7 +6,11 @@
 //! This crate exposes:
 //! - [`config::Config`] — typed, validated daemon configuration loaded from
 //!   `/etc/comenqd/config.toml` with environment and CLI overrides.
-//! - Further daemon-specific helpers (to be added).
+//! - [`metrics`] — bounded Prometheus metrics for tasks, requests, cooldowns,
+//!   and GitHub posting.
+//! - [`queue::SharedQueue`] and [`store::QueueStore`] — persistent queue
+//!   scheduling and reorderable comment storage.
+//! - [`daemon`] — the public facade for the listener, worker, and supervisor.
 //!
 //! # Examples
 //! ```rust,no_run
@@ -19,8 +23,9 @@ pub mod config;
 pub mod metrics;
 
 mod listener;
+pub mod queue;
+pub mod store;
 mod supervisor;
-mod util;
 mod worker;
 
 pub mod daemon;
