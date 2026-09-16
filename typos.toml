@@ -20,7 +20,6 @@ extend-exclude = [
     "node_modules",
     "package-lock.json",
     "pnpm-lock.yaml",
-    "scripts/tests/test_typos_rollout_hardening.py",
     "target",
     "typos.local.toml",
     "typos.toml",
@@ -38,6 +37,8 @@ extend-ignore-re = [
     "(?m)^      should_upload_workflow_artifacts: \\$\\{\\{ steps\\.release_modes\\.outputs\\.should-upload-workflow-artifacts \\}\\}$",
     "(?m)^      should_upload_workflow_artifacts:$",
     "(?s)```.*?```",
+    "Azure\\s+Architecture\\s+Center\\s*\\|\\s*Microsoft\\s+Learn\\b",
+    "GitHub\\s+Flavored\\s+Markdown\\b(?:\\s\\(GFM\\))?",
     "\\bCARGO_TERM_COLOR\\b",
     "\\bcolor_eyre\\b",
     "\\bfn is_metadata_file_recognises_metadata\\b",
@@ -774,6 +775,10 @@ extend-ignore-re = [
 "equalizers" = "equalizers"
 "equalizes" = "equalizes"
 "equalizing" = "equalizing"
+"exercize" = "exercise"
+"exercized" = "exercised"
+"exercizes" = "exercises"
+"exercizing" = "exercising"
 "externalisable" = "externalizable"
 "externalisably" = "externalizably"
 "externalisation" = "externalization"
@@ -1717,6 +1722,7 @@ extend-ignore-re = [
 "organizers" = "organizers"
 "organizes" = "organizes"
 "organizing" = "organizing"
+"otherwize" = "otherwise"
 "oxendict" = "oxendict"
 "oxidisable" = "oxidizable"
 "oxidisably" = "oxidizably"
@@ -2038,6 +2044,10 @@ extend-ignore-re = [
 "quantizers" = "quantizers"
 "quantizes" = "quantizes"
 "quantizing" = "quantizing"
+"raize" = "raise"
+"raized" = "raised"
+"raizes" = "raises"
+"raizing" = "raising"
 "randomisable" = "randomizable"
 "randomisably" = "randomizably"
 "randomisation" = "randomization"

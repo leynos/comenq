@@ -23,10 +23,11 @@ ignore = [
   "(?m)^        value: \\$\\{\\{ jobs\\.metadata\\.outputs\\.should_upload_workflow_artifacts \\}\\}$",
   "(?m)^      should_upload_workflow_artifacts: \\$\\{\\{ steps\\.release_modes\\.outputs\\.should-upload-workflow-artifacts \\}\\}$",
   "(?m)^      should_upload_workflow_artifacts:$",
+  # Inline code spans are masked; the shared dictionary does not mask them yet.
+  '`[^`\n]+`',
 ]
 
 [files]
 exclude = [
-  "scripts/tests/test_typos_rollout_hardening.py",
   "vendor/filetime",
 ]
