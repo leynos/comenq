@@ -94,7 +94,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: ${{ env.CS_ACCESS_TOKEN }}
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@3822201c597078a5ed1939bdf067fe06a3d78a9d
         with:
           format: lcov
           access-token: ${{ env.CS_ACCESS_TOKEN }}
