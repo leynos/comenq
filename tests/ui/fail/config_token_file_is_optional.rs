@@ -13,7 +13,6 @@ fn main() {
         cooldown_flutter_seconds: 0,
         restart_min_delay_ms: 100,
         github_api_timeout_secs: 30,
-        client_channel_capacity: 1024,
     };
     let _: PathBuf = config.github_token_file;
 }

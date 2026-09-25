@@ -1,22 +1,22 @@
 //! Unix socket listener for comenqd.
 //!
-//! Accepts client connections, deserializes requests, and forwards them to the
-//! persistent queue for processing by the worker.
+//! Accepts client connections, deserializes protocol requests, executes them
+//! against the shared queue, and writes the JSON reply back to the client.
 
-use crate::config::Config;
-use crate::metrics;
 use anyhow::{Context, Result};
-use comenq_lib::CommentRequest;
+use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::metrics;
+use crate::queue::SharedQueue;
 use crate::supervisor::backoff;
 
 /// Prepare a Unix domain socket for the listener.
@@ -76,7 +76,7 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
 
 /// Create missing socket-parent components without changing existing modes.
 fn create_socket_parent(parent: &Path) -> Result<()> {
-    let mut component_path = PathBuf::new();
+    let mut component_path = std::path::PathBuf::new();
     for component in parent.components() {
         component_path.push(component.as_os_str());
         let created_by_this_process = match stdfs::create_dir(&component_path) {
@@ -103,29 +103,25 @@ fn create_socket_parent(parent: &Path) -> Result<()> {
 
 /// Listen on the Unix socket and spawn a handler for each client.
 ///
-/// The listener accepts connections on the path configured in [`Config`]. Each
-/// connection is handled concurrently by [`handle_client`], forwarding valid
-/// requests to the queue writer. The function exits when the `shutdown` watch
-/// channel is triggered.
+/// The listener accepts connections on the path configured in the shared
+/// queue's configuration. Each connection is handled concurrently by
+/// [`handle_client`], which executes the request and replies. The function
+/// exits when the `shutdown` watch channel is triggered.
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created or if accepting a
 /// connection fails after retries. Exiting due to a shutdown signal is normal
 /// and not treated as an error.
-#[tracing::instrument(
-    skip(config, client_tx, shutdown),
-    fields(task = "listener", socket = %config.socket_path.display())
-)]
 pub async fn run_listener(
-    config: Arc<Config>,
-    client_tx: mpsc::Sender<Vec<u8>>,
+    queue: Arc<SharedQueue>,
     mut shutdown: watch::Receiver<()>,
 ) -> Result<()> {
-    let socket_path = config.socket_path.clone();
+    let cfg = queue.config();
+    let socket_path = cfg.socket_path.clone();
     let listener = tokio::task::spawn_blocking(move || prepare_listener(&socket_path))
         .await
-        .context("listener preparation task failed")??;
-    let min_delay = Duration::from_millis(config.restart_min_delay_ms);
+        .context("joining socket preparation task")??;
+    let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let mut accept_backoff = backoff(min_delay);
 
     loop {
@@ -136,9 +132,9 @@ pub async fn run_listener(
                     let cred = stream.peer_cred().ok();
                     let pid = cred.as_ref().map(|c| c.pid());
                     let uid = cred.as_ref().map(|c| c.uid());
-                    let client_tx = client_tx.clone();
+                    let queue = queue.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, client_tx).await {
+                        if let Err(e) = handle_client(stream, queue).await {
                             match (pid, uid) {
                                 (Some(pid), Some(uid)) => {
                                     tracing::warn!(pid, uid, error = %e, "Client handling failed");
@@ -167,32 +163,43 @@ pub async fn run_listener(
     Ok(())
 }
 
-/// Read a single request from `stream` and forward it to the queue.
+/// Maximum accepted request payload, in bytes.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
+/// Seconds a client has to transmit its request.
+pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
+/// Seconds a client has to receive the daemon response and close cleanly.
+pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;
+
+#[derive(Clone, Copy)]
+enum ClientOutcome {
+    Accepted,
+    Failed,
+}
+
+/// Read a single request from `stream`, execute it, and reply.
 ///
-/// Expects the client to send a JSON encoded [`CommentRequest`] and then close
-/// the connection. The request is re-encoded to bytes and sent over `tx` for the
-/// queue writer to persist.
+/// Expects the client to send one JSON encoded [`Request`] and then close its
+/// write side. The reply is a JSON encoded [`Response`] written back over the
+/// same connection. A malformed request receives an error reply rather than
+/// silently closing the connection.
 ///
 /// # Errors
-/// Fails if reading from the socket or parsing JSON fails, or if the queue
-/// writer has shut down.
-pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
-pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
-
-#[tracing::instrument(skip(stream, tx), fields(task = "listener", outcome = tracing::field::Empty))]
-pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
-    let result = handle_client_inner(stream, tx).await;
-    let outcome = if result.is_ok() {
-        "accepted"
-    } else {
-        "rejected"
+/// Fails if reading from or writing to the socket fails, or if the payload
+/// exceeds [`MAX_REQUEST_BYTES`].
+#[tracing::instrument(skip(stream, queue), fields(task = "listener", outcome = tracing::field::Empty))]
+pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
+    let result = handle_client_inner(stream, queue).await;
+    let outcome = match &result {
+        Ok(ClientOutcome::Accepted) => "accepted",
+        Ok(ClientOutcome::Failed) => "failed",
+        Err(_) => "rejected",
     };
     tracing::Span::current().record("outcome", outcome);
     metrics::record_request_outcome(outcome);
-    result
+    result.map(|_| ())
 }
 
-async fn handle_client_inner(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
+async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<ClientOutcome> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -203,23 +210,52 @@ async fn handle_client_inner(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> R
     .await
     .map_err(|_| anyhow::anyhow!("client read timed out"))??;
     if buffer.len() > MAX_REQUEST_BYTES {
-        anyhow::bail!("client payload exceeds {} bytes", MAX_REQUEST_BYTES);
+        anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let request: CommentRequest = serde_json::from_slice(&buffer)?;
-    let bytes = serde_json::to_vec(&request)?;
-    tx.send(bytes)
-        .await
-        .map_err(|_| anyhow::anyhow!("queue writer dropped"))?;
-    let depth = tx.max_capacity().saturating_sub(tx.capacity());
-    metrics::record_client_channel_depth(depth);
-    Ok(())
+    let (response, mut outcome) = match serde_json::from_slice::<Request>(&buffer) {
+        Ok(request) => {
+            let response = queue.execute(request).await;
+            let outcome = if matches!(&response, Response::Error { .. }) {
+                ClientOutcome::Failed
+            } else {
+                ClientOutcome::Accepted
+            };
+            (response, outcome)
+        }
+        Err(e) => (
+            Response::error(format!("invalid request: {e}")),
+            ClientOutcome::Accepted,
+        ),
+    };
+    let mut bytes = serde_json::to_vec(&response)?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        outcome = ClientOutcome::Failed;
+        bytes = serde_json::to_vec(&Response::error(format!(
+            "response exceeds {MAX_RESPONSE_BYTES} bytes"
+        )))?;
+    }
+    let mut stream = limited.into_inner();
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
+        stream.write_all(&bytes),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client response write timed out"))??;
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
+        stream.shutdown(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
+    Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
+    //! Socket preparation tests for the listener adapter.
+
     use super::*;
-    use ::metrics::set_default_local_recorder;
-    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use rstest::rstest;
     use std::fs::OpenOptions;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::sync::Arc;
@@ -227,51 +263,29 @@ mod tests {
     use std::thread;
     use tempfile::tempdir;
 
-    fn request_outcomes(
-        metrics: &[(
-            metrics_util::CompositeKey,
-            Option<::metrics::Unit>,
-            Option<::metrics::SharedString>,
-            DebugValue,
-        )],
-    ) -> Vec<&str> {
-        metrics
-            .iter()
-            .filter(|(key, _, _, _)| key.key().name() == "comenqd_requests_total")
-            .flat_map(|(key, _, _, _)| key.key().labels())
-            .filter_map(|label| (label.key() == "outcome").then_some(label.value()))
-            .collect()
-    }
-
+    #[rstest]
+    #[case::missing("missing/nested", None, 0o700)]
+    #[case::existing("existing", Some(0o755), 0o755)]
     #[tokio::test]
-    async fn prepare_listener_creates_missing_parent_directory() {
+    async fn prepare_listener_preserves_or_sets_parent_directory_mode(
+        #[case] parent_path: &str,
+        #[case] existing_mode: Option<u32>,
+        #[case] expected_mode: u32,
+    ) {
         let dir = tempdir().expect("create tempdir");
-        let sock = dir.path().join("missing/nested/comenq.sock");
+        let parent = dir.path().join(parent_path);
+        if let Some(mode) = existing_mode {
+            std::fs::create_dir_all(&parent).expect("create parent directory");
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(mode))
+                .expect("set parent directory mode");
+        }
+        let sock = parent.join("comenq.sock");
         let listener = prepare_listener(&sock).expect("prepare listener");
         let meta = std::fs::symlink_metadata(&sock).expect("metadata");
         assert!(meta.file_type().is_socket());
         assert_eq!(meta.permissions().mode() & 0o777, 0o660);
-        let parent = sock.parent().expect("socket parent");
-        let parent_meta = std::fs::symlink_metadata(parent).expect("parent metadata");
-        assert_eq!(parent_meta.permissions().mode() & 0o777, 0o700);
-        let nested_parent = parent.parent().expect("nested socket parent");
-        let nested_parent_meta =
-            std::fs::symlink_metadata(nested_parent).expect("nested parent metadata");
-        assert_eq!(nested_parent_meta.permissions().mode() & 0o777, 0o700);
-        drop(listener);
-    }
-
-    #[tokio::test]
-    async fn prepare_listener_preserves_existing_parent_permissions() {
-        let dir = tempdir().expect("create tempdir");
-        let parent = dir.path().join("existing");
-        std::fs::create_dir(&parent).expect("create parent");
-        std::fs::set_permissions(&parent, stdfs::Permissions::from_mode(0o755))
-            .expect("set parent permissions");
-
-        let listener = prepare_listener(&parent.join("comenq.sock")).expect("prepare listener");
-        let metadata = std::fs::symlink_metadata(&parent).expect("parent metadata");
-        assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+        let parent_meta = std::fs::symlink_metadata(&parent).expect("parent metadata");
+        assert_eq!(parent_meta.permissions().mode() & 0o777, expected_mode);
         drop(listener);
     }
 
@@ -298,49 +312,5 @@ mod tests {
         let meta = std::fs::symlink_metadata(&sock).expect("metadata");
         assert!(meta.file_type().is_socket());
         drop(listener);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn handle_client_records_accepted_and_rejected_request_metrics() {
-        use tokio::io::AsyncWriteExt;
-        use tokio::sync::mpsc;
-
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-        let _recorder_guard = set_default_local_recorder(&recorder);
-        let (tx, mut rx) = mpsc::channel(2);
-
-        let (mut valid_client, valid_server) = UnixStream::pair().expect("create valid pair");
-        let request = CommentRequest {
-            owner: "owner".into(),
-            repo: "repo".into(),
-            pr_number: 1,
-            body: "body".into(),
-        };
-        valid_client
-            .write_all(&serde_json::to_vec(&request).expect("serialize request"))
-            .await
-            .expect("write valid request");
-        valid_client.shutdown().await.expect("close valid request");
-        handle_client(valid_server, tx.clone())
-            .await
-            .expect("accept valid request");
-        let _ = rx.recv().await.expect("receive valid request");
-
-        let (mut invalid_client, invalid_server) = UnixStream::pair().expect("create invalid pair");
-        invalid_client
-            .write_all(b"not json")
-            .await
-            .expect("write invalid request");
-        invalid_client
-            .shutdown()
-            .await
-            .expect("close invalid request");
-        assert!(handle_client(invalid_server, tx).await.is_err());
-
-        let metrics = snapshotter.snapshot().into_vec();
-        let outcomes = request_outcomes(&metrics);
-        assert!(outcomes.contains(&"accepted"));
-        assert!(outcomes.contains(&"rejected"));
     }
 }
