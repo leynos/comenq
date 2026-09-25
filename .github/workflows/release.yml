@@ -149,7 +149,7 @@ jobs:
           path: dist
       - id: upload_comenq
         name: Upload comenq artefacts
-        uses: leynos/shared-actions/.github/actions/upload-release-assets@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/upload-release-assets@22c1a57865e42ba7e2ca4f88ae49fa6f81f58013
         with:
           release-tag: ${{ github.ref_name }}
           bin-name: comenq
@@ -159,7 +159,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - id: upload_comenqd
         name: Upload comenqd artefacts
-        uses: leynos/shared-actions/.github/actions/upload-release-assets@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/upload-release-assets@22c1a57865e42ba7e2ca4f88ae49fa6f81f58013
         with:
           release-tag: ${{ github.ref_name }}
           bin-name: comenqd
