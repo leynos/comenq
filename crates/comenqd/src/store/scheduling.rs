@@ -1,8 +1,10 @@
 //! Queue scheduling and atomic enqueue projection.
 
-use super::{PutOptions, QueueStore, Result, StoredEntry};
+use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
 use comenq_lib::CommentRequest;
+use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use rand::Rng;
+use uuid::Uuid;
 
 impl QueueStore {
     /// Enqueue `request` and return the persisted entry with its stable ETA.
@@ -25,6 +27,9 @@ impl QueueStore {
                 .map_or(0, |(_, eta)| eta);
             return Ok((entry, eta));
         }
+        if entries.len() >= MAX_PENDING_ENTRIES {
+            return Err(StoreError::QueueFull(MAX_PENDING_ENTRIES));
+        }
 
         let flutter_seconds = if options.flutter_max == 0 {
             0
@@ -44,6 +49,7 @@ impl QueueStore {
                 now.saturating_add(options.cooldown)
                     .saturating_add(flutter_seconds)
             },
+            claim_token: None,
             request,
         };
         entries.push(entry.clone());
@@ -78,7 +84,51 @@ impl QueueStore {
 
     /// The head entry and its estimated seconds-until-post, when any.
     pub fn next_due(&self, cooldown: u64, now: u64) -> Result<Option<(StoredEntry, u64)>> {
-        Ok(self.schedule(cooldown, now)?.into_iter().next())
+        let schedule = self.schedule(cooldown, now)?;
+        if schedule
+            .iter()
+            .any(|(entry, _)| entry.claim_token.is_some())
+        {
+            return Ok(None);
+        }
+        Ok(schedule.into_iter().next())
+    }
+
+    /// Claim a due entry while holding the store lock for the whole transition.
+    pub fn claim_next_due(&self, cooldown: u64, now: u64) -> Result<Option<(StoredEntry, u64)>> {
+        let Some((mut entry, wait_seconds)) = self.next_due(cooldown, now)? else {
+            return Ok(None);
+        };
+        if wait_seconds > 0 {
+            return Ok(Some((entry, wait_seconds)));
+        }
+        entry.claim_token = Some(Uuid::new_v4().to_string());
+        self.write_entry(&entry)?;
+        Ok(Some((entry, 0)))
+    }
+
+    /// Release a failed post's claim so the worker can retry it later.
+    pub fn release_claim(&self, id: &str, claim_token: &str) -> Result<()> {
+        let mut entry = match self.find(id) {
+            Ok(entry) => entry,
+            Err(StoreError::UnknownId(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if entry.claim_token.as_deref() == Some(claim_token) {
+            entry.claim_token = None;
+            self.write_entry(&entry)?;
+        }
+        Ok(())
+    }
+
+    /// Clear claims left by a worker that exited before completing its post.
+    pub(super) fn reclaim_claims(&self) -> Result<()> {
+        for mut entry in self.entries()? {
+            if entry.claim_token.take().is_some() {
+                self.write_entry(&entry)?;
+            }
+        }
+        Ok(())
     }
 }
 

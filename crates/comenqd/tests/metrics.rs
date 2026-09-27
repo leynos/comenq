@@ -68,5 +68,6 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("read metrics response");
 
     assert!(response.starts_with("HTTP/1.1 200"));
-    assert!(response.contains("comenqd_requests_total{outcome=\"accepted\"}"));
+    assert!(response.contains("comenqd_requests_total{operation=\"put\",outcome=\"accepted\"}"));
+    assert!(response.contains("comenqd_queue_entries 1"));
 }

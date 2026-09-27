@@ -16,7 +16,7 @@ use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 use tokio::time::timeout;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request as WiremockRequest, Respond, ResponseTemplate};
@@ -165,7 +165,7 @@ async fn comment_is_put(world: &mut QueueWorld, body: String) -> anyhow::Result<
     Ok(())
 }
 
-#[when(regex = r#"^the comment \"(.+)\" is put immediately$"#)]
+#[given(regex = r#"^the comment \"(.+)\" is put immediately$"#)]
 async fn comment_is_put_immediately(world: &mut QueueWorld, body: String) -> anyhow::Result<()> {
     world.immediate_puts = true;
     let entry = world.put(&body).await?;
@@ -348,25 +348,29 @@ async fn worker_retries_after_cooldown(world: &mut QueueWorld) -> anyhow::Result
         .as_ref()
         .context("GitHub server not configured")?;
     let octocrab = octocrab_for(server).context("create GitHub client")?;
-    let idle = Arc::new(Notify::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let control = WorkerControl::new(
         shutdown_rx,
         WorkerHooks {
             enqueued: None,
-            idle: Some(Arc::clone(&idle)),
+            idle: None,
             drained: None,
+            waiting: None,
         },
     );
     let worker = tokio::spawn(async move {
         let _ = run_worker(queue, octocrab, control).await;
     });
 
-    for _ in 0..2 {
-        timeout(std::time::Duration::from_secs(5), idle.notified())
-            .await
-            .context("worker should reach idle after each attempt")?;
-    }
+    let attempts = world.attempts.as_ref().context("attempt counter missing")?;
+    timeout(std::time::Duration::from_secs(5), async {
+        while attempts.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("worker should retry after one cooldown")?;
+
     world.shutdown = Some(shutdown_tx);
     world.worker = Some(worker);
     Ok(())
@@ -379,6 +383,13 @@ async fn queued_comment_was_retried_and_removed(world: &mut QueueWorld) -> anyho
         .as_ref()
         .context("attempt counter not configured")?;
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    assert!(world.entries().await?.is_empty());
+    timeout(std::time::Duration::from_secs(5), async {
+        while !world.entries().await?.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("successful retry should remove the queued entry")??;
     Ok(())
 }

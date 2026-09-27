@@ -541,13 +541,26 @@ time of the most recent successful post. Each entry (a `StoredEntry`) carries:
 - **The enqueue time**, used both as a tiebreaker for ordering and as an input
   to the identifier hash.
 
+- **An optional in-flight claim token.** The worker writes a claim while
+  holding the store lock, then releases the lock before posting to GitHub.
+  Startup clears claims left by an interrupted worker. `bump` and `bust` may
+  reorder a claimed entry without changing the active claim; `del` removes it.
+  Token-checked completion does not remove a replacement entry.
+
 Entries are written to a temporary sibling file and then renamed into place, so
 a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
 or remove a single entry file the same way. `complete` first writes a durable
-`completion` recovery record containing the entry identifier and posting time.
-It then removes the posted entry, atomically rewrites `last_post`, and clears
-the recovery record. `QueueStore::open` reconciles a record left by an
-interrupted completion before the worker schedules entries.
+`completion` recovery record containing the entry identifier, claim token, and
+posting time. It then removes the matching claimed entry, atomically rewrites
+`last_post`, and clears the recovery record. `QueueStore::open` reconciles a
+record left by an interrupted completion and clears abandoned claims before the
+worker schedules entries. A completion for an entry deleted or replaced during
+the external post still records the successful post time, but cannot delete a
+replacement with a different claim.
+
+The store admits at most 1,024 pending entries. The `list` response contains at
+most 1,024 scheduled entries, and client and daemon response bodies are limited
+to 2 MiB. A new `put` at capacity fails before persisting an entry.
 
 Because an entry is only removed from disk after a successful post
 (`complete`), and a failed post simply leaves the entry in place for the next
@@ -586,9 +599,10 @@ Its workflow is as follows:
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
    adjusted. It deserializes the received JSON into a `Request`, executes it
    directly against the shared queue (`SharedQueue::execute`), and writes the
-   resulting `Response` back to the client before closing the connection. A
-   request that fails to deserialize receives an error `Response` rather than a
-   silently dropped connection.
+   resulting `Response` back to the client before closing the connection.
+   Responses are capped at 2 MiB on both client and daemon, and `list` returns
+   at most 1,024 entries. A request that fails to deserialize receives an error
+   `Response` rather than a silently dropped connection.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -645,11 +659,13 @@ octocrab.issues("owner", "repo").create_comment(pr_number, "body").await?;
 
 The worker task's loop consists of the following steps:
 
-1. **Compute the due entry:** It calls `queue.next_due()`, which asks the
-   store to recompute the head entry and its estimated seconds-until-post on
-   every iteration. This means a `bump`, `bust`, `del`, or new `put` performed
-   by a client takes effect on the very next iteration, not just at the start
-   of the loop.
+1. **Compute and claim the due entry:** It calls
+   `queue.claim_next_due()`, which recomputes the schedule and atomically
+   records a claim for a due head entry under the store lock. The lock is
+   released before the GitHub request. A `bump`, `bust`, `del`, or new `put`
+   during a deferred wait wakes the worker to recompute the schedule. During a
+   post, a claimed entry cannot be selected a second time; `bump` and `bust`
+   preserve the claim, and `del` removes the entry.
 
 2. **Wait until due:** If nothing is queued, the worker waits for the shared
    queue's change signal or a shutdown signal. If the head entry is not yet
@@ -664,16 +680,21 @@ The worker task's loop consists of the following steps:
 
 4. **Handle Result:**
 
-   - **On API Success:** The task calls `queue.complete(&entry.id)`, which
-     removes the entry from disk and atomically records the current time in
-     `last_post`. It then logs the successful post.
+   - **On API Success:** The task calls `queue.complete()` with the entry ID
+     and claim token. A durable completion record is written before the
+     matching entry is removed and `last_post` is updated. If a concurrent
+     `del` already removed the entry, or the ID now belongs to a replacement,
+     completion records the successful post without deleting that replacement.
+     It then logs the successful post.
 
    - **On API Failure:** The task logs the error from the GitHub API. The
      entry is left in place (`complete` is never called for it), so it is
      retried on a later iteration. The worker waits a full
      `cooldown_period_seconds` before retrying, to avoid hammering a
-     persistently failing API. For more advanced error handling, a retry
-     counter could be added to the `CommentRequest` to prevent infinite loops
+     persistently failing API. Queue-change notifications do not shorten this
+     retry deadline; they are consumed while the worker continues waiting. For
+     more advanced error handling, a retry counter could be added to the
+     `CommentRequest` to prevent infinite loops
      for unfixable errors, eventually moving the job to a "dead-letter" queue.
 
 5. The loop then repeats.
@@ -707,7 +728,7 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for the persistent queue data (`entries/` and `last_post`, managed by `QueueStore`).                                                                                                                    | /var/lib/comenq/queue                                                                                          |
+| queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, and the `completion` recovery record, managed by `QueueStore`).                                                                                     | /var/lib/comenq/queue                                                                                          |
 | log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
 | cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
 | cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |

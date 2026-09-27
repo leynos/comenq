@@ -8,7 +8,7 @@ Feature: Queue management
 
   Scenario: an immediate put bypasses the enqueue cooldown
     Given an empty comment queue
-    When the comment "First comment" is put immediately
+    Given the comment "First comment" is put immediately
     Then the reply carries an eight character identifier
     And the reply reports an immediate ETA
 

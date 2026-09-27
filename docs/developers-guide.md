@@ -50,14 +50,23 @@ whose payload shape does not match the request.
 
 The listener adapter passes valid requests to `SharedQueue::execute`. It
 performs queue mutations and scheduling through `QueueStore`, then notifies the
-worker after a successful mutation. `SharedQueue::next_due()` selects the head
-entry for posting, and `SharedQueue::complete()` removes an entry after a
-successful GitHub post while recording the posting timestamp. Completion first
-writes a durable recovery record containing the entry identifier and posting
-time; startup reconciliation finishes the deletion and `last_post` update
-before clearing that record. Queue-store failures become daemon error
-responses; failed GitHub posts leave their entries in place for a later
-full-cooldown retry.
+worker after a successful mutation. `SharedQueue::claim_next_due()` selects the
+due head and durably claims it while holding the store lock; the lock is
+released before the worker calls GitHub. A failed post releases its claim and
+retains a full cooldown retry deadline. `bump` and `bust` may reorder a claimed
+entry without changing its claim, while `del` removes it. Completion checks the
+claim token so a successful post cannot delete a replacement entry.
+
+`SharedQueue::complete()` records the successful posting timestamp and removes
+the entry. Completion first writes a durable recovery record containing the
+entry identifier, claim token, and posting time; startup reconciliation
+finishes the deletion and `last_post` update before clearing that record, then
+reclaims claims left by an interrupted worker. Queue-store failures become
+daemon error responses.
+
+The store accepts at most 1,024 pending entries. `list` returns at most 1,024
+entries, and both client and daemon enforce a 2 MiB response limit. A full
+queue rejects `put` before persisting a new entry.
 
 When a comment is enqueued, the worker chooses a uniformly distributed flutter
 and stores it with that entry. The stored flutter is added to the complete base
@@ -94,8 +103,10 @@ The stable metric vocabulary is:
 
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
-- `comenqd_requests_total{outcome=accepted|failed|rejected}` for request
-  outcomes.
+- `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
+  `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
+  `rejected`); requests without a parsed operation omit the `operation` label.
+- `comenqd_queue_entries` for the current pending-entry count, without labels.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 - `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
   comment-post outcomes.

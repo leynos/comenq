@@ -39,6 +39,9 @@ pub struct StoredEntry {
     /// existed use zero.
     #[serde(default)]
     pub not_before: u64,
+    /// Claim token while a worker is posting this entry.
+    #[serde(default)]
+    pub claim_token: Option<String>,
     /// The comment to post.
     pub request: CommentRequest,
 }
@@ -81,6 +84,9 @@ pub enum StoreError {
     /// The blocking queue operation did not complete.
     #[error("queue operation task failed: {0}")]
     BlockingTask(#[from] tokio::task::JoinError),
+    /// The queue has reached its configured pending-entry limit.
+    #[error("queue already contains the maximum of {0} pending entries")]
+    QueueFull(usize),
 }
 /// Result alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -149,6 +155,7 @@ impl QueueStore {
             completion_path: queue_path.join(COMPLETION_FILE),
         };
         store.reconcile_completion()?;
+        store.reclaim_claims()?;
         Ok(store)
     }
 
