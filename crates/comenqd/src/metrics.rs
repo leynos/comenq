@@ -5,7 +5,7 @@
 //! Metric labels are static, low-cardinality classifications so metrics never
 //! include request content, repository names, file paths, or credentials.
 
-use metrics::{counter, histogram};
+use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
 /// Local address of the daemon's Prometheus scrape endpoint.
@@ -13,6 +13,7 @@ pub const PROMETHEUS_LISTEN_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 9000);
 
 const TASK_RESTARTS: &str = "comenqd_task_restarts_total";
 const REQUESTS: &str = "comenqd_requests_total";
+const QUEUE_ENTRIES: &str = "comenqd_queue_entries";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
 const GITHUB_POSTS: &str = "comenqd_github_posts_total";
 const GITHUB_POST_DURATION: &str = "comenqd_github_post_duration_seconds";
@@ -35,8 +36,17 @@ pub(crate) fn record_task_restart(task: &'static str) {
 }
 
 /// Record whether a client request reached the daemon queue.
-pub(crate) fn record_request_outcome(outcome: &'static str) {
-    counter!(REQUESTS, "outcome" => outcome).increment(1);
+pub(crate) fn record_request(operation: Option<&'static str>, outcome: &'static str) {
+    if let Some(operation) = operation {
+        counter!(REQUESTS, "operation" => operation, "outcome" => outcome).increment(1);
+    } else {
+        counter!(REQUESTS, "outcome" => outcome).increment(1);
+    }
+}
+
+/// Record the current number of persisted pending entries without labels.
+pub(crate) fn record_queue_entries(count: usize) {
+    gauge!(QUEUE_ENTRIES).set(count as f64);
 }
 
 /// Record the configured duration of a cooldown wait.
@@ -82,9 +92,11 @@ mod tests {
         let snapshotter = recorder.snapshotter();
         with_local_recorder(&recorder, || {
             record_task_restart("worker");
-            record_request_outcome("accepted");
-            record_request_outcome("rejected");
-            record_request_outcome("failed");
+            record_request(Some("put"), "accepted");
+            record_request(Some("list"), "rejected");
+            record_request(Some("bump"), "failed");
+            record_request(Some("bust"), "accepted");
+            record_request(Some("del"), "accepted");
             record_github_post_outcome("success");
             record_github_post_outcome("api_error");
             record_github_post_outcome("timeout");
@@ -100,7 +112,7 @@ mod tests {
                 .iter()
                 .filter(|(key, _, _, _)| key.key().name() == REQUESTS)
                 .count(),
-            3
+            5
         );
         assert_eq!(
             metrics
@@ -114,11 +126,29 @@ mod tests {
                 matches!(
                     (label.key(), label.value()),
                     ("task", "listener" | "worker")
+                        | ("operation", "put" | "list" | "bump" | "bust" | "del")
                         | ("outcome", "accepted" | "failed" | "rejected")
                         | ("outcome", "success" | "api_error" | "timeout")
                 )
             })
         }));
+    }
+
+    #[test]
+    fn records_a_label_free_queue_depth_gauge() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || record_queue_entries(7));
+        let metrics = snapshotter.snapshot().into_vec();
+        let queue_metrics: Vec<_> = metrics
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name() == QUEUE_ENTRIES)
+            .collect();
+        assert_eq!(queue_metrics.len(), 1);
+        assert!(queue_metrics[0].0.key().labels().next().is_none());
+        assert!(
+            matches!(queue_metrics[0].3, DebugValue::Gauge(value) if value.into_inner() == 7.0)
+        );
     }
 
     #[test]

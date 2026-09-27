@@ -14,7 +14,6 @@ use octocrab::Octocrab;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-#[cfg(any(test, feature = "test-support"))]
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
@@ -79,7 +78,7 @@ async fn post_comment_with_metrics(
 /// Each hook uses [`Notify::notify_one`] which buffers a single permit for
 /// one waiting task. This design supports exactly one waiter per hook; if
 /// multiple tasks await the same hook, only one will be woken per notification.
-#[derive(Default)]
+#[derive(Clone, Default)]
 #[cfg(any(test, feature = "test-support"))]
 pub struct WorkerHooks {
     /// Signalled when the worker picks up a due entry for posting.
@@ -94,6 +93,11 @@ pub struct WorkerHooks {
     ///
     /// Only one waiter is supported; additional waiters will not be notified.
     pub drained: Option<Arc<Notify>>,
+    /// Signalled after the worker registers its queue-change wait for a
+    /// deferred entry.
+    ///
+    /// Only one waiter is supported; additional waiters will not be notified.
+    pub waiting: Option<Arc<Notify>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -112,6 +116,12 @@ impl WorkerHooks {
 
     fn notify_drained(&self) {
         if let Some(n) = &self.drained {
+            n.notify_one();
+        }
+    }
+
+    fn notify_waiting(&self) {
+        if let Some(n) = &self.waiting {
             n.notify_one();
         }
     }
@@ -139,6 +149,38 @@ async fn wait_for_retry_deadline(
             () = changed.notified() => {}
             _ = tokio::time::sleep(remaining) => return false,
         }
+    }
+}
+
+/// Waits for a scheduled entry while allowing queue changes to wake the worker.
+async fn wait_for_scheduled_entry(
+    queue: &SharedQueue,
+    wait_seconds: u64,
+    control: &mut WorkerControl,
+) -> bool {
+    let sleep = tokio::time::sleep(Duration::from_secs(wait_seconds));
+    tokio::pin!(sleep);
+    let changed = queue.change_notifier().notified();
+    tokio::pin!(changed);
+    changed.as_mut().enable();
+
+    #[cfg(any(test, feature = "test-support"))]
+    let waiting_control = WorkerControl::new(control.shutdown.clone(), control.hooks.clone());
+    #[cfg(any(test, feature = "test-support"))]
+    let waiting = std::future::poll_fn(|_: &mut std::task::Context<'_>| {
+        waiting_control.notify_waiting();
+        std::task::Poll::<()>::Pending
+    });
+    #[cfg(not(any(test, feature = "test-support")))]
+    let waiting = std::future::pending::<()>();
+    tokio::pin!(waiting);
+
+    tokio::select! {
+        biased;
+        _ = control.shutdown.changed() => true,
+        () = changed.as_mut() => false,
+        _ = sleep.as_mut() => false,
+        () = waiting.as_mut() => unreachable!("waiting readiness future never completes"),
     }
 }
 
@@ -204,6 +246,15 @@ impl WorkerControl {
 
     #[cfg(not(any(test, feature = "test-support")))]
     fn notify_drained(&self) {}
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_waiting(&self) {
+        self.hooks.notify_waiting();
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    #[expect(dead_code, reason = "used only by the test-support readiness future")]
+    fn notify_waiting(&self) {}
 }
 
 /// Posts queued comments as they fall due, enforcing the scheduled cooldowns.
@@ -218,7 +269,7 @@ pub async fn run_worker(
 ) -> Result<()> {
     let config = queue.config().clone();
     loop {
-        let due = queue.next_due().await?;
+        let due = queue.claim_next_due().await?;
         let Some((entry, wait_seconds)) = due else {
             control.notify_drained();
             tokio::select! {
@@ -229,18 +280,15 @@ pub async fn run_worker(
         };
         if wait_seconds > 0 {
             metrics::record_cooldown_wait(wait_seconds);
-            tokio::select! {
-                biased;
-                _ = control.shutdown.changed() => break,
-                () = queue.changed() => {}
-                _ = tokio::time::sleep(Duration::from_secs(wait_seconds)) => {}
+            if wait_for_scheduled_entry(&queue, wait_seconds, &mut control).await {
+                break;
             }
             continue;
         }
         control.notify_enqueued();
         match post_comment_with_metrics(&octocrab, &entry.request, &config).await {
             Ok(()) => {
-                queue.complete(&entry.id).await?;
+                queue.complete(&entry.id, entry.claim_token).await?;
             }
             Err(e) => {
                 tracing::error!(
@@ -251,6 +299,9 @@ pub async fn run_worker(
                     pr = entry.request.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
+                if let Some(claim_token) = entry.claim_token.as_deref() {
+                    queue.release_claim(&entry.id, claim_token).await?;
+                }
                 control.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.
                 metrics::record_cooldown_wait(config.cooldown_period_seconds);

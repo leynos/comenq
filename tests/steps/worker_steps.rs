@@ -157,6 +157,7 @@ async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
             enqueued: None,
             idle: Some(idle),
             drained: None,
+            waiting: None,
         },
     );
     let handle = tokio::spawn(async move {

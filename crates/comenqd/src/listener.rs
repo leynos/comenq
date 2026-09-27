@@ -189,17 +189,20 @@ enum ClientOutcome {
 #[tracing::instrument(skip(stream, queue), fields(task = "listener", outcome = tracing::field::Empty))]
 pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
     let result = handle_client_inner(stream, queue).await;
-    let outcome = match &result {
-        Ok(ClientOutcome::Accepted) => "accepted",
-        Ok(ClientOutcome::Failed) => "failed",
-        Err(_) => "rejected",
+    let (outcome, operation) = match &result {
+        Ok((ClientOutcome::Accepted, operation)) => ("accepted", *operation),
+        Ok((ClientOutcome::Failed, operation)) => ("failed", *operation),
+        Err(_) => ("rejected", None),
     };
     tracing::Span::current().record("outcome", outcome);
-    metrics::record_request_outcome(outcome);
+    metrics::record_request(operation, outcome);
     result.map(|_| ())
 }
 
-async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<ClientOutcome> {
+async fn handle_client_inner(
+    stream: UnixStream,
+    queue: Arc<SharedQueue>,
+) -> Result<(ClientOutcome, Option<&'static str>)> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -212,19 +215,21 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let (response, mut outcome) = match serde_json::from_slice::<Request>(&buffer) {
+    let (response, mut outcome, operation) = match serde_json::from_slice::<Request>(&buffer) {
         Ok(request) => {
+            let operation = request_operation(&request);
             let response = queue.execute(request).await;
             let outcome = if matches!(&response, Response::Error { .. }) {
                 ClientOutcome::Failed
             } else {
                 ClientOutcome::Accepted
             };
-            (response, outcome)
+            (response, outcome, Some(operation))
         }
         Err(e) => (
             Response::error(format!("invalid request: {e}")),
             ClientOutcome::Accepted,
+            None,
         ),
     };
     let mut bytes = serde_json::to_vec(&response)?;
@@ -247,7 +252,17 @@ async fn handle_client_inner(stream: UnixStream, queue: Arc<SharedQueue>) -> Res
     )
     .await
     .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
-    Ok(outcome)
+    Ok((outcome, operation))
+}
+
+fn request_operation(request: &Request) -> &'static str {
+    match request {
+        Request::Put { .. } => "put",
+        Request::List => "list",
+        Request::Bump { .. } => "bump",
+        Request::Bust { .. } => "bust",
+        Request::Del { .. } => "del",
+    }
 }
 
 #[cfg(test)]
