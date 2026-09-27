@@ -129,6 +129,7 @@ async fn failed_post_retries_after_a_full_cooldown() {
                 enqueued: None,
                 idle: Some(Arc::clone(&idle)),
                 drained: None,
+                waiting: None,
             },
         ),
     ));
@@ -190,6 +191,7 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
                 enqueued: None,
                 idle: Some(Arc::clone(&idle)),
                 drained: None,
+                waiting: None,
             },
         ),
     ));

@@ -10,10 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::{Request, Response};
+use comenq_lib::protocol::{MAX_PENDING_ENTRIES, Request, Response};
 use tokio::sync::Notify;
 
 use crate::config::Config;
+use crate::metrics;
 use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
 
 /// Current Unix time in whole seconds.
@@ -59,6 +60,7 @@ impl SharedQueue {
     /// Open the queue store using `clock` for persisted scheduling timestamps.
     pub fn open_with_clock(cfg: Arc<Config>, clock: Arc<dyn UnixClock>) -> StoreResult<Arc<Self>> {
         let store = QueueStore::open(&cfg.queue_path)?;
+        metrics::record_queue_entries(store.entries()?.len());
         Ok(Arc::new(Self {
             cfg,
             store: Arc::new(Mutex::new(store)),
@@ -91,11 +93,33 @@ impl SharedQueue {
             .await
     }
 
+    /// Claim the due entry while holding the store lock.
+    pub async fn claim_next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
+        let cooldown = self.cfg.cooldown_period_seconds;
+        let now = self.clock.unix_now();
+        self.with_store(move |store| store.claim_next_due(cooldown, now))
+            .await
+    }
+
     /// Remove the posted entry and record the posting time.
-    pub async fn complete(&self, id: &str) -> StoreResult<()> {
+    pub async fn complete(&self, id: &str, claim_token: Option<String>) -> StoreResult<()> {
         let id = id.to_owned();
         let now = self.clock.unix_now();
-        self.with_store(move |store| store.complete(&id, now)).await
+        let result = self
+            .with_store(move |store| store.complete_claim(&id, claim_token.as_deref(), now))
+            .await;
+        if result.is_ok() {
+            self.update_queue_gauge().await;
+        }
+        result
+    }
+
+    /// Release a failed post's claim before waiting for its retry deadline.
+    pub async fn release_claim(&self, id: &str, claim_token: &str) -> StoreResult<()> {
+        let id = id.to_owned();
+        let claim_token = claim_token.to_owned();
+        self.with_store(move |store| store.release_claim(&id, &claim_token))
+            .await
     }
 
     /// Execute a protocol request and produce the reply.
@@ -127,6 +151,7 @@ impl SharedQueue {
         match response {
             Ok(reply) => {
                 if mutated {
+                    self.update_queue_gauge().await;
                     // notify_one buffers a permit, so a worker that is busy
                     // computing rather than parked still observes the change.
                     self.changed.notify_one();
@@ -165,6 +190,7 @@ impl SharedQueue {
                 Response::entries(
                     schedule
                         .into_iter()
+                        .take(MAX_PENDING_ENTRIES)
                         .map(|(entry, eta)| entry.to_pending(eta))
                         .collect(),
                 )
@@ -187,6 +213,16 @@ impl SharedQueue {
             operation(&store)
         })
         .await?
+    }
+
+    async fn update_queue_gauge(&self) {
+        match self
+            .with_store(|store| store.entries().map(|entries| entries.len()))
+            .await
+        {
+            Ok(count) => metrics::record_queue_entries(count),
+            Err(error) => tracing::warn!(error = %error, "Failed to refresh queue-depth metric"),
+        }
     }
 }
 
@@ -213,129 +249,4 @@ fn is_safe_repository_component(component: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Deterministic scheduling tests for the shared queue clock boundary.
-
-    use super::{SharedQueue, UnixClock};
-    use crate::config::Config;
-    use comenq_lib::CommentRequest;
-    use comenq_lib::protocol::{Request, Response};
-    use std::fs;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-
-    #[derive(Debug)]
-    struct FixedClock(u64);
-
-    impl UnixClock for FixedClock {
-        fn unix_now(&self) -> u64 {
-            self.0
-        }
-    }
-
-    #[tokio::test]
-    async fn fixed_clock_controls_deferred_put_eta() {
-        let dir = tempdir().expect("create temporary queue directory");
-        let queue = SharedQueue::open_with_clock(
-            Arc::new(Config {
-                github_token: "token".into(),
-                github_token_file: None,
-                socket_path: dir.path().join("comenq.sock"),
-                queue_path: dir.path().join("queue"),
-                cooldown_period_seconds: 600,
-                cooldown_flutter_seconds: 0,
-                restart_min_delay_ms: 1,
-                github_api_timeout_secs: 1,
-            }),
-            Arc::new(FixedClock(1_000)),
-        )
-        .expect("open queue");
-
-        let response = queue
-            .execute(Request::Put {
-                request: CommentRequest {
-                    owner: "octocat".into(),
-                    repo: "hello-world".into(),
-                    pr_number: 7,
-                    body: "comment".into(),
-                },
-                immediate: false,
-            })
-            .await;
-        let Response::Ok {
-            entry: Some(entry), ..
-        } = response
-        else {
-            panic!("expected queued entry, got {response:?}");
-        };
-        assert_eq!(entry.eta_seconds, 600);
-    }
-
-    #[tokio::test]
-    async fn put_rejects_unsafe_repository_components() {
-        let dir = tempdir().expect("create temporary queue directory");
-        let queue = SharedQueue::open(Arc::new(Config {
-            github_token: "token".into(),
-            github_token_file: None,
-            socket_path: dir.path().join("comenq.sock"),
-            queue_path: dir.path().join("queue"),
-            cooldown_period_seconds: 600,
-            cooldown_flutter_seconds: 0,
-            restart_min_delay_ms: 1,
-            github_api_timeout_secs: 1,
-        }))
-        .expect("open queue");
-
-        let response = queue
-            .execute(Request::Put {
-                request: CommentRequest {
-                    owner: "octocat\u{1b}[2J".into(),
-                    repo: "hello-world".into(),
-                    pr_number: 7,
-                    body: "comment".into(),
-                },
-                immediate: true,
-            })
-            .await;
-        assert!(matches!(response, Response::Error { .. }));
-        assert!(
-            matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
-        );
-    }
-
-    #[tokio::test]
-    async fn put_does_not_persist_when_eta_projection_fails() {
-        let dir = tempdir().expect("create temporary queue directory");
-        let queue_path = dir.path().join("queue");
-        let queue = SharedQueue::open(Arc::new(Config {
-            github_token: "token".into(),
-            github_token_file: None,
-            socket_path: dir.path().join("comenq.sock"),
-            queue_path: queue_path.clone(),
-            cooldown_period_seconds: 600,
-            cooldown_flutter_seconds: 0,
-            restart_min_delay_ms: 1,
-            github_api_timeout_secs: 1,
-        }))
-        .expect("open queue");
-        fs::write(queue_path.join("last_post"), "not a timestamp").expect("write malformed marker");
-
-        let response = queue
-            .execute(Request::Put {
-                request: CommentRequest {
-                    owner: "octocat".into(),
-                    repo: "hello-world".into(),
-                    pr_number: 7,
-                    body: "comment".into(),
-                },
-                immediate: true,
-            })
-            .await;
-        assert!(matches!(response, Response::Error { .. }));
-
-        fs::remove_file(queue_path.join("last_post")).expect("remove malformed marker");
-        assert!(
-            matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
-        );
-    }
-}
+mod tests;

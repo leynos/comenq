@@ -1,4 +1,6 @@
 //! Round-trip tests for the client transport.
+mod connect;
+
 use super::{ClientError, render_response, run, run_with_writer, transact_with_timeout};
 use crate::{Args, Command};
 use comenq_lib::protocol::{MAX_RESPONSE_BYTES, PendingEntry, Request, Response};
@@ -102,14 +104,29 @@ async fn successful_put_ignores_a_broken_output_pipe() {
     let dir = tempdir().expect("temp dir");
     let socket = dir.path().join("sock");
     let listener = UnixListener::bind(&socket).expect("bind socket");
-    let accept = spawn_daemon(listener, Response::entry(sample_entry()));
+    let accept = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.expect("read");
+        let request = serde_json::from_slice::<Request>(&buf).expect("deserialize");
+        let bytes = serde_json::to_vec(&Response::entry(sample_entry())).expect("serialize reply");
+        stream.write_all(&bytes).await.expect("write reply");
+        let second = tokio::time::timeout(Duration::from_millis(20), listener.accept())
+            .await
+            .is_ok();
+        (request, second)
+    });
     let mut output = BrokenPipeWriter;
 
     run_with_writer(put_args(socket), &mut output)
         .await
         .expect("broken output pipe should complete the command");
-    let request = accept.await.expect("join");
+    let (request, second_request) = accept.await.expect("join");
     assert!(matches!(request, Request::Put { .. }));
+    assert!(
+        !second_request,
+        "a successful command must send one request"
+    );
 }
 
 #[test]
@@ -120,6 +137,90 @@ fn output_failures_are_returned_to_the_caller() {
     assert!(
         matches!(err, ClientError::Output(error) if error.kind() == io::ErrorKind::PermissionDenied)
     );
+}
+
+fn render_to_string(
+    command: &Command,
+    entry: Option<PendingEntry>,
+    entries: Option<Vec<PendingEntry>>,
+) -> String {
+    let mut output = Vec::new();
+    render_response(command, entry, entries, &mut output).expect("render response");
+    String::from_utf8(output).expect("rendered output is UTF-8")
+}
+
+#[test]
+fn renders_put_output_exactly() {
+    let output = render_to_string(
+        &Command::Put {
+            repo_slug: "octocat/hello-world".parse().expect("slug"),
+            pr_number: 1,
+            comment_body: "Hi".into(),
+            now: false,
+        },
+        Some(sample_entry()),
+        None,
+    );
+    assert_eq!(
+        output,
+        "Queued 1a2b3c4d for octocat/hello-world#1 — posts in ~now\n"
+    );
+}
+
+#[test]
+fn renders_non_empty_list_output_exactly() {
+    let mut second = sample_entry();
+    second.id = "deadbeef".into();
+    second.eta_seconds = 90;
+    second.body = "Later".into();
+    let output = render_to_string(&Command::List, None, Some(vec![sample_entry(), second]));
+    assert_eq!(
+        output,
+        "1a2b3c4d      now  octocat/hello-world#1  Hi\n\
+deadbeef   1m 30s  octocat/hello-world#1  Later\n"
+    );
+}
+
+#[test]
+fn renders_empty_list_output_exactly() {
+    let output = render_to_string(&Command::List, None, Some(vec![]));
+    assert_eq!(output, "No comments queued.\n");
+}
+
+#[test]
+fn renders_bump_output_exactly() {
+    let output = render_to_string(
+        &Command::Bump {
+            id: "1a2b3c4d".into(),
+        },
+        None,
+        None,
+    );
+    assert_eq!(output, "Moved 1a2b3c4d to the head of the queue.\n");
+}
+
+#[test]
+fn renders_bust_output_exactly() {
+    let output = render_to_string(
+        &Command::Bust {
+            id: "1a2b3c4d".into(),
+        },
+        None,
+        None,
+    );
+    assert_eq!(output, "Moved 1a2b3c4d to the tail of the queue.\n");
+}
+
+#[test]
+fn renders_del_output_exactly() {
+    let output = render_to_string(
+        &Command::Del {
+            id: "1a2b3c4d".into(),
+        },
+        None,
+        None,
+    );
+    assert_eq!(output, "Removed 1a2b3c4d from the queue.\n");
 }
 
 #[tokio::test]
@@ -171,6 +272,18 @@ async fn run_rejects_surplus_response_payloads() {
         ),
         (
             Command::Bump {
+                id: "1a2b3c4d".into(),
+            },
+            Response::entry(sample_entry()),
+        ),
+        (
+            Command::Bust {
+                id: "1a2b3c4d".into(),
+            },
+            Response::entry(sample_entry()),
+        ),
+        (
+            Command::Del {
                 id: "1a2b3c4d".into(),
             },
             Response::entry(sample_entry()),
@@ -274,39 +387,4 @@ async fn transaction_rejects_an_oversized_daemon_reply() {
         .expect_err("oversized reply must fail");
     assert!(matches!(err, ClientError::ReplyTooLarge));
     peer.await.expect("join");
-}
-
-/// A stale socket file must not shadow a live daemon later in the list.
-#[tokio::test]
-async fn connect_first_skips_stale_sockets() {
-    let dir = tempdir().expect("temp dir");
-    let stale = dir.path().join("stale.sock");
-    drop(UnixListener::bind(&stale).expect("bind stale socket"));
-    assert!(stale.exists(), "stale socket file should remain on disk");
-
-    let live = dir.path().join("live.sock");
-    let listener = UnixListener::bind(&live).expect("bind live socket");
-
-    let stream = super::connect_first(&[stale, live])
-        .await
-        .expect("should fall back to the live socket");
-    drop(stream);
-    drop(listener);
-}
-
-/// Every failed candidate must still report a connection error.
-#[tokio::test]
-async fn connect_first_reports_failure_when_all_candidates_fail() {
-    let dir = tempdir().expect("temp dir");
-    let stale = dir.path().join("stale.sock");
-    drop(UnixListener::bind(&stale).expect("bind stale socket"));
-    let missing = dir.path().join("missing.sock");
-
-    let err = super::connect_first(&[stale, missing])
-        .await
-        .expect_err("all candidates should fail");
-    let ClientError::Connect(source) = err else {
-        panic!("expected connection error, got {err:?}");
-    };
-    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
 }

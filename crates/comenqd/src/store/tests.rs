@@ -2,6 +2,7 @@
 
 use super::{PutOptions, QueueStore, StoreError, StoredEntry, entry_id};
 use comenq_lib::CommentRequest;
+use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use proptest::prelude::*;
 use rstest::rstest;
 use std::fs;
@@ -88,6 +89,26 @@ fn put_samples_flutter_within_bounds() {
         .put(request("plain"), &immediate(0), 2000)
         .expect("put plain");
     assert_eq!(zero.flutter_seconds, 0);
+}
+
+#[rstest]
+fn put_rejects_entries_beyond_the_pending_limit() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    for index in 0..MAX_PENDING_ENTRIES {
+        store
+            .put(
+                request(&format!("body {index}")),
+                &immediate(0),
+                1_000 + index as u64,
+            )
+            .expect("put within capacity");
+    }
+    let error = store
+        .put(request("over capacity"), &immediate(0), 9_999)
+        .expect_err("capacity must be enforced before persistence");
+    assert!(matches!(error, StoreError::QueueFull(MAX_PENDING_ENTRIES)));
+    assert_eq!(ids(&store).len(), MAX_PENDING_ENTRIES);
 }
 
 #[rstest]
@@ -230,6 +251,73 @@ fn next_due_returns_the_head() {
 }
 
 #[rstest]
+fn claim_is_released_after_a_failed_post() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("put");
+    let (claimed, eta) = store
+        .claim_next_due(600, 1000)
+        .expect("claim")
+        .expect("due entry");
+    assert_eq!(eta, 0);
+    let token = claimed.claim_token.clone().expect("claim token");
+    assert!(store.next_due(600, 1000).expect("next due").is_none());
+    store
+        .release_claim(&entry.id, &token)
+        .expect("release claim");
+    assert!(store.next_due(600, 1000).expect("next due").is_some());
+}
+
+#[rstest]
+fn completion_is_idempotent_after_delete_and_records_the_post_without_removing_a_replacement() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("put");
+    let (claimed, _) = store
+        .claim_next_due(600, 1000)
+        .expect("claim")
+        .expect("due entry");
+    let token = claimed.claim_token.clone().expect("claim token");
+    store.del(&entry.id).expect("delete in-flight entry");
+    let replacement = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("replace");
+    store
+        .complete_claim(&entry.id, Some(&token), 4242)
+        .expect("stale completion is harmless");
+    assert_eq!(ids(&store), vec![replacement.id]);
+    assert_eq!(store.last_post().expect("last post"), Some(4242));
+}
+
+#[rstest]
+fn bump_and_bust_preserve_an_in_flight_claim() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("put");
+    let other = store
+        .put(request("other"), &immediate(0), 1001)
+        .expect("put");
+    let (claimed, _) = store
+        .claim_next_due(600, 1000)
+        .expect("claim")
+        .expect("due entry");
+    let token = claimed.claim_token.clone().expect("claim token");
+
+    store.bust(&entry.id).expect("bust in-flight entry");
+    store.bump(&entry.id).expect("bump in-flight entry");
+    store
+        .complete_claim(&entry.id, Some(&token), 4242)
+        .expect("complete in-flight entry");
+    assert_eq!(ids(&store), vec![other.id]);
+}
+
+#[rstest]
 fn entries_survive_reopen() {
     let dir = TempDir::new().expect("tempdir");
     let first = open_store(&dir);
@@ -337,6 +425,7 @@ fn id_collision_with_a_different_request_uses_a_salted_id() {
             flutter_seconds: 0,
             enqueued_at: 1000,
             not_before: 0,
+            claim_token: None,
             request: request("different"),
         })
         .expect("seed colliding entry");
@@ -363,6 +452,7 @@ fn unsafe_stored_identifiers_are_skipped_without_path_traversal() {
         flutter_seconds: 0,
         enqueued_at: 1000,
         not_before: 0,
+        claim_token: None,
         request: request("unsafe"),
     };
     let bytes = serde_json::to_vec(&unsafe_entry).expect("serialize unsafe entry");

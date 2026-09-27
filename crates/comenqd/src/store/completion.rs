@@ -10,15 +10,25 @@ use std::io;
 struct CompletionRecord {
     id: String,
     posted_at: u64,
+    #[serde(default)]
+    claim_token: Option<String>,
 }
 
 impl QueueStore {
     /// Persist post completion before removing its entry and updating the marker.
     pub fn complete(&self, id: &str, now: u64) -> Result<()> {
-        self.find(id)?;
+        self.complete_claim(id, None, now)
+    }
+
+    /// Complete a claimed post without deleting a replacement entry.
+    pub fn complete_claim(&self, id: &str, claim_token: Option<&str>, now: u64) -> Result<()> {
+        if claim_token.is_none() {
+            self.find(id)?;
+        }
         let record = serde_json::to_vec(&CompletionRecord {
             id: id.to_owned(),
             posted_at: now,
+            claim_token: claim_token.map(str::to_owned),
         })?;
         self.write_atomic(&self.completion_path, &record)?;
         self.reconcile_completion()
@@ -33,10 +43,20 @@ impl QueueStore {
         };
         let record: CompletionRecord = serde_json::from_str(&text)?;
         let entry_path = self.entry_path(&record.id)?;
-        match fs::remove_file(&entry_path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(StoreError::Io(error)),
+        let remove_entry = match self.find(&record.id) {
+            Ok(entry) => record
+                .claim_token
+                .as_deref()
+                .is_none_or(|token| entry.claim_token.as_deref() == Some(token)),
+            Err(StoreError::UnknownId(_)) => false,
+            Err(error) => return Err(error),
+        };
+        if remove_entry {
+            match fs::remove_file(&entry_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(StoreError::Io(error)),
+            }
         }
         self.write_atomic(
             &self.last_post_path,

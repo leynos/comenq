@@ -110,8 +110,10 @@ The stable metric names and labels are:
 
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
-- `comenqd_requests_total{outcome=accepted|failed|rejected}` for request
-  outcomes.
+- `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
+  `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
+  `rejected`); requests without a parsed operation omit the `operation` label.
+- `comenqd_queue_entries` for the current pending-entry count, without labels.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 - `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
   comment-post outcomes.

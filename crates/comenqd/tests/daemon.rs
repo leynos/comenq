@@ -1,5 +1,7 @@
 //! Tests for daemon components and worker behaviour.
 
+#![cfg(feature = "test-support")]
+
 mod util;
 
 use comenq_lib::protocol::{PendingEntry, Request, Response};
@@ -306,6 +308,7 @@ mod worker_tests {
                 enqueued: None,
                 idle: Some(idle.clone()),
                 drained: None,
+                waiting: None,
             },
         };
         let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
@@ -366,6 +369,7 @@ mod worker_tests {
                 enqueued: Some(enqueued.clone()),
                 idle: None,
                 drained: None,
+                waiting: None,
             },
         };
         let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
@@ -486,6 +490,7 @@ mod worker_tests {
                 enqueued: None,
                 idle: Some(idle.clone()),
                 drained: None,
+                waiting: None,
             },
         };
 
