@@ -558,9 +558,29 @@ worker schedules entries. A completion for an entry deleted or replaced during
 the external post still records the successful post time, but cannot delete a
 replacement with a different claim.
 
-The store admits at most 1,024 pending entries. The `list` response contains at
-most 1,024 scheduled entries, and client and daemon response bodies are limited
-to 2 MiB. A new `put` at capacity fails before persisting an entry.
+The store admits at most 1,024 pending entries and caps total accounted queue
+data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
+its remaining mutation reservation. New puts reserve up to 80 bytes each;
+existing valid entries' remaining reservation is derived from the serialized
+widths of their mutable `order` and `claim_token` fields. Claim and ordering
+updates consume that reservation, and writes preserve the remaining aggregate
+headroom. A new `put` is rejected before persistence if its serialized entry
+would exceed 2 MiB minus the 80-byte reservation, or if it would exceed the
+aggregate budget. On startup, the daemon fails closed if the number of existing
+regular `.json` files exceeds 1,024, or their raw bytes plus remaining
+reservations exceed 32 MiB. It also fails closed if a valid entry lacks enough
+room below the 2 MiB per-file cap for every reachable `order` or `claim_token`
+mutation. Startup leaves these files untouched; an operator must remove or
+repair the excess data before restarting. Reads accept files up to 2 MiB;
+oversized or corrupt files are logged and skipped by `entries()`, provided the
+startup count and aggregate-size checks pass. Their raw bytes still count
+towards the aggregate admission budget.
+
+The `list` response contains at most 1,024 scheduled entries, and client and
+daemon response bodies are limited to 2 MiB. If the complete ordered list would
+exceed the response limit, the daemon returns an error rather than a partial
+list. Scheduling and list construction enforce the entry and byte bounds before
+building the response.
 
 Because an entry is only removed from disk after a successful post
 (`complete`), and a failed post simply leaves the entry in place for the next
@@ -601,7 +621,11 @@ Its workflow is as follows:
    directly against the shared queue (`SharedQueue::execute`), and writes the
    resulting `Response` back to the client before closing the connection.
    Responses are capped at 2 MiB on both client and daemon, and `list` returns
-   at most 1,024 entries. A request that fails to deserialize receives an error
+   at most 1,024 entries. If the complete list exceeds the response cap, the
+   daemon returns an error rather than a partial response. Persisted entry
+   reads accept files up to 2 MiB. Up to 80 bytes per entry are reserved for
+   metadata growth, and the store admits at most 32 MiB of file bytes plus
+   remaining reservations. A request that fails to deserialize receives an error
    `Response` rather than a silently dropped connection.
 
 This design makes the request ingestion process highly concurrent and robust,

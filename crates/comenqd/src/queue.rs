@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::{MAX_PENDING_ENTRIES, Request, Response};
+use comenq_lib::protocol::{MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, Request, Response};
 use tokio::sync::Notify;
 
 use crate::config::Config;
@@ -186,15 +186,9 @@ impl SharedQueue {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
         self.with_store(move |store| {
-            store.schedule(cooldown, now).map(|schedule| {
-                Response::entries(
-                    schedule
-                        .into_iter()
-                        .take(MAX_PENDING_ENTRIES)
-                        .map(|(entry, eta)| entry.to_pending(eta))
-                        .collect(),
-                )
-            })
+            store
+                .schedule(cooldown, now)
+                .and_then(response_for_schedule)
         })
         .await
     }
@@ -224,6 +218,29 @@ impl SharedQueue {
             Err(error) => tracing::warn!(error = %error, "Failed to refresh queue-depth metric"),
         }
     }
+}
+
+fn response_for_schedule(schedule: Vec<(StoredEntry, u64)>) -> StoreResult<Response> {
+    let mut projected_size = serde_json::to_vec(&Response::entries(Vec::new()))?.len();
+    let mut entries = Vec::with_capacity(schedule.len().min(MAX_PENDING_ENTRIES));
+
+    for (entry, eta) in schedule.into_iter().take(MAX_PENDING_ENTRIES) {
+        let pending = entry.to_pending(eta);
+        let pending_size = serde_json::to_vec(&pending)?.len();
+        let separator_size = usize::from(!entries.is_empty());
+        let next_size = projected_size
+            .saturating_add(pending_size)
+            .saturating_add(separator_size);
+        if next_size > MAX_RESPONSE_BYTES {
+            return Ok(Response::error(format!(
+                "list response exceeds the {MAX_RESPONSE_BYTES}-byte limit"
+            )));
+        }
+        projected_size = next_size;
+        entries.push(pending);
+    }
+
+    Ok(Response::entries(entries))
 }
 
 /// Reject repository components that could alter paths, URLs, or terminal output.
