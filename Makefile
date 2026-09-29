@@ -40,6 +40,14 @@ define CHECK_CARGO_LLVM_COV
         }
 endef
 
+# The development build standard (concordat rule `rust-build-defaults`):
+# the parallel rustc frontend and, on Linux, the mold linker. An assigned
+# RUSTFLAGS replaces every `rustflags` table in .cargo/config.toml, so each
+# recipe that sets it composes these onto any inherited value (CI's
+# setup-rust exports one), except coverage, which stays on LLVM and the
+# platform linker.
+STANDARD_RUSTFLAGS := -Zthreads=8$(if $(filter Linux,$(shell uname -s)), -Clink-arg=-fuse-ld=mold)
+
 build: target/debug/$(APP) ## Build debug binary
 release: target/release/$(APP) ## Build release binary
 
@@ -51,8 +59,8 @@ clean: ## Remove build artefacts
 	rm -rf coverage
 
 test: ## Run tests with warnings treated as errors
-	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace --all-targets --all-features $(BUILD_JOBS)
-	RUSTFLAGS="-D warnings" $(CARGO) test --workspace --all-features --test cucumber $(BUILD_JOBS)
+	RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }-D warnings $(STANDARD_RUSTFLAGS)" $(CARGO) nextest run --workspace --all-targets --all-features $(BUILD_JOBS)
+	RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }-D warnings $(STANDARD_RUSTFLAGS)" $(CARGO) test --workspace --all-features --test cucumber $(BUILD_JOBS)
 
 test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
 	$(CHECK_CARGO_LLVM_COV)
@@ -69,14 +77,14 @@ test-workflow-contracts: ## Validate the mutation-testing caller contract
 	uv run --with 'pytest>=8' --with 'pyyaml>=6' pytest tests/workflow_contracts -q
 
 target/%/$(APP): ## Build binary in debug or release mode
-	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
+	$(if $(findstring release,$(@)),RUSTFLAGS="$${RUSTFLAGS-}",RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }$(STANDARD_RUSTFLAGS)") $(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
 
 lint: ## Run Clippy and the Whitaker Dylint suite with warnings denied
-	$(CARGO) clippy $(CLIPPY_FLAGS)
-	RUSTFLAGS="-D warnings" $(WHITAKER) --all -- --all-targets --all-features
+	RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }$(STANDARD_RUSTFLAGS)" $(CARGO) clippy $(CLIPPY_FLAGS)
+	RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }-D warnings $(STANDARD_RUSTFLAGS)" $(WHITAKER) --all -- --all-targets --all-features
 
 typecheck: ## Check all Rust targets and features
-	RUSTFLAGS="-D warnings" $(CARGO) check --workspace --all-targets --all-features $(BUILD_JOBS)
+	RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }-D warnings $(STANDARD_RUSTFLAGS)" $(CARGO) check --workspace --all-targets --all-features $(BUILD_JOBS)
 
 fmt: ## Format Rust and Markdown sources
 	$(CARGO) fmt --all
