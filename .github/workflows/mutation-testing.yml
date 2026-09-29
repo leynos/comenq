@@ -44,3 +44,9 @@ jobs:
       # and cucumber tests, so cargo-mutants must run the whole
       # workspace's tests against each mutant.
       extra-args: "--workspace --all-features --test-workspace=true"
+      # .cargo/config.toml links with mold on Linux, and the reusable workflow has
+      # no `install-mold` input, so the mutants job installs it here.
+      setup-commands: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends mold
