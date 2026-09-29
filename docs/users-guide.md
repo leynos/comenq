@@ -95,6 +95,22 @@ line breaks, become spaces; longer summaries end with an ellipsis. If a GitHub
 post fails, its entry remains queued and the worker retries it after a full
 configured cooldown. A successful retry removes the entry from the queue.
 
+The queue accepts at most 1,024 entries and 32 MiB of accounted data.
+Accounting includes each regular entry file's bytes plus its remaining mutation
+reservation. New puts reserve up to 80 bytes each; for existing entries, the
+remaining reservation is derived from the serialized widths of `order` and
+`claim_token`. Claim and ordering updates consume that headroom. A new `put` is
+rejected if its data would exceed the per-entry limit of 2 MiB minus the
+80-byte reservation, or if it would exceed the aggregate budget. The daemon
+refuses to start if existing regular entry files exceed the count or if their
+raw bytes plus remaining reservations exceed the aggregate limit. It also
+refuses startup if a valid entry lacks room under the 2 MiB file cap for every
+reachable order/claim-token update. It leaves files untouched; remove or repair
+the excess data before restarting. Reads accept files up to 2 MiB; oversized or
+corrupt files are logged and skipped, but their bytes still count towards the
+budget. `list` returns an error, not a partial result, if its complete response
+would exceed the 2 MiB client/daemon response limit.
+
 ## Inspect local metrics
 
 The daemon attempts to expose Prometheus metrics at
