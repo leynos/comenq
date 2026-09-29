@@ -85,8 +85,20 @@ pub enum StoreError {
     #[error("queue operation task failed: {0}")]
     BlockingTask(#[from] tokio::task::JoinError),
     /// The queue has reached its configured pending-entry limit.
-    #[error("queue already contains the maximum of {0} pending entries")]
+    #[error("queue would exceed the maximum of {0} pending entries")]
     QueueFull(usize),
+    /// An entry exceeds the maximum serialized file size.
+    #[error("queue entry is {size} bytes, exceeding the per-entry limit of {limit} bytes")]
+    EntryTooLarge { size: u64, limit: u64 },
+    /// Persisted queue bytes plus the requested write exceed the durable budget.
+    #[error(
+        "queue byte budget exceeded: {used} bytes used, {requested} more requested, {limit} allowed"
+    )]
+    QueueByteBudgetExceeded {
+        used: u64,
+        requested: u64,
+        limit: u64,
+    },
 }
 /// Result alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -155,49 +167,9 @@ impl QueueStore {
             completion_path: queue_path.join(COMPLETION_FILE),
         };
         store.reconcile_completion()?;
+        store.validate_existing_limits()?;
         store.reclaim_claims()?;
         Ok(store)
-    }
-
-    /// All pending entries in posting order.
-    pub fn entries(&self) -> Result<Vec<StoredEntry>> {
-        let mut entries = Vec::new();
-        for dirent in fs::read_dir(&self.entries_dir)? {
-            let path = dirent?.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                let text = match fs::read_to_string(&path) {
-                    Ok(text) => text,
-                    Err(e) => {
-                        tracing::error!(
-                            path = %path.display(),
-                            error = %e,
-                            "Skipping unreadable queue entry"
-                        );
-                        continue;
-                    }
-                };
-                match serde_json::from_str::<StoredEntry>(&text) {
-                    Ok(entry) if is_valid_id(&entry.id) => entries.push(entry),
-                    Ok(entry) => {
-                        tracing::error!(
-                            path = %path.display(),
-                            id = %entry.id,
-                            "Skipping queue entry with an unsafe identifier"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            path = %path.display(),
-                            error = %e,
-                            "Skipping unreadable queue entry"
-                        );
-                    }
-                }
-            }
-        }
-        entries
-            .sort_by(|a, b| (a.order, a.enqueued_at, &a.id).cmp(&(b.order, b.enqueued_at, &b.id)));
-        Ok(entries)
     }
 
     /// Move the identified entry to the head of the queue.
@@ -252,14 +224,13 @@ impl QueueStore {
 
     fn find(&self, id: &str) -> Result<StoredEntry> {
         let path = self.entry_path(id)?;
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+        let entry = match bounds::read_entry(&path) {
+            Ok(entry) => entry,
+            Err(StoreError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(StoreError::UnknownId(id.to_owned()));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         };
-        let entry: StoredEntry = serde_json::from_str(&text)?;
         if entry.id != id {
             return Err(StoreError::InvalidId(entry.id));
         }
@@ -275,11 +246,6 @@ impl QueueStore {
         let mut entry = self.find(id)?;
         entry.order = new_order(&entry, &all);
         self.write_entry(&entry)
-    }
-
-    fn write_entry(&self, entry: &StoredEntry) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(entry)?;
-        self.write_atomic(&self.entry_path(&entry.id)?, &bytes)
     }
 
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
@@ -323,6 +289,7 @@ fn is_valid_id(id: &str) -> bool {
     id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+mod bounds;
 mod completion;
 mod scheduling;
 

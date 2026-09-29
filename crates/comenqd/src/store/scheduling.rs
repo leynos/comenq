@@ -18,7 +18,7 @@ impl QueueStore {
         now: u64,
     ) -> Result<(StoredEntry, u64)> {
         let (id, existing) = self.resolve_entry_id(&request, now)?;
-        let mut entries = self.entries()?;
+        let (mut entries, usage) = self.entries_with_usage()?;
         let last_post = self.last_post()?;
         if let Some(entry) = existing {
             let eta = projected_schedule(entries, last_post, options.cooldown, now)
@@ -57,7 +57,7 @@ impl QueueStore {
             .into_iter()
             .find(|(scheduled, _)| scheduled.id == entry.id)
             .map_or(0, |(_, eta)| eta);
-        self.write_entry(&entry)?;
+        self.write_entry_with_usage(&entry, usage)?;
         Ok((entry, eta))
     }
 
