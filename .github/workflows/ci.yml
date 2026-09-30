@@ -73,8 +73,13 @@ jobs:
         run: make nixie
       - name: Workflow contract tests
         run: make test-workflow-contracts
-      - name: Test Only
-        run: make test
+      # The coverage step below runs the whole nextest suite (`make test`'s
+      # scope: every workspace target with every feature), so it is the only
+      # place the suite runs. The cucumber harness has its own `main`, which
+      # nextest cannot execute, so it keeps a step of its own.
+      # tests/workflow_contracts/suite_runs_once_test.py holds the split.
+      - name: Run the cucumber scenarios
+        run: make test-cucumber
       - name: Test and Measure Coverage
         env:
           # One of the two exclusions from the build standard: a coverage build is
@@ -86,6 +91,8 @@ jobs:
         with:
           output-path: lcov.info
           format: lcov
+          all-features: 'true'
+          all-targets: 'true'
       - name: Upload coverage data to CodeScene
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
