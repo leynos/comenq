@@ -93,7 +93,7 @@ jobs:
       - name: Clean dist directory
         run: rm -rf dist
       - name: Build ${{ matrix.bin }}
-        uses: leynos/shared-actions/.github/actions/rust-build-release@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/rust-build-release@abf0dcf2686de1eaf79b6dc9a16662b631bed149
         with:
           target: ${{ matrix.target }}
           bin-name: ${{ matrix.bin }}
