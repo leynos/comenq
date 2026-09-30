@@ -241,7 +241,7 @@ def test_the_default_goal_is_read(makefile: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "target", ["test", "all", "coverage", "dev-test", "test-fast"]
+    "target", ["test", "all", "coverage", "dev-test", "test-fast", "test-cucumber"]
 )
 def test_every_suite_target_runs_the_suite(target: str) -> None:
     """Read each suite target as a suite run, and a longer name as none."""
@@ -333,7 +333,9 @@ def test_make_refuses_several_words_and_the_reader_does_not_read_them(
     gnu_make: str,
 ) -> None:
     """Fall back to the first rule where make refuses a multi-word goal."""
-    makefile = ".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\nfirst:\nsecond:\n"
+    makefile = (
+        ".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\nfirst:\nsecond:\n"
+    )
     assert _make_default_goal(makefile, gnu_make) is None
     assert default_goal(makefile) == "build"
 
@@ -345,10 +347,9 @@ def _is_the_cucumber_step(name: str, job: str, step: dict[str, typ.Any]) -> bool
     here, by name of workflow, job and exact command, and nowhere else: a second
     such step, or one in another workflow, still fails the test.
     """
-    return (
-        (name, job) == ("ci.yml", SUITE_JOB)
-        and str(step.get("run", "")).strip() == CUCUMBER_COMMAND
-    )
+    return (name, job) == ("ci.yml", SUITE_JOB) and str(
+        step.get("run", "")
+    ).strip() == CUCUMBER_COMMAND
 
 
 def test_the_suite_runs_only_in_the_coverage_step() -> None:
@@ -412,3 +413,53 @@ def test_make_test_still_runs_nextest_and_the_cucumber_target() -> None:
     recipe = " ".join(_recipe("test"))
     assert "nextest run --workspace --all-targets --all-features" in recipe
     assert "test-cucumber" in recipe
+
+
+def _dry_run(target: str, gnu_make: str) -> list[str]:
+    """Return the commands ``make`` would run for a target, in order.
+
+    ``make -n`` prints each recipe line after expansion without running it, so
+    an ``echo``-only or commented-out recipe shows up as what it is. Directory
+    notices from the recursive ``$(MAKE)`` call are dropped.
+    """
+    result = subprocess.run(  # noqa: S603 - a fixed command on a fixed target
+        [gnu_make, "-n", target, "CARGO=cargo", "BUILD_JOBS="],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": os.environ["PATH"]},
+    )
+    # `$(MAKE)` expands to the path make was started by, so name it `make`.
+    return [
+        line.strip().replace(f"{gnu_make} ", "make ", 1)
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.startswith("make[")
+    ]
+
+
+def test_make_test_runs_nextest_then_the_cucumber_target(gnu_make: str) -> None:
+    """Assert the commands and order `make test` would run, not the recipe text."""
+    commands = _dry_run("test", gnu_make)
+    assert commands == [
+        'RUSTFLAGS="-D warnings" cargo nextest run --workspace --all-targets --all-features',
+        "make test-cucumber",
+        'RUSTFLAGS="-D warnings" cargo test --workspace --all-features --test cucumber',
+    ]
+
+
+def test_make_test_cucumber_runs_the_harness_over_the_workspace(gnu_make: str) -> None:
+    """Assert the one command `make test-cucumber` would run."""
+    assert _dry_run("test-cucumber", gnu_make) == [
+        'RUSTFLAGS="-D warnings" cargo test --workspace --all-features --test cucumber'
+    ]
+
+
+def test_the_cucumber_target_is_declared_phony() -> None:
+    """Require `test-cucumber` among the `.PHONY` targets, so a file of that name cannot hide it."""
+    declared = next(
+        line
+        for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
+        if line.startswith(".PHONY:")
+    )
+    assert "test-cucumber" in declared.split()
