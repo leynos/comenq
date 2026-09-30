@@ -102,6 +102,20 @@ each pull-request step by the command it runs (through
 the shell does), refuses a second suite run, and requires the coverage step's
 scope and the Cucumber step to stay. `make test-workflow-contracts` runs it.
 
+A bare `make` runs the Makefile's default goal, so the reader takes that goal
+from the Makefile (`default_goal` in `suite_commands.py`). It applies the
+`.DEFAULT_GOAL` assignments in order, as GNU make does (manual, "Other Special
+Variables"). `=` and `:=` replace the value, so the last one wins. `?=` changes
+nothing, because make defines `.DEFAULT_GOAL` itself, empty, before it reads a
+makefile. `+=` appends a word, and an empty value clears it. A value of several
+words, which make refuses, is not read, and the reader falls back to the first
+rule that is not a special or pattern target. `make test-cucumber` counts as a
+suite run to the reader; the contract exempts the one expected `build-test`
+step by workflow, job and exact command. The tests that pin the reader to GNU
+make (`test_the_reader_agrees_with_gnu_make`) run `make -f - -pn` on each
+fixture and compare the goal make settles on; they skip, with the reason, on a
+host where `make` is absent or is not GNU make.
+
 ## Automated packaging
 
 `make release` builds a local optimized binary and requires the Rust toolchain.
