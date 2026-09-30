@@ -26,8 +26,10 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC workflow-source resolution
-    uses: leynos/shared-actions/.github/workflows/mutation-cargo.yml@3822201c597078a5ed1939bdf067fe06a3d78a9d
+    uses: leynos/shared-actions/.github/workflows/mutation-cargo.yml@9a27950942334d69ff79005b3a8db23bf151f43f
     with:
+      # .cargo/config.toml links with mold on Linux; the reusable workflow installs it.
+      install-mold: 'true'
       # The root comenq-lib crate lives under src/; the comenq client
       # and comenqd daemon crates live under crates/. The vendored
       # vendor/filetime patch crate is not a workspace member and is
@@ -44,9 +46,3 @@ jobs:
       # and cucumber tests, so cargo-mutants must run the whole
       # workspace's tests against each mutant.
       extra-args: "--workspace --all-features --test-workspace=true"
-      # .cargo/config.toml links with mold on Linux, and the reusable workflow has
-      # no `install-mold` input, so the mutants job installs it here.
-      setup-commands: |
-        export DEBIAN_FRONTEND=noninteractive
-        sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends mold
