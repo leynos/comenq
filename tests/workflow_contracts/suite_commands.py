@@ -13,6 +13,7 @@ the program it runs is read before its arguments. Control words such as
 
 from __future__ import annotations
 
+import itertools
 import re
 import shlex
 from collections.abc import Callable
@@ -45,7 +46,9 @@ MAKE_VALUE_LETTERS = frozenset("CfIoWjl")
 #: Make targets that run the suite: ``test``, ``all`` (which runs it),
 #: ``coverage`` and the fast local variants. A bare ``make`` runs the
 #: Makefile's default goal, so it counts only where that goal is one of these.
-SUITE_TARGETS = frozenset({"test", "all", "coverage", "dev-test", "test-fast"})
+SUITE_TARGETS = frozenset(
+    {"test", "all", "coverage", "dev-test", "test-fast", "test-cucumber"}
+)
 #: ``uv run`` and ``uvx`` options that take their value as the next word.
 UV_VALUE_OPTIONS = frozenset(
     {
@@ -90,7 +93,7 @@ CONTROL_WORDS = frozenset(
 #: Shells whose ``-c`` operand is itself a command.
 SHELLS = frozenset({"sh", "bash"})
 #: The shell's view of a command, one piece at a time: a comment (dropped), a
-#: line continuation (read as a space), a separator between commands, or text,
+#: line continuation (removed, without ending the word), a separator between commands, or text,
 #: where quoted strings and escaped characters are kept whole so a separator
 #: inside them does not split the command.
 TOKENS = re.compile(
@@ -102,8 +105,30 @@ TOKENS = re.compile(
     """,
     re.VERBOSE | re.DOTALL | re.MULTILINE,
 )
+#: A redirection outside quotes: an optional file descriptor, the operator and
+#: its target. A quoted string or an escaped character is matched first and
+#: kept, so ``make ">x"`` keeps its argument.
+REDIRECTION = re.compile(
+    r"""('[^']*'|"(?:\\.|[^"\\])*"|\\.)|\d*(?:>>|>|<)\s*(?:'[^']*'|"(?:\\.|[^"\\])*"|[^\s<>]*)""",
+    re.DOTALL,
+)
 #: Python interpreters by name: ``python``, ``python3`` and ``python3.13``.
 PYTHON_PROGRAM = re.compile(r"python(?:3(?:\.\d+)?)?")
+#: pytest options that list or describe and run no test.
+PYTEST_INERT_OPTIONS = frozenset(
+    {
+        "--collect-only",
+        "--co",
+        "--help",
+        "-h",
+        "--version",
+        "-V",
+        "--fixtures",
+        "--fixtures-per-test",
+        "--markers",
+        "--setup-plan",
+    }
+)
 #: Programs that are pytest itself.
 PYTEST_PROGRAMS = frozenset({"pytest", "py.test"})
 #: Cargo options that take their value as the next word.
@@ -122,8 +147,6 @@ def _segments(command: str) -> list[str]:
             segments.append("")
         elif token.lastgroup == "text":
             segments[-1] += token.group()
-        elif token.lastgroup == "continuation":
-            segments[-1] += " "
     return segments
 
 
@@ -145,8 +168,9 @@ def _words(segment: str) -> list[str]:
     Comments were dropped when the command was segmented, so a ``#`` left here
     sits inside a word, as in ``make test#notes``, and stays part of it.
     """
+    without_redirections = REDIRECTION.sub(lambda m: m.group(1) or " ", segment)
     try:
-        words = shlex.split(segment, comments=False)
+        words = shlex.split(without_redirections, comments=False)
     except ValueError:
         words = segment.split()
     if words:
@@ -188,12 +212,18 @@ def _past_control_word(words: list[str]) -> list[str] | None:
     return words[1:] if _program(words) in CONTROL_WORDS else None
 
 
+def _is_lookup(arguments: list[str]) -> bool:
+    """Report whether the options before the operand ask ``command`` to describe."""
+    options = list(itertools.takewhile(lambda word: word.startswith("-"), arguments))
+    return bool({"-v", "-V"} & set(options))
+
+
 def _past_wrapper(words: list[str]) -> list[str] | None:
     """Return the command a wrapper such as ``env`` or ``timeout`` runs."""
     wrapper = WRAPPERS.get(_program(words))
     if wrapper is None:
         return None
-    if _program(words) == "command" and {"-v", "-V"} & set(words[1:]):
+    if _program(words) == "command" and _is_lookup(words[1:]):
         # ``command -v make`` describes ``make`` and runs nothing.
         return None
     value_options, leading_operands = wrapper
@@ -320,9 +350,9 @@ def _shell_runs_suite(arguments: list[str], default_goal: str) -> bool:
     return False
 
 
-def _pytest_runs_suite(_arguments: list[str], _default_goal: str) -> bool:
-    """Report that pytest runs the suite, whatever its arguments."""
-    return True
+def _pytest_runs_suite(arguments: list[str], _default_goal: str) -> bool:
+    """Report whether pytest's arguments run tests and not just describe them."""
+    return not PYTEST_INERT_OPTIONS & set(arguments)
 
 
 #: What each suite-capable program's arguments must say for it to run the suite.
@@ -341,17 +371,46 @@ def _segment_runs_suite(segment: str, default_goal: str) -> bool:
     return reader is not None and reader(words[1:], default_goal)
 
 
-def _assigned_goal(makefile: str) -> str | None:
-    """Return the goal ``.DEFAULT_GOAL`` is set to, if the Makefile sets it.
-
-    A tab-indented line is recipe text, not an assignment.
-    """
-    lines = (line for line in makefile.splitlines() if not line.startswith("\t"))
-    for line in lines:
-        name, separator, value = line.partition("=")
-        if separator and name.rstrip("?: ").strip() == ".DEFAULT_GOAL":
-            return value.strip()
+def _goal_assignment(line: str) -> tuple[str, str] | None:
+    """Return ``(operator, value)`` for a line that assigns ``.DEFAULT_GOAL``."""
+    name, separator, value = line.partition("=")
+    name = name.rstrip()
+    operator = ""
+    if name.endswith(("+", "?")):
+        operator, name = name[-1], name[:-1].rstrip()
+    if separator and name.rstrip(":").rstrip() == ".DEFAULT_GOAL":
+        return operator, value.strip()
     return None
+
+
+def _apply_assignment(current: str | None, operator: str, value: str) -> str | None:
+    """Return ``.DEFAULT_GOAL`` after one more assignment.
+
+    ``=`` and ``:=`` replace it, ``?=`` changes nothing (make defines
+    ``.DEFAULT_GOAL`` itself, empty, before it reads a makefile, so ``?=``
+    finds it defined), ``+=`` appends a word, and an empty result clears it.
+    """
+    if operator == "?":
+        result = current or ""
+    elif operator == "+":
+        result = f"{current or ''} {value}"
+    else:
+        result = value
+    return result.strip() or None
+
+
+def _assigned_goal(makefile: str) -> str | None:
+    """Return what ``.DEFAULT_GOAL`` holds once every assignment has applied.
+
+    A tab-indented line is recipe text, not an assignment. Make refuses a
+    default goal of several targets, so such a value is not read.
+    """
+    goal: str | None = None
+    for line in makefile.splitlines():
+        assignment = None if line.startswith("\t") else _goal_assignment(line)
+        if assignment:
+            goal = _apply_assignment(goal, *assignment)
+    return goal if goal and len(goal.split()) == 1 else None
 
 
 def _rule_goal(line: str) -> str | None:

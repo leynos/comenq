@@ -76,10 +76,9 @@ jobs:
       # The coverage step below runs the whole nextest suite (`make test`'s
       # scope: every workspace target with every feature), so it is the only
       # place the suite runs. The cucumber harness has its own `main`, which
-      # nextest cannot execute, so it keeps a step of its own.
+      # nextest cannot execute, so it keeps a step of its own, after the
+      # CodeScene upload so that a failing scenario cannot stop the upload.
       # tests/workflow_contracts/suite_runs_once_test.py holds the split.
-      - name: Run the cucumber scenarios
-        run: make test-cucumber
       - name: Test and Measure Coverage
         env:
           # One of the two exclusions from the build standard: a coverage build is
@@ -102,3 +101,5 @@ jobs:
           format: lcov
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
+      - name: Run the cucumber scenarios
+        run: make test-cucumber

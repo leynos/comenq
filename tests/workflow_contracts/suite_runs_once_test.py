@@ -19,7 +19,9 @@ Run via ``make test-workflow-contracts``.
 
 from __future__ import annotations
 
+import os
 import pathlib
+import subprocess
 import typing as typ
 
 import pytest
@@ -131,6 +133,26 @@ def _coverage_steps() -> list[dict[str, typ.Any]]:
         ("make -l 4", True),
         ("make -j test", True),
         ("make -j lint", False),
+        ("make >suite.log", True),
+        ("make >> suite.log 2>&1", True),
+        ("make 2> err.log test", True),
+        ("make test > out.log", True),
+        ("make lint > suite.log", False),
+        ('make ">x"', False),
+        ("make < in.txt lint", False),
+        ("command pytest -v", True),
+        ("command -v pytest", False),
+        ("pytest --collect-only", False),
+        ("pytest --co -q", False),
+        ("pytest --help", False),
+        ("pytest --version", False),
+        ("python -m pytest --fixtures", False),
+        ("uv run pytest --markers", False),
+        ("uvx pytest --collect-only", False),
+        ("timeout 5m pytest --setup-plan", False),
+        ("pytest -q tests", True),
+        ("cargo te\\\nst", True),
+        ("make\\\ntest", False),
         ("make -j 4 lint", False),
         ("make --jobs 4", True),
         ('echo "a \\" ; make test"', False),
@@ -196,9 +218,16 @@ def test_a_bare_make_runs_the_default_goal(goal: str, *, expected: bool) -> None
     [
         (".PHONY: a\nbuild: x\nall: y\n", "build"),
         (".DEFAULT_GOAL := test\nbuild:\n", "test"),
-        (".DEFAULT_GOAL ?= test\nbuild:\n", "test"),
-        (".DEFAULT_GOAL += test\nbuild:\n", "build"),
+        (".DEFAULT_GOAL ?= test\nbuild:\n", "build"),
+        (".DEFAULT_GOAL += test\nbuild:\n", "test"),
         (".DEFAULT_GOAL = test\nbuild:\n", "test"),
+        (".DEFAULT_GOAL := first\n.DEFAULT_GOAL := second\nbuild:\n", "second"),
+        (".DEFAULT_GOAL := first\n.DEFAULT_GOAL ?= second\nbuild:\n", "first"),
+        (".DEFAULT_GOAL ?= second\n.DEFAULT_GOAL := first\nbuild:\n", "first"),
+        (".DEFAULT_GOAL := build\nlint:\n.DEFAULT_GOAL := test\n", "test"),
+        (".DEFAULT_GOAL := first\n.DEFAULT_GOAL :=\nbuild:\n", "build"),
+        (".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\n", "build"),
+        (".DEFAULT_GOAL   :=   spaced\nbuild:\n", "spaced"),
         ("first:\n\t.DEFAULT_GOAL = test\n", "first"),
         ("# build: not a rule\nrun: z\n", "run"),
         (".PHONY: a\n.SUFFIXES:\nrun: z\n", "run"),
@@ -211,6 +240,117 @@ def test_the_default_goal_is_read(makefile: str, expected: str) -> None:
     assert default_goal(makefile) == expected
 
 
+@pytest.mark.parametrize(
+    "target", ["test", "all", "coverage", "dev-test", "test-fast"]
+)
+def test_every_suite_target_runs_the_suite(target: str) -> None:
+    """Read each suite target as a suite run, and a longer name as none."""
+    assert runs_suite(f"make {target}", "build")
+    assert runs_suite(f"make -j 4 {target}", "build")
+    assert not runs_suite(f"make {target}-not", "build")
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--just-print",
+        "--dry-run",
+        "--recon",
+        "-n",
+        "--question",
+        "-q",
+        "--help",
+        "--version",
+        "-v",
+        "-ns",
+    ],
+)
+def test_every_inert_make_option_runs_no_goal(option: str) -> None:
+    """Refuse to read a make option that runs no goal as a suite run."""
+    assert not runs_suite(f"make {option}", "all")
+    assert not runs_suite(f"make {option} test", "all")
+    assert not runs_suite(f"make test {option}", "all")
+
+
+@pytest.mark.parametrize(
+    "line", ["command -v make test", "command -V make test", "command -V make"]
+)
+def test_command_lookup_runs_nothing(line: str) -> None:
+    """Read `command -v` and `command -V` as running nothing."""
+    assert not runs_suite(line, "all")
+
+
+def _make_default_goal(makefile: str, gnu_make: str) -> str | None:
+    """Return the default goal GNU make itself settles on, or ``None``.
+
+    ``make -pn`` prints the variable database without running a recipe, and
+    ``.DEFAULT_GOAL`` is the value make settled on after reading every
+    assignment (GNU make manual, "Other Special Variables").
+    """
+    result = subprocess.run(  # noqa: S603 - a fixed command and a fixture
+        [gnu_make, "-f", "-", "-pn"],
+        input=makefile,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ["PATH"]},
+    )
+    if result.returncode:
+        return None
+    for line in result.stdout.splitlines():
+        name, _, value = line.replace(" := ", " = ").partition(" = ")
+        if name == ".DEFAULT_GOAL":
+            return value
+    return None
+
+
+MAKE_FIXTURES = [
+    ".PHONY: a\nbuild: x\nx:\n",
+    ".DEFAULT_GOAL := test\nbuild:\ntest:\n",
+    ".DEFAULT_GOAL ?= test\nbuild:\ntest:\n",
+    ".DEFAULT_GOAL = test\nbuild:\ntest:\n",
+    ".DEFAULT_GOAL := first\n.DEFAULT_GOAL := second\nfirst:\nsecond:\nbuild:\n",
+    ".DEFAULT_GOAL := first\n.DEFAULT_GOAL ?= second\nfirst:\nsecond:\n",
+    ".DEFAULT_GOAL ?= second\n.DEFAULT_GOAL := first\nfirst:\nsecond:\n",
+    ".DEFAULT_GOAL := build\nbuild:\ntest:\n.DEFAULT_GOAL := test\n",
+    ".DEFAULT_GOAL := first\n.DEFAULT_GOAL :=\nbuild:\nfirst:\n",
+    ".DEFAULT_GOAL += test\nbuild:\ntest:\n",
+    "# build: not a rule\nrun:\n",
+    ".PHONY: a\n.SUFFIXES:\nrun:\n",
+    "first:\n\t@: .DEFAULT_GOAL = test\nsecond:\n",
+]
+
+
+@pytest.mark.parametrize("makefile", MAKE_FIXTURES)
+def test_the_reader_agrees_with_gnu_make(makefile: str, gnu_make: str) -> None:
+    """Pin the default-goal reader to make itself, not to a reading of its manual."""
+    by_make = _make_default_goal(makefile, gnu_make)
+    assert by_make is not None, "make must accept the fixture"
+    assert default_goal(makefile) == by_make, makefile
+
+
+def test_make_refuses_several_words_and_the_reader_does_not_read_them(
+    gnu_make: str,
+) -> None:
+    """Fall back to the first rule where make refuses a multi-word goal."""
+    makefile = ".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\nfirst:\nsecond:\n"
+    assert _make_default_goal(makefile, gnu_make) is None
+    assert default_goal(makefile) == "build"
+
+
+def _is_the_cucumber_step(name: str, job: str, step: dict[str, typ.Any]) -> bool:
+    """Report whether a step is the one expected cucumber step of ``build-test``.
+
+    ``make test-cucumber`` is a suite run to the reader, so this step is exempted
+    here, by name of workflow, job and exact command, and nowhere else: a second
+    such step, or one in another workflow, still fails the test.
+    """
+    return (
+        (name, job) == ("ci.yml", SUITE_JOB)
+        and str(step.get("run", "")).strip() == CUCUMBER_COMMAND
+    )
+
+
 def test_the_suite_runs_only_in_the_coverage_step() -> None:
     """Refuse any pull-request step that runs the suite outside coverage."""
     goal = _makefile_goal()
@@ -218,6 +358,7 @@ def test_the_suite_runs_only_in_the_coverage_step() -> None:
         (name, job, str(step.get("run", "")).strip())
         for name, job, step in _pull_request_steps()
         if runs_suite(str(step.get("run", "")), goal)
+        and not _is_the_cucumber_step(name, job, step)
     ]
     assert not repeated, f"the suite runs outside coverage in {repeated!r}"
 
