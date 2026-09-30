@@ -361,6 +361,8 @@ async fn worker_retries_after_cooldown(world: &mut QueueWorld) -> anyhow::Result
     let worker = tokio::spawn(async move {
         let _ = run_worker(queue, octocrab, control).await;
     });
+    world.shutdown = Some(shutdown_tx);
+    world.worker = Some(worker);
 
     let attempts = world.attempts.as_ref().context("attempt counter missing")?;
     timeout(std::time::Duration::from_secs(5), async {
@@ -371,8 +373,6 @@ async fn worker_retries_after_cooldown(world: &mut QueueWorld) -> anyhow::Result
     .await
     .context("worker should retry after one cooldown")?;
 
-    world.shutdown = Some(shutdown_tx);
-    world.worker = Some(worker);
     Ok(())
 }
 

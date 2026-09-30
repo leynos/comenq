@@ -107,8 +107,8 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 pub struct PutOptions {
     /// Cooldown between posts, in seconds.
     pub cooldown: u64,
-    /// Flutter ceiling to sample from, in seconds.
-    pub flutter_max: u64,
+    /// Flutter sampled by the daemon when it accepts the put request.
+    pub flutter_seconds: u64,
     /// Post as soon as the queue allows instead of waiting a full cooldown
     /// from enqueue.
     pub immediate: bool,

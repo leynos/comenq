@@ -14,6 +14,7 @@ pub const PROMETHEUS_LISTEN_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 9000);
 const TASK_RESTARTS: &str = "comenqd_task_restarts_total";
 const REQUESTS: &str = "comenqd_requests_total";
 const QUEUE_ENTRIES: &str = "comenqd_queue_entries";
+const QUEUE_BYTES: &str = "comenqd_queue_bytes";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
 const GITHUB_POSTS: &str = "comenqd_github_posts_total";
 const GITHUB_POST_DURATION: &str = "comenqd_github_post_duration_seconds";
@@ -47,6 +48,11 @@ pub(crate) fn record_request(operation: Option<&'static str>, outcome: &'static 
 /// Record the current number of persisted pending entries without labels.
 pub(crate) fn record_queue_entries(count: usize) {
     gauge!(QUEUE_ENTRIES).set(count as f64);
+}
+
+/// Record persisted entry bytes plus reserved mutation headroom without labels.
+pub(crate) fn record_queue_bytes(bytes: u64) {
+    gauge!(QUEUE_BYTES).set(bytes as f64);
 }
 
 /// Record the configured duration of a cooldown wait.
@@ -135,20 +141,30 @@ mod tests {
     }
 
     #[test]
-    fn records_a_label_free_queue_depth_gauge() {
+    fn records_label_free_queue_depth_and_accounted_bytes_gauges() {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
-        with_local_recorder(&recorder, || record_queue_entries(7));
+        with_local_recorder(&recorder, || {
+            record_queue_entries(7);
+            record_queue_bytes(4096);
+        });
         let metrics = snapshotter.snapshot().into_vec();
         let queue_metrics: Vec<_> = metrics
             .iter()
-            .filter(|(key, _, _, _)| key.key().name() == QUEUE_ENTRIES)
+            .filter(|(key, _, _, _)| matches!(key.key().name(), QUEUE_ENTRIES | QUEUE_BYTES))
             .collect();
-        assert_eq!(queue_metrics.len(), 1);
-        assert!(queue_metrics[0].0.key().labels().next().is_none());
-        assert!(
-            matches!(queue_metrics[0].3, DebugValue::Gauge(value) if value.into_inner() == 7.0)
-        );
+        assert_eq!(queue_metrics.len(), 2);
+        for (key, _, _, _) in &queue_metrics {
+            assert!(key.key().labels().next().is_none());
+        }
+        assert!(queue_metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == QUEUE_ENTRIES
+                && matches!(value, DebugValue::Gauge(value) if value.into_inner() == 7.0)
+        }));
+        assert!(queue_metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == QUEUE_BYTES
+                && matches!(value, DebugValue::Gauge(value) if value.into_inner() == 4096.0)
+        }));
     }
 
     #[test]

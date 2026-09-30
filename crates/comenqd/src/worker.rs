@@ -191,9 +191,8 @@ async fn wait_for_scheduled_entry(
 pub struct WorkerControl {
     /// Watch channel used to signal graceful shutdown.
     pub shutdown: watch::Receiver<()>,
-    /// Optional test-observation hooks.
+    /// Optional feature-gated hooks for observing worker progress in tests.
     #[cfg(any(test, feature = "test-support"))]
-    /// Hooks for observing worker progress during tests.
     pub hooks: WorkerHooks,
 }
 
@@ -267,6 +266,7 @@ pub async fn run_worker(
     octocrab: Arc<Octocrab>,
     mut control: WorkerControl,
 ) -> Result<()> {
+    queue.recover_worker_state().await?;
     let config = queue.config().clone();
     loop {
         let due = queue.claim_next_due().await?;

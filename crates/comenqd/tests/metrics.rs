@@ -10,43 +10,8 @@ use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 
-#[tokio::test(flavor = "current_thread")]
-async fn exporter_serves_listener_request_metrics() {
-    install_prometheus().expect("install local Prometheus exporter");
-    let dir = tempdir().expect("create temporary queue directory");
-    let queue = SharedQueue::open(Arc::new(Config {
-        github_token: "token".into(),
-        github_token_file: None,
-        socket_path: dir.path().join("comenq.sock"),
-        queue_path: dir.path().join("queue"),
-        cooldown_period_seconds: 0,
-        cooldown_flutter_seconds: 0,
-        restart_min_delay_ms: 0,
-        github_api_timeout_secs: 1,
-    }))
-    .expect("open queue");
-    let (mut client, server) = UnixStream::pair().expect("create Unix stream pair");
-    let request = comenq_lib::protocol::Request::Put {
-        request: comenq_lib::CommentRequest {
-            owner: "owner".into(),
-            repo: "repo".into(),
-            pr_number: 1,
-            body: "body".into(),
-        },
-        immediate: true,
-    };
-    client
-        .write_all(&serde_json::to_vec(&request).expect("serialize request"))
-        .await
-        .expect("write request");
-    client.shutdown().await.expect("close request");
-    handle_client(server, queue)
-        .await
-        .expect("accept client request");
-    let mut reply = Vec::new();
-    client.read_to_end(&mut reply).await.expect("read reply");
-    assert!(serde_json::from_slice::<comenq_lib::protocol::Response>(&reply).is_ok());
-
+/// Fetch the local metrics endpoint for integration assertions.
+async fn scrape_metrics() -> String {
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(1),
         TcpStream::connect((
@@ -66,8 +31,94 @@ async fn exporter_serves_listener_request_metrics() {
         .read_to_string(&mut response)
         .await
         .expect("read metrics response");
+    response
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exporter_serves_listener_request_metrics() {
+    install_prometheus().expect("install local Prometheus exporter");
+    let dir = tempdir().expect("create temporary queue directory");
+    let queue = SharedQueue::open(Arc::new(Config {
+        github_token: "token".into(),
+        github_token_file: None,
+        socket_path: dir.path().join("comenq.sock"),
+        queue_path: dir.path().join("queue"),
+        cooldown_period_seconds: 0,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: 0,
+        github_api_timeout_secs: 1,
+    }))
+    .expect("open queue");
+    let startup_metrics = scrape_metrics().await;
+    assert!(startup_metrics.contains("comenqd_queue_entries 0"));
+    assert!(startup_metrics.contains("comenqd_queue_bytes 0"));
+
+    let (mut client, server) = UnixStream::pair().expect("create Unix stream pair");
+    let request = comenq_lib::protocol::Request::Put {
+        request: comenq_lib::CommentRequest {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            pr_number: 1,
+            body: "body".into(),
+        },
+        immediate: true,
+    };
+    client
+        .write_all(&serde_json::to_vec(&request).expect("serialize request"))
+        .await
+        .expect("write request");
+    client.shutdown().await.expect("close request");
+    handle_client(server, Arc::clone(&queue))
+        .await
+        .expect("accept client request");
+    let mut reply = Vec::new();
+    client.read_to_end(&mut reply).await.expect("read reply");
+    let put_response = serde_json::from_slice::<comenq_lib::protocol::Response>(&reply)
+        .expect("decode put response");
+    let comenq_lib::protocol::Response::Ok {
+        entry: Some(entry), ..
+    } = put_response
+    else {
+        panic!("expected put entry, got {put_response:?}");
+    };
+    let persisted_bytes = std::fs::metadata(
+        dir.path()
+            .join("queue/entries")
+            .join(format!("{}.json", entry.id)),
+    )
+    .expect("read persisted entry metadata")
+    .len();
+    let expected_accounted_bytes = persisted_bytes + 80;
+
+    let (mut malformed_client, malformed_server) =
+        UnixStream::pair().expect("create malformed-request stream pair");
+    malformed_client
+        .write_all(b"not json")
+        .await
+        .expect("write malformed request");
+    malformed_client
+        .shutdown()
+        .await
+        .expect("close malformed request");
+    handle_client(malformed_server, Arc::clone(&queue))
+        .await
+        .expect("reply to malformed request");
+    let mut malformed_reply = Vec::new();
+    malformed_client
+        .read_to_end(&mut malformed_reply)
+        .await
+        .expect("read malformed-request response");
+    assert!(matches!(
+        serde_json::from_slice::<comenq_lib::protocol::Response>(&malformed_reply),
+        Ok(comenq_lib::protocol::Response::Error { .. })
+    ));
+
+    let response = scrape_metrics().await;
 
     assert!(response.starts_with("HTTP/1.1 200"));
     assert!(response.contains("comenqd_requests_total{operation=\"put\",outcome=\"accepted\"}"));
     assert!(response.contains("comenqd_queue_entries 1"));
+    assert!(response.contains(&format!("comenqd_queue_bytes {expected_accounted_bytes}")));
+    assert!(response.contains("comenqd_requests_total{outcome=\"failed\"} 1"));
+    assert!(!response.contains("comenqd_requests_total{outcome=\"accepted\"}"));
 }

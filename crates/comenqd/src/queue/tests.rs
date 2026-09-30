@@ -1,6 +1,6 @@
 //! Deterministic tests for shared queue scheduling and request handling.
 
-use super::{SharedQueue, StoredEntry, UnixClock};
+use super::{FlutterSampler, SharedQueue, StoredEntry, UnixClock};
 use crate::config::Config;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, Request, Response};
@@ -80,6 +80,56 @@ impl UnixClock for FixedClock {
     fn unix_now(&self) -> u64 {
         self.0
     }
+}
+
+#[derive(Debug)]
+struct FixedFlutter(u64);
+
+impl FlutterSampler for FixedFlutter {
+    fn sample(&self, maximum: u64) -> u64 {
+        self.0.min(maximum)
+    }
+}
+
+/// Verify enqueue uses the injected flutter sample.
+#[tokio::test]
+async fn put_uses_the_injected_flutter_sample() {
+    let dir = tempdir().expect("create temporary queue directory");
+    let queue = SharedQueue::open_with_clock_and_flutter(
+        Arc::new(Config {
+            github_token: "token".into(),
+            github_token_file: None,
+            socket_path: dir.path().join("comenq.sock"),
+            queue_path: dir.path().join("queue"),
+            cooldown_period_seconds: 600,
+            cooldown_flutter_seconds: 240,
+            restart_min_delay_ms: 1,
+            github_api_timeout_secs: 1,
+        }),
+        Arc::new(FixedClock(1_000)),
+        Arc::new(FixedFlutter(37)),
+    )
+    .expect("open queue");
+
+    let response = queue
+        .execute(Request::Put {
+            request: CommentRequest {
+                owner: "octocat".into(),
+                repo: "hello-world".into(),
+                pr_number: 7,
+                body: "comment".into(),
+            },
+            immediate: false,
+        })
+        .await;
+
+    assert!(matches!(
+        response,
+        Response::Ok {
+            entry: Some(entry),
+            ..
+        } if entry.eta_seconds == 637
+    ));
 }
 
 #[tokio::test]

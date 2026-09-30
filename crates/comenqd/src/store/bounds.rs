@@ -21,6 +21,13 @@ pub(super) struct QueueUsage {
     headroom_bytes: u64,
 }
 
+impl QueueUsage {
+    /// Return persisted bytes plus reserved mutation headroom.
+    fn accounted_bytes(self) -> u64 {
+        self.bytes.saturating_add(self.headroom_bytes)
+    }
+}
+
 impl QueueStore {
     /// Validate startup data after bounded entry reads account for reservations.
     pub(super) fn validate_existing_limits(&self) -> Result<()> {
@@ -31,6 +38,12 @@ impl QueueStore {
     /// Return pending entries in posting order, skipping unreadable records.
     pub fn entries(&self) -> Result<Vec<StoredEntry>> {
         self.entries_with_usage().map(|(entries, _)| entries)
+    }
+
+    /// Return the valid entry count and accounted bytes for queue metrics.
+    pub(crate) fn queue_metrics_snapshot(&self) -> Result<(usize, u64)> {
+        let (entries, usage) = self.entries_with_usage()?;
+        Ok((entries.len(), usage.accounted_bytes()))
     }
 
     /// Read a bounded directory snapshot and retain its metadata for admission.

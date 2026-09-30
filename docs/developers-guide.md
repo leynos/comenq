@@ -68,11 +68,12 @@ The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
 queue rejects `put` before persisting a new entry.
 
-When a comment is enqueued, the worker chooses a uniformly distributed flutter
-and stores it with that entry. The stored flutter is added to the complete base
-cooldown and never shortens it, keeping the queue's cooldown-derived ETA
-stable. Keep this operational rule aligned across configuration, worker tests,
-the [users' guide](users-guide.md), and the design document.
+When the daemon accepts a comment for enqueueing, it chooses a uniformly
+distributed flutter and stores it with that entry. The stored flutter is added
+to the complete base cooldown and never shortens it, keeping the queue's
+cooldown-derived ETA stable. Keep this operational rule aligned across
+configuration, worker tests, the [users' guide](users-guide.md), and the design
+document.
 
 ### Configuration API
 
@@ -107,6 +108,8 @@ The stable metric vocabulary is:
   `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
   `rejected`); requests without a parsed operation omit the `operation` label.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
+- `comenqd_queue_bytes` for persisted entry-record bytes plus reserved
+  mutation headroom, without labels.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 - `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
   comment-post outcomes.

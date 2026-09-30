@@ -130,6 +130,8 @@ The stable metric names and labels are:
   `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
   `rejected`); requests without a parsed operation omit the `operation` label.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
+- `comenqd_queue_bytes` for persisted entry-record bytes plus reserved
+  mutation headroom, without labels.
 - `comenqd_cooldown_wait_duration_seconds` for cooldown wait durations.
 - `comenqd_github_posts_total{outcome=success|api_error|timeout}` for GitHub
   comment-post outcomes.

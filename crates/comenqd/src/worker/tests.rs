@@ -89,6 +89,87 @@ async fn notify_one_buffers_permit_when_no_waiters() {
     );
 }
 
+/// Verify a restarted worker recovers and posts a claim on the shared queue.
+#[tokio::test]
+async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
+    let dir = tempdir().expect("create temporary queue directory");
+    let queue = SharedQueue::open(Arc::new(Config::from(temp_config(&dir).with_cooldown(0))))
+        .expect("open queue");
+    let put = queue
+        .execute(Request::Put {
+            request: CommentRequest {
+                owner: "octocat".into(),
+                repo: "hello-world".into(),
+                pr_number: 7,
+                body: "recover claim".into(),
+            },
+            immediate: true,
+        })
+        .await;
+    let comenq_lib::protocol::Response::Ok {
+        entry: Some(entry), ..
+    } = put
+    else {
+        panic!("expected queued entry, got {put:?}");
+    };
+    let (claimed, wait_seconds) = queue
+        .claim_next_due()
+        .await
+        .expect("claim queued entry")
+        .expect("entry is due");
+    assert_eq!(claimed.id, entry.id);
+    assert_eq!(wait_seconds, 0);
+    assert!(claimed.claim_token.is_some());
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/octocat/hello-world/issues/7/comments"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(
+                serde_json::from_str::<serde_json::Value>(include_str!(
+                    "../../tests/fixtures/github_comment_response.json"
+                ))
+                .expect("parse GitHub comment fixture"),
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let octocrab = octocrab_for(&server).expect("create GitHub client");
+    let idle = Arc::new(Notify::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let worker = tokio::spawn(run_worker(
+        Arc::clone(&queue),
+        octocrab,
+        WorkerControl::new(
+            shutdown_rx,
+            WorkerHooks {
+                enqueued: None,
+                idle: Some(Arc::clone(&idle)),
+                drained: None,
+                waiting: None,
+            },
+        ),
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), idle.notified())
+        .await
+        .expect("restarted worker should post the recovered entry");
+    assert!(matches!(
+        queue.execute(Request::List).await,
+        comenq_lib::protocol::Response::Ok {
+            entries: Some(entries),
+            ..
+        } if entries.is_empty()
+    ));
+
+    shutdown_tx.send(()).expect("signal shutdown");
+    worker
+        .await
+        .expect("worker task should not panic")
+        .expect("worker should exit cleanly");
+}
+
 #[tokio::test]
 async fn failed_post_retries_after_a_full_cooldown() {
     let dir = tempdir().expect("create temporary queue directory");
