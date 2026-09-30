@@ -3,7 +3,6 @@
 use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::MAX_PENDING_ENTRIES;
-use rand::Rng;
 use uuid::Uuid;
 
 impl QueueStore {
@@ -31,23 +30,18 @@ impl QueueStore {
             return Err(StoreError::QueueFull(MAX_PENDING_ENTRIES));
         }
 
-        let flutter_seconds = if options.flutter_max == 0 {
-            0
-        } else {
-            rand::rng().random_range(0..=options.flutter_max)
-        };
         let entry = StoredEntry {
             id,
             order: entries
                 .last()
                 .map_or(0, |tail| tail.order.saturating_add(1)),
-            flutter_seconds,
+            flutter_seconds: options.flutter_seconds,
             enqueued_at: now,
             not_before: if options.immediate {
                 0
             } else {
                 now.saturating_add(options.cooldown)
-                    .saturating_add(flutter_seconds)
+                    .saturating_add(options.flutter_seconds)
             },
             claim_token: None,
             request,
@@ -61,7 +55,7 @@ impl QueueStore {
         Ok((entry, eta))
     }
 
-    /// Enqueue `request` at the tail, sampling its flutter now.
+    /// Enqueue `request` at the tail using its supplied flutter sample.
     pub fn put(
         &self,
         request: CommentRequest,
@@ -129,6 +123,13 @@ impl QueueStore {
             }
         }
         Ok(())
+    }
+
+    /// Reconcile an interrupted completion before reclaiming claims from an
+    /// earlier worker that used this still-open store.
+    pub(crate) fn recover_worker_state(&self) -> Result<()> {
+        self.reconcile_completion()?;
+        self.reclaim_claims()
     }
 }
 

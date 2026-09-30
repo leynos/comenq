@@ -228,7 +228,7 @@ async fn handle_client_inner(
         }
         Err(e) => (
             Response::error(format!("invalid request: {e}")),
-            ClientOutcome::Accepted,
+            ClientOutcome::Failed,
             None,
         ),
     };

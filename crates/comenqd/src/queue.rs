@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, Request, Response};
+use rand::Rng;
 use tokio::sync::Notify;
 
 use crate::config::Config;
@@ -33,6 +34,23 @@ pub trait UnixClock: Debug + Send + Sync {
     fn unix_now(&self) -> u64;
 }
 
+trait FlutterSampler: Debug + Send + Sync {
+    fn sample(&self, maximum: u64) -> u64;
+}
+
+#[derive(Debug)]
+struct RandomFlutterSampler;
+
+impl FlutterSampler for RandomFlutterSampler {
+    fn sample(&self, maximum: u64) -> u64 {
+        if maximum == 0 {
+            0
+        } else {
+            rand::rng().random_range(0..=maximum)
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SystemClock;
 
@@ -48,6 +66,7 @@ pub struct SharedQueue {
     cfg: Arc<Config>,
     store: Arc<Mutex<QueueStore>>,
     clock: Arc<dyn UnixClock>,
+    flutter_sampler: Arc<dyn FlutterSampler>,
     changed: Notify,
 }
 
@@ -59,12 +78,24 @@ impl SharedQueue {
 
     /// Open the queue store using `clock` for persisted scheduling timestamps.
     pub fn open_with_clock(cfg: Arc<Config>, clock: Arc<dyn UnixClock>) -> StoreResult<Arc<Self>> {
+        Self::open_with_clock_and_flutter(cfg, clock, Arc::new(RandomFlutterSampler))
+    }
+
+    /// Open a queue with explicit wall-clock and enqueue-flutter sources.
+    fn open_with_clock_and_flutter(
+        cfg: Arc<Config>,
+        clock: Arc<dyn UnixClock>,
+        flutter_sampler: Arc<dyn FlutterSampler>,
+    ) -> StoreResult<Arc<Self>> {
         let store = QueueStore::open(&cfg.queue_path)?;
-        metrics::record_queue_entries(store.entries()?.len());
+        let (entry_count, accounted_bytes) = store.queue_metrics_snapshot()?;
+        metrics::record_queue_entries(entry_count);
+        metrics::record_queue_bytes(accounted_bytes);
         Ok(Arc::new(Self {
             cfg,
             store: Arc::new(Mutex::new(store)),
             clock,
+            flutter_sampler,
             changed: Notify::new(),
         }))
     }
@@ -97,8 +128,20 @@ impl SharedQueue {
     pub async fn claim_next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
-        self.with_store(move |store| store.claim_next_due(cooldown, now))
-            .await
+        let result = self
+            .with_store(move |store| store.claim_next_due(cooldown, now))
+            .await;
+        if matches!(&result, Ok(Some((_, 0)))) {
+            self.update_queue_gauges().await;
+        }
+        result
+    }
+
+    /// Reconcile interrupted completion and release claims from a prior worker.
+    pub(crate) async fn recover_worker_state(&self) -> StoreResult<()> {
+        self.with_store(QueueStore::recover_worker_state).await?;
+        self.update_queue_gauges().await;
+        Ok(())
     }
 
     /// Remove the posted entry and record the posting time.
@@ -109,7 +152,7 @@ impl SharedQueue {
             .with_store(move |store| store.complete_claim(&id, claim_token.as_deref(), now))
             .await;
         if result.is_ok() {
-            self.update_queue_gauge().await;
+            self.update_queue_gauges().await;
         }
         result
     }
@@ -118,8 +161,13 @@ impl SharedQueue {
     pub async fn release_claim(&self, id: &str, claim_token: &str) -> StoreResult<()> {
         let id = id.to_owned();
         let claim_token = claim_token.to_owned();
-        self.with_store(move |store| store.release_claim(&id, &claim_token))
-            .await
+        let result = self
+            .with_store(move |store| store.release_claim(&id, &claim_token))
+            .await;
+        if result.is_ok() {
+            self.update_queue_gauges().await;
+        }
+        result
     }
 
     /// Execute a protocol request and produce the reply.
@@ -151,7 +199,7 @@ impl SharedQueue {
         match response {
             Ok(reply) => {
                 if mutated {
-                    self.update_queue_gauge().await;
+                    self.update_queue_gauges().await;
                     // notify_one buffers a permit, so a worker that is busy
                     // computing rather than parked still observes the change.
                     self.changed.notify_one();
@@ -167,11 +215,12 @@ impl SharedQueue {
         validate_request(&request)?;
         let cooldown = self.cfg.cooldown_period_seconds;
         let flutter_max = self.cfg.cooldown_flutter_seconds;
+        let flutter_seconds = self.flutter_sampler.sample(flutter_max).min(flutter_max);
         let now = self.clock.unix_now();
         self.with_store(move |store| {
             let options = PutOptions {
                 cooldown,
-                flutter_max,
+                flutter_seconds,
                 immediate,
             };
             store
@@ -209,13 +258,13 @@ impl SharedQueue {
         .await?
     }
 
-    async fn update_queue_gauge(&self) {
-        match self
-            .with_store(|store| store.entries().map(|entries| entries.len()))
-            .await
-        {
-            Ok(count) => metrics::record_queue_entries(count),
-            Err(error) => tracing::warn!(error = %error, "Failed to refresh queue-depth metric"),
+    async fn update_queue_gauges(&self) {
+        match self.with_store(QueueStore::queue_metrics_snapshot).await {
+            Ok((count, bytes)) => {
+                metrics::record_queue_entries(count);
+                metrics::record_queue_bytes(bytes);
+            }
+            Err(error) => tracing::warn!(error = %error, "Failed to refresh queue metrics"),
         }
     }
 }
