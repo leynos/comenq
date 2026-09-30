@@ -90,6 +90,18 @@ the first cold run is allowed a five-minute slow-test period in
 `.config/nextest.toml`. The complete `nextest` run has a 10-minute global
 timeout, after which `make test` runs the Cucumber test target separately.
 
+Pull requests run the suite once. In `ci.yml`'s `build-test` job the coverage
+step selects every workspace target and every feature (`all-targets` and
+`all-features`), the scope `make test`'s `nextest` run has, so it is the only
+step that runs the `nextest` suite. The Cucumber harness has its own `main`,
+which `nextest` cannot execute, so `build-test` runs it in a step of its own
+with `make test-cucumber`, the target `make test` calls after `nextest`.
+`tests/workflow_contracts/suite_runs_once_test.py` holds the split: it reads
+each pull-request step by the command it runs (through
+`tests/workflow_contracts/suite_commands.py`, which splits a command the way
+the shell does), refuses a second suite run, and requires the coverage step's
+scope and the Cucumber step to stay. `make test-workflow-contracts` runs it.
+
 ## Automated packaging
 
 `make release` builds a local optimized binary and requires the Rust toolchain.

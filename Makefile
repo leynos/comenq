@@ -1,4 +1,4 @@
-.PHONY: help all clean test test-cov test-cov-lcov test-workflow-contracts build release lint typecheck fmt check-fmt markdownlint nixie spelling
+.PHONY: help all clean test test-cucumber test-cov test-cov-lcov test-workflow-contracts build release lint typecheck fmt check-fmt markdownlint nixie spelling
 
 APP ?= comenq
 CARGO ?= cargo
@@ -52,6 +52,9 @@ clean: ## Remove build artefacts
 
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace --all-targets --all-features $(BUILD_JOBS)
+	$(MAKE) test-cucumber
+
+test-cucumber: ## Run the cucumber scenarios, which nextest cannot execute
 	RUSTFLAGS="-D warnings" $(CARGO) test --workspace --all-features --test cucumber $(BUILD_JOBS)
 
 test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
