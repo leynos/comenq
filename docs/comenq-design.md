@@ -753,9 +753,9 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
 | queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, and the `completion` recovery record, managed by `QueueStore`).                                                                                     | /var/lib/comenq/queue                                                                                          |
-| log_level                | String  | The minimum log level to record (e.g., "info", "debug", "trace").                                                                                                                                                          | info                                                                                                           |
 | cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
 | cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
+| github_api_timeout_secs  | u64     | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
 | restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
 Configuration is loaded using the `ortho_config` crate. The daemon calls
@@ -766,9 +766,10 @@ finally the configuration file. Missing optional fields are replaced with
 defaults, while an absent `github_token` or invalid TOML results in a
 configuration error.
 
-Robust logging is non-negotiable for a background process. The `tracing` crate
-with `tracing-subscriber` will be used to provide structured, asynchronous
-logging. Key events to be logged include:
+Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
+daemon configuration field. Robust logging is non-negotiable for a background
+process. The `tracing` crate with `tracing-subscriber` will be used to provide
+structured, asynchronous logging. Key events to be logged include:
 
 - Daemon startup and shutdown.
 

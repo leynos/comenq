@@ -10,7 +10,6 @@ use tempfile::tempdir;
 use test_support::octocrab_for;
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
-use tracing::instrument::WithSubscriber;
 use tracing::span::{Attributes, Id, Record};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
@@ -56,11 +55,8 @@ impl<S> Layer<S> for PostSpanCollector
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        if ctx
-            .span(id)
-            .is_none_or(|span| span.metadata().name() != POST_SPAN)
-        {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
+        if attrs.metadata().name() != POST_SPAN {
             return;
         }
         let mut fields = FieldCollector::default();
@@ -88,8 +84,8 @@ where
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn github_post_span_records_only_bounded_outcomes() {
+#[test]
+fn github_post_span_records_only_bounded_outcomes() {
     let request = CommentRequest {
         owner: "owner".into(),
         repo: "repo".into(),
@@ -98,56 +94,61 @@ async fn github_post_span_records_only_bounded_outcomes() {
     };
     let collector = PostSpanCollector::default();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
+    let dispatch = tracing::Dispatch::new(subscriber);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build post-span test runtime");
 
-    async {
-        let success_server = MockServer::start().await;
-        let response_body: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/github_comment_response.json"
-        ))
-        .expect("parse GitHub comment response fixture");
-        Mock::given(method("POST"))
-            .and(path("/repos/owner/repo/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(response_body))
-            .mount(&success_server)
-            .await;
-        let success_client = octocrab_for(&success_server).expect("build success client");
-        let (_success_dir, success_config) = config_with_api_timeout(1);
-        assert!(
-            post_comment_with_metrics(&success_client, &request, &success_config)
-                .await
-                .is_ok()
-        );
+    tracing::dispatcher::with_default(&dispatch, || {
+        runtime.block_on(async {
+            let success_server = MockServer::start().await;
+            let response_body: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/github_comment_response.json"
+            ))
+            .expect("parse GitHub comment response fixture");
+            Mock::given(method("POST"))
+                .and(path("/repos/owner/repo/issues/1/comments"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(response_body))
+                .mount(&success_server)
+                .await;
+            let success_client = octocrab_for(&success_server).expect("build success client");
+            let (_success_dir, success_config) = config_with_api_timeout(1);
+            assert!(
+                post_comment_with_metrics(&success_client, &request, &success_config)
+                    .await
+                    .is_ok()
+            );
 
-        let error_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/repos/owner/repo/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&error_server)
-            .await;
-        let error_client = octocrab_for(&error_server).expect("build error client");
-        let (_error_dir, error_config) = config_with_api_timeout(1);
-        assert!(
-            post_comment_with_metrics(&error_client, &request, &error_config)
-                .await
-                .is_err()
-        );
+            let error_server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/repos/owner/repo/issues/1/comments"))
+                .respond_with(ResponseTemplate::new(500))
+                .mount(&error_server)
+                .await;
+            let error_client = octocrab_for(&error_server).expect("build error client");
+            let (_error_dir, error_config) = config_with_api_timeout(1);
+            assert!(
+                post_comment_with_metrics(&error_client, &request, &error_config)
+                    .await
+                    .is_err()
+            );
 
-        let timeout_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/repos/owner/repo/issues/1/comments"))
-            .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_secs(1)))
-            .mount(&timeout_server)
-            .await;
-        let timeout_client = octocrab_for(&timeout_server).expect("build timeout client");
-        let (_timeout_dir, timeout_config) = config_with_api_timeout(0);
-        assert!(
-            post_comment_with_metrics(&timeout_client, &request, &timeout_config)
-                .await
-                .is_err()
-        );
-    }
-    .with_subscriber(subscriber)
-    .await;
+            let timeout_server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/repos/owner/repo/issues/1/comments"))
+                .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_secs(1)))
+                .mount(&timeout_server)
+                .await;
+            let timeout_client = octocrab_for(&timeout_server).expect("build timeout client");
+            let (_timeout_dir, timeout_config) = config_with_api_timeout(0);
+            assert!(
+                post_comment_with_metrics(&timeout_client, &request, &timeout_config)
+                    .await
+                    .is_err()
+            );
+        });
+    });
 
     let spans = collector.spans.lock().expect("read post-span collector");
     assert_eq!(spans.len(), 3);

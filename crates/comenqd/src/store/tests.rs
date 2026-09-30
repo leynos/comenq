@@ -21,11 +21,11 @@ fn open_store(dir: &TempDir) -> QueueStore {
     QueueStore::open(dir.path()).expect("open store")
 }
 
-/// Options for an immediate put with the given flutter ceiling.
-fn immediate(flutter_max: u64) -> PutOptions {
+/// Options for an immediate put with the given sampled flutter.
+fn immediate(flutter_seconds: u64) -> PutOptions {
     PutOptions {
         cooldown: 600,
-        flutter_max,
+        flutter_seconds,
         immediate: true,
     }
 }
@@ -34,7 +34,7 @@ fn immediate(flutter_max: u64) -> PutOptions {
 fn deferred() -> PutOptions {
     PutOptions {
         cooldown: 600,
-        flutter_max: 0,
+        flutter_seconds: 0,
         immediate: false,
     }
 }
@@ -76,14 +76,14 @@ fn put_preserves_arrival_order() {
 }
 
 #[rstest]
-fn put_samples_flutter_within_bounds() {
+fn put_persists_the_supplied_flutter() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     for i in 0..50 {
         let entry = store
             .put(request(&format!("body {i}")), &immediate(240), 1000 + i)
             .expect("put entry");
-        assert!(entry.flutter_seconds <= 240);
+        assert_eq!(entry.flutter_seconds, 240);
     }
     let zero = store
         .put(request("plain"), &immediate(0), 2000)
@@ -327,6 +327,32 @@ fn entries_survive_reopen() {
     assert_eq!(ids(&reopened), vec![a.id]);
 }
 
+/// Verify reopening a store reclaims an entry left claimed by a prior worker.
+#[rstest]
+fn reopening_store_reclaims_a_claimed_entry() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("interrupted"), &immediate(0), 1000)
+        .expect("put entry");
+    let (claimed, wait_seconds) = store
+        .claim_next_due(600, 1000)
+        .expect("claim entry")
+        .expect("entry is due");
+    assert_eq!(wait_seconds, 0);
+    assert!(claimed.claim_token.is_some());
+    drop(store);
+
+    let reopened = open_store(&dir);
+    let (reclaimed, wait_seconds) = reopened
+        .claim_next_due(600, 1000)
+        .expect("claim recovered entry")
+        .expect("entry is due after reopen");
+    assert_eq!(reclaimed.id, entry.id);
+    assert_eq!(wait_seconds, 0);
+    assert!(reclaimed.claim_token.is_some());
+}
+
 #[rstest]
 fn identical_put_within_the_same_second_is_idempotent() {
     let dir = TempDir::new().expect("tempdir");
@@ -387,20 +413,41 @@ fn deferred_floor_never_shortens_the_chain_schedule() {
     assert_eq!(*eta, 599);
 }
 
+/// Verify bumping a deferred entry preserves its enqueue-time floor.
+#[rstest]
+fn bumping_a_deferred_entry_preserves_its_enqueue_floor() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    store
+        .put(request("predecessor"), &immediate(0), 1000)
+        .expect("put predecessor");
+    let deferred_entry = store
+        .put(request("deferred"), &deferred(), 1000)
+        .expect("put deferred entry");
+
+    store.bump(&deferred_entry.id).expect("bump deferred entry");
+    let schedule = store.schedule(600, 1000).expect("schedule");
+
+    assert_eq!(schedule[0].0.id, deferred_entry.id);
+    assert_eq!(schedule[0].0.not_before, 1600);
+    assert_eq!(schedule[0].1, 600);
+    assert!(schedule[1].1 >= schedule[0].1);
+}
+
 #[rstest]
 fn deferred_floor_includes_the_entry_flutter() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let options = PutOptions {
         cooldown: 600,
-        flutter_max: 240,
+        flutter_seconds: 240,
         immediate: false,
     };
     let entry = store.put(request("a"), &options, 1000).expect("put");
     assert_eq!(
         entry.not_before,
         1600 + entry.flutter_seconds,
-        "floor must be enqueue + cooldown + sampled flutter"
+        "floor must be enqueue + cooldown + supplied flutter"
     );
 }
 
@@ -470,13 +517,13 @@ proptest! {
     fn arbitrary_queue_operations_preserve_order_and_schedule(
         operations in prop::collection::vec((0_u8..3, 0_usize..16), 1..48),
         cooldown in any::<u64>(),
-        flutter_max in any::<u64>(),
+        flutter_seconds in any::<u64>(),
     ) {
         let dir = TempDir::new().expect("tempdir");
         let store = open_store(&dir);
         let options = PutOptions {
             cooldown,
-            flutter_max,
+            flutter_seconds,
             immediate: true,
         };
         let mut expected = Vec::new();
