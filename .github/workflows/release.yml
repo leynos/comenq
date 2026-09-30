@@ -59,7 +59,7 @@ jobs:
           publish: ${{ inputs.publish }}
       - name: Read package version
         id: ensure_version
-        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@d4d248bbbecdcf7b4f5bc79ffd4d6caee370bd79
         with:
           check-tag: ${{ fromJSON(steps.release_modes.outputs.should-publish) }}
 
