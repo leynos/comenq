@@ -13,7 +13,7 @@ use super::config::{Flags, LINKER_FLAG, Pin, Problems, THREADS_FLAG};
 const DEVELOPMENT_TARGETS: &[&str] = &["test", "typecheck", "lint", "build"];
 /// Makefile targets that measure or ship, so every command assigns `RUSTFLAGS`
 /// and none carries a standard flag.
-const HELD_OUT_TARGETS: &[&str] = &["release"];
+const HELD_OUT_TARGETS: &[&str] = &["test-cov", "test-cov-lcov", "release"];
 
 /// The host `make` is told it runs on, through `BUILD_HOST_OS`.
 #[derive(Clone, Copy)]
@@ -105,6 +105,8 @@ pub fn commands_from(stdout: &str) -> Result<Vec<Assignment>, String> {
     joined
         .lines()
         .filter(|line| !line.trim_start().starts_with("echo"))
+        // A tool-availability probe names Cargo but runs no build.
+        .filter(|line| !line.trim_start().starts_with("command -v"))
         .filter(|line| line.contains("cargo") || line.contains("whitaker"))
         .map(assigned_rustflags)
         .collect()
