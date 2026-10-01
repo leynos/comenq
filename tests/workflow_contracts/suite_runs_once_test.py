@@ -439,27 +439,65 @@ def _dry_run(target: str, gnu_make: str) -> list[str]:
 
 
 def test_make_test_runs_nextest_then_the_cucumber_target(gnu_make: str) -> None:
-    """Assert the commands and order `make test` would run, not the recipe text."""
+    """Assert the commands and order `make test` would run, not the recipe text.
+
+    Parameters
+    ----------
+    gnu_make : str
+        The path of a GNU make, from the shared fixture.
+
+    Returns
+    -------
+    None
+        The test passes when the expanded commands match, in order.
+    """
     commands = _dry_run("test", gnu_make)
     assert commands == [
         'RUSTFLAGS="-D warnings" cargo nextest run --workspace --all-targets --all-features',
         "make test-cucumber",
         'RUSTFLAGS="-D warnings" cargo test --workspace --all-features --test cucumber',
-    ]
+    ], (
+        "`make test` must run nextest over every target and feature, then "
+        f"`make test-cucumber`, then the harness; it would run {commands!r}"
+    )
 
 
 def test_make_test_cucumber_runs_the_harness_over_the_workspace(gnu_make: str) -> None:
-    """Assert the one command `make test-cucumber` would run."""
-    assert _dry_run("test-cucumber", gnu_make) == [
+    """Assert the one command `make test-cucumber` would run.
+
+    Parameters
+    ----------
+    gnu_make : str
+        The path of a GNU make, from the shared fixture.
+
+    Returns
+    -------
+    None
+        The test passes when the single expanded command matches.
+    """
+    commands = _dry_run("test-cucumber", gnu_make)
+    assert commands == [
         'RUSTFLAGS="-D warnings" cargo test --workspace --all-features --test cucumber'
-    ]
+    ], (
+        "`make test-cucumber` must run only the cucumber harness over the "
+        f"workspace with every feature; it would run {commands!r}"
+    )
 
 
 def test_the_cucumber_target_is_declared_phony() -> None:
-    """Require `test-cucumber` among the `.PHONY` targets, so a file of that name cannot hide it."""
+    """Require `test-cucumber` among the `.PHONY` targets, so a file of that name cannot hide it.
+
+    Returns
+    -------
+    None
+        The test passes when the target is declared phony.
+    """
     declared = next(
         line
         for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
         if line.startswith(".PHONY:")
     )
-    assert "test-cucumber" in declared.split()
+    assert "test-cucumber" in declared.split(), (
+        "the Makefile's `.PHONY` declaration must list `test-cucumber`, so a "
+        f"file of that name cannot stop the target running; it declares {declared!r}"
+    )
