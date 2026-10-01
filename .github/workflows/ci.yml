@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Setup Rust
         uses: leynos/shared-actions/.github/actions/setup-rust@d4d248bbbecdcf7b4f5bc79ffd4d6caee370bd79
+        with:
+          install-mold: 'true'
       - name: Install nextest
         uses: taiki-e/install-action@db22c42b5af88356329b9a8056bb2c2f026d5a10
         with:
@@ -59,6 +61,11 @@ jobs:
       - name: Set up isolated Rust for Merman
         run: rustup toolchain install 1.95.0 --profile minimal
       - name: Install Merman CLI
+        # Runs from the checkout, so Cargo reads .cargo/config.toml; the
+        # stable 1.95.0 toolchain must never see its nightly-only `-Zthreads`
+        # flag, and an assigned RUSTFLAGS displaces every `rustflags` table.
+        env:
+          RUSTFLAGS: -D warnings
         run: cargo +1.95.0 install merman-cli --version '=0.7.0' --locked
       - name: Spelling
         run: make spelling
@@ -69,6 +76,12 @@ jobs:
       - name: Test Only
         run: make test
       - name: Test and Measure Coverage
+        env:
+          # One of the two exclusions from the build standard: a coverage build is
+          # a measurement, so it takes neither the parallel frontend nor the mold
+          # linker. Assigning RUSTFLAGS displaces every `rustflags` table in
+          # .cargo/config.toml.
+          RUSTFLAGS: -D warnings
         uses: leynos/shared-actions/.github/actions/generate-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
         with:
           output-path: lcov.info
