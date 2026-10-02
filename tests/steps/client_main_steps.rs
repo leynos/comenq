@@ -1,13 +1,12 @@
 //! Behavioural test steps for the client binary's interaction with the daemon.
-
 use anyhow::Context as _;
-use comenq::{Args, ClientError, run};
-use comenq_lib::CommentRequest;
+use comenq::{Args, ClientError, Command, run};
+use comenq_lib::protocol::{PendingEntry, Request, Response};
 use cucumber::{World, given, then, when};
 use std::fs;
 use tempfile::TempDir;
 use test_support::EnvVarGuard;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
 #[derive(Debug, Default, World)]
@@ -22,11 +21,31 @@ pub struct ClientWorld {
 /// Build the default client arguments targeting `socket`.
 fn base_args(socket: std::path::PathBuf) -> anyhow::Result<Args> {
     Ok(Args {
-        repo_slug: "octocat/hello-world".parse().context("slug")?,
-        pr_number: 1,
-        comment_body: "Hi".into(),
         socket: Some(socket),
+        command: Command::Put {
+            repo_slug: "octocat/hello-world".parse().context("slug")?,
+            pr_number: 1,
+            comment_body: "Hi".into(),
+            now: false,
+        },
     })
+}
+
+/// Serve one default `put` transaction and return its request bytes.
+async fn serve_one_put(mut stream: tokio::net::UnixStream) -> anyhow::Result<Vec<u8>> {
+    let mut request = Vec::new();
+    stream.read_to_end(&mut request).await.context("read")?;
+    let response = Response::entry(PendingEntry {
+        id: "1a2b3c4d".into(),
+        eta_seconds: 0,
+        owner: "octocat".into(),
+        repo: "hello-world".into(),
+        pr_number: 1,
+        body: "Hi".into(),
+    });
+    let bytes = serde_json::to_vec(&response).context("serialize reply")?;
+    stream.write_all(&bytes).await.context("write reply")?;
+    Ok(request)
 }
 
 #[given("a dummy daemon listening on a socket")]
@@ -36,10 +55,8 @@ fn dummy_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
     let listener = UnixListener::bind(&socket).context("bind")?;
 
     let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.context("accept")?;
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).await.context("read")?;
-        Ok(buf)
+        let (stream, _) = listener.accept().await.context("accept")?;
+        serve_one_put(stream).await
     });
 
     world.args = Some(base_args(socket)?);
@@ -57,17 +74,18 @@ fn user_runtime_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
     let listener = UnixListener::bind(&socket).context("bind")?;
 
     let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.context("accept")?;
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).await.context("read")?;
-        Ok(buf)
+        let (stream, _) = listener.accept().await.context("accept")?;
+        serve_one_put(stream).await
     });
 
     world.args = Some(Args {
-        repo_slug: "octocat/hello-world".parse().context("slug")?,
-        pr_number: 1,
-        comment_body: "Hi".into(),
         socket: None,
+        command: Command::Put {
+            repo_slug: "octocat/hello-world".parse().context("slug")?,
+            pr_number: 1,
+            comment_body: "Hi".into(),
+            now: false,
+        },
     });
     world.runtime_dir_guard = Some(EnvVarGuard::set(
         "XDG_RUNTIME_DIR",
@@ -100,7 +118,15 @@ async fn send_request(world: &mut ClientWorld) -> anyhow::Result<()> {
 async fn daemon_receives(world: &mut ClientWorld) -> anyhow::Result<()> {
     let handle = world.server.take().context("server handle")?;
     let data = handle.await.context("join")??;
-    let req: CommentRequest = serde_json::from_slice(&data).context("parse")?;
+    let request: Request = serde_json::from_slice(&data).context("parse")?;
+    let Request::Put {
+        request: req,
+        immediate,
+    } = request
+    else {
+        anyhow::bail!("expected put request, got {request:?}");
+    };
+    anyhow::ensure!(!immediate, "plain put must not request immediate posting");
     assert_eq!(req.owner, "octocat");
     assert_eq!(req.repo, "hello-world");
     assert_eq!(req.pr_number, 1);
