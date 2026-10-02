@@ -23,7 +23,7 @@ use crate::worker::{WorkerControl, build_octocrab, run_worker};
 
 mod observability;
 
-use observability::log_task_failure;
+use observability::{log_task_failure, log_task_restart};
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -64,6 +64,22 @@ pub(crate) fn backoff(min_delay: Duration) -> ExponentialBackoff {
     )
 }
 
+/// Reset a task's delay sequence after it has remained stable long enough.
+///
+/// Returns whether the stable-run threshold was reached; restart-attempt
+/// numbering is maintained separately by the supervisor loop.
+fn reset_backoff_after_stable_run(
+    restart_backoff: &mut ExponentialBackoff,
+    min_delay: Duration,
+    stable_run_duration: Duration,
+) -> bool {
+    let should_reset = stable_run_duration >= STABLE_TASK_RUN;
+    if should_reset {
+        *restart_backoff = backoff(min_delay);
+    }
+    should_reset
+}
+
 /// Sleep for `d` or return early if `shutdown` is triggered.
 ///
 /// Returns `true` if a shutdown occurred.
@@ -74,7 +90,10 @@ async fn sleep_or_shutdown(shutdown: &mut watch::Receiver<()>, d: Duration) -> b
     }
 }
 
-/// Supervise a task that returns `Result<()>` and respawn it on failure.
+/// Run a task until shutdown, restarting failures with jittered backoff.
+///
+/// A normally completed task is left stopped. Failed tasks are restarted
+/// after a selected delay unless shutdown arrives during that delay.
 #[tracing::instrument(skip_all, fields(task = name))]
 async fn supervise_task<F>(
     name: &'static str,
@@ -87,6 +106,9 @@ async fn supervise_task<F>(
     F: FnMut() -> tokio::task::JoinHandle<anyhow::Result<()>>,
 {
     let mut started_at = Instant::now();
+    // Attempt 1 is the first restart selected after the initial task failure.
+    // The count continues across stable runs; only the delay sequence resets.
+    let mut restart_attempt = 0_u64;
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -104,10 +126,21 @@ async fn supervise_task<F>(
                 }
                 log_task_failure(name, &res);
                 metrics::record_task_restart(name);
-                if started_at.elapsed() >= STABLE_TASK_RUN {
-                    restart_backoff = backoff(min_delay);
-                }
+                restart_attempt = restart_attempt.saturating_add(1);
+                let stable_run_duration = started_at.elapsed();
+                let backoff_reset = reset_backoff_after_stable_run(
+                    &mut restart_backoff,
+                    min_delay,
+                    stable_run_duration,
+                );
                 let delay = restart_backoff.next().unwrap_or(BACKOFF_FALLBACK_DELAY);
+                log_task_restart(
+                    name,
+                    restart_attempt,
+                    delay,
+                    stable_run_duration,
+                    backoff_reset,
+                );
                 if sleep_or_shutdown(&mut shutdown, delay).await {
                     break;
                 }
@@ -192,6 +225,7 @@ pub async fn run(config: Config) -> Result<()> {
     Ok(())
 }
 
+/// Start one supervised listener task.
 fn spawn_listener(
     queue: Arc<SharedQueue>,
     shutdown: watch::Receiver<()>,
@@ -199,6 +233,7 @@ fn spawn_listener(
     tokio::spawn(run_listener(queue, shutdown))
 }
 
+/// Start one supervised worker task with no test hooks.
 fn spawn_worker(
     queue: Arc<SharedQueue>,
     octocrab: Arc<Octocrab>,

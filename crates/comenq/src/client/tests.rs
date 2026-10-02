@@ -304,28 +304,45 @@ async fn run_rejects_surplus_response_payloads() {
     }
 }
 
+/// Verify successful mutation commands send their exact request and accept empty replies.
 #[tokio::test]
 async fn run_accepts_mutation_responses_without_payloads() {
-    let commands = [
-        Command::Bump {
-            id: "1a2b3c4d".into(),
-        },
-        Command::Bust {
-            id: "1a2b3c4d".into(),
-        },
-        Command::Del {
-            id: "1a2b3c4d".into(),
-        },
+    let commands_and_requests = [
+        (
+            Command::Bump {
+                id: "bump-id".into(),
+            },
+            Request::Bump {
+                id: "bump-id".into(),
+            },
+        ),
+        (
+            Command::Bust {
+                id: "bust-id".into(),
+            },
+            Request::Bust {
+                id: "bust-id".into(),
+            },
+        ),
+        (
+            Command::Del {
+                id: "delete-id".into(),
+            },
+            Request::Del {
+                id: "delete-id".into(),
+            },
+        ),
     ];
 
-    for command in commands {
+    for (command, expected_request) in commands_and_requests {
         let dir = tempdir().expect("temp dir");
         let socket = dir.path().join("sock");
         let listener = UnixListener::bind(&socket).expect("bind socket");
         let accept = spawn_daemon(listener, Response::ok());
 
         run(args(socket, command)).await.expect("run succeeds");
-        accept.await.expect("join");
+        let request = accept.await.expect("join");
+        assert_eq!(request, expected_request);
     }
 }
 

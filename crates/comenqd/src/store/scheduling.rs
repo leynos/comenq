@@ -133,6 +133,10 @@ impl QueueStore {
     }
 }
 
+/// Project ordered entries onto their earliest posting times.
+///
+/// The input entries must already be in posting order; each projected time is
+/// constrained by the previous post, the entry's stored floor, and `now`.
 fn projected_schedule(
     entries: Vec<StoredEntry>,
     mut previous_post: Option<u64>,

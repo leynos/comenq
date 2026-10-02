@@ -17,6 +17,8 @@ enum EtaUnit {
 }
 
 /// Classify an ETA before rendering its compact duration.
+///
+/// The resulting unit determines the precision used by [`format_eta`].
 fn classify_eta(seconds: u64) -> EtaUnit {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
@@ -94,6 +96,9 @@ pub fn one_line_summary(body: &str) -> String {
 }
 
 /// Escape reply fields that could otherwise alter terminal output.
+///
+/// Control characters are rendered visibly so untrusted identifiers and
+/// repository names cannot add terminal lines or control sequences.
 fn terminal_safe(value: &str) -> String {
     value.chars().fold(String::new(), |mut safe, character| {
         if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {

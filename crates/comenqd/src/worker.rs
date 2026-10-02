@@ -37,6 +37,9 @@ pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
 }
 
 /// Submit a comment to GitHub with the configured API deadline.
+///
+/// A deadline expiry is kept distinct from an API response failure so the
+/// worker can report a bounded outcome and retry the queued entry.
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
