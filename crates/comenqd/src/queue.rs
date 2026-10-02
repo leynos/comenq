@@ -34,10 +34,13 @@ pub trait UnixClock: Debug + Send + Sync {
     fn unix_now(&self) -> u64;
 }
 
+/// Provide the bounded random delay added to a newly enqueued comment.
 trait FlutterSampler: Debug + Send + Sync {
+    /// Sample flutter no greater than the caller's configured maximum.
     fn sample(&self, maximum: u64) -> u64;
 }
 
+/// Production flutter source backed by the operating system random generator.
 #[derive(Debug)]
 struct RandomFlutterSampler;
 
@@ -51,6 +54,7 @@ impl FlutterSampler for RandomFlutterSampler {
     }
 }
 
+/// Queue clock that reads the current system Unix time.
 #[derive(Debug)]
 struct SystemClock;
 
@@ -258,17 +262,25 @@ impl SharedQueue {
         .await?
     }
 
+    /// Refresh entry-count and accounted-byte gauges from persisted data.
     async fn update_queue_gauges(&self) {
         match self.with_store(QueueStore::queue_metrics_snapshot).await {
             Ok((count, bytes)) => {
                 metrics::record_queue_entries(count);
                 metrics::record_queue_bytes(bytes);
             }
-            Err(error) => tracing::warn!(error = %error, "Failed to refresh queue metrics"),
+            Err(_) => tracing::warn!(
+                error_kind = "queue_snapshot_failed",
+                "Failed to refresh queue metrics"
+            ),
         }
     }
 }
 
+/// Build the ordered client response unless its serialized form exceeds the protocol limit.
+///
+/// Returning an error keeps the daemon from sending a response that the client
+/// would reject for exceeding the shared wire-size limit.
 fn response_for_schedule(schedule: Vec<(StoredEntry, u64)>) -> StoreResult<Response> {
     let mut projected_size = serde_json::to_vec(&Response::entries(Vec::new()))?.len();
     let mut entries = Vec::with_capacity(schedule.len().min(MAX_PENDING_ENTRIES));

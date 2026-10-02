@@ -8,7 +8,9 @@ use crate::store::{QueueStore, StoredEntry};
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 fn entry(request: CommentRequest, order: i64, enqueued_at: u64) -> StoredEntry {
@@ -255,4 +257,60 @@ fn entries_skip_a_valid_but_oversized_record_and_keep_other_entries() {
 
     assert_eq!(entries, vec![valid]);
     assert!(entries_dir.join(format!("{}.json", oversized.id)).exists());
+}
+
+/// Captures formatted tracing output without installing a process-wide subscriber.
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("lock log buffer")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Verify unsafe entry data is skipped and never copied into bounds logs.
+#[test]
+fn entries_skip_corrupt_and_unsafe_records_without_logging_paths_or_ids() {
+    use tracing_subscriber::prelude::*;
+
+    let dir = TempDir::new().expect("create queue directory");
+    let store = open_store(&dir);
+    let entries_dir = dir.path().join("entries");
+    let malicious_id = "../../private-token";
+    let mut unsafe_entry = entry(request("unsafe"), 0, 1_000);
+    unsafe_entry.id = malicious_id.into();
+    let unsafe_bytes = serde_json::to_vec_pretty(&unsafe_entry).expect("serialize unsafe entry");
+    fs::write(entries_dir.join("feedface.json"), unsafe_bytes).expect("write unsafe entry");
+    fs::write(entries_dir.join("cafebabe.json"), b"{not valid json").expect("write corrupt entry");
+
+    let buffer = LogBuffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(move || writer.clone())
+            .with_filter(tracing_subscriber::filter::LevelFilter::ERROR),
+    );
+    let entries = tracing::subscriber::with_default(subscriber, || {
+        store.entries().expect("unreadable records are skipped")
+    });
+    let output = String::from_utf8(buffer.0.lock().expect("read log buffer").clone())
+        .expect("log output is UTF-8");
+
+    assert!(entries.is_empty());
+    assert!(output.contains("unsafe_identifier"));
+    assert!(output.contains("invalid_json"));
+    assert!(!output.contains(malicious_id));
+    assert!(!output.contains(&dir.path().to_string_lossy().to_string()));
+    assert!(entries_dir.join("feedface.json").exists());
+    assert!(entries_dir.join("cafebabe.json").exists());
 }

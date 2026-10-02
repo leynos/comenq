@@ -145,6 +145,9 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 }
 
 /// Execute the parsed command and render its result through `writer`.
+///
+/// A closed output pipe stops rendering successfully so commands can be used
+/// in pipelines whose downstream consumer exits early.
 async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
     let request = args.command.to_request();
     let response = transact(&args.socket_candidates(), &request).await?;
