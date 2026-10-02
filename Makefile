@@ -1,4 +1,4 @@
-.PHONY: help all clean test test-cov test-cov-lcov test-workflow-contracts build release lint typecheck fmt check-fmt markdownlint nixie spelling
+.PHONY: help all clean test test-cucumber test-cov test-cov-lcov test-workflow-contracts build release lint typecheck fmt check-fmt markdownlint nixie spelling
 
 APP ?= comenq
 CARGO ?= cargo
@@ -52,6 +52,9 @@ clean: ## Remove build artefacts
 
 test: ## Run tests with warnings treated as errors
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace --all-targets --all-features $(BUILD_JOBS)
+	$(MAKE) test-cucumber
+
+test-cucumber: ## Run the cucumber scenarios, which nextest cannot execute
 	RUSTFLAGS="-D warnings" $(CARGO) test --workspace --all-features --test cucumber $(BUILD_JOBS)
 
 test-cov: ## Run workspace-wide tests with coverage; set COV_MIN to enforce a threshold
@@ -66,7 +69,7 @@ test-cov-lcov: ## Run workspace-wide tests with coverage and write LCOV to cover
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov --no-clean --workspace --all-features --test cucumber --lcov --output-path coverage/lcov-cucumber.info --fail-under-lines $(COV_MIN) $(BUILD_JOBS)
 
 test-workflow-contracts: ## Validate the mutation-testing caller contract
-	uv run --with 'pytest>=8' --with 'pyyaml>=6' pytest tests/workflow_contracts -q
+	uv run --with 'pytest>=8' --with 'pyyaml>=6' --with 'hypothesis>=6' pytest tests/workflow_contracts -q
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)

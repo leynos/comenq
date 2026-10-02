@@ -90,6 +90,40 @@ the first cold run is allowed a five-minute slow-test period in
 `.config/nextest.toml`. The complete `nextest` run has a 10-minute global
 timeout, after which `make test` runs the Cucumber test target separately.
 
+Pull requests run the suite once. In `ci.yml`'s `build-test` job the coverage
+step selects every workspace target and every feature (`all-targets` and
+`all-features`), the scope `make test`'s `nextest` run has, so it is the only
+step that runs the `nextest` suite. The Cucumber harness has its own `main`,
+which `nextest` cannot execute, so `build-test` runs it in a step of its own
+with `make test-cucumber`, the target `make test` calls after `nextest`.
+`tests/workflow_contracts/suite_runs_once_test.py` holds the split: it reads
+each pull-request step by the command it runs (through
+`tests/workflow_contracts/suite_commands.py`, which splits a command the way
+the shell does), refuses a second suite run, and requires the coverage step's
+scope and the Cucumber step to stay. `make test-workflow-contracts` runs it.
+
+A bare `make` runs the Makefile's default goal, so the reader takes that goal
+from the Makefile (`default_goal` in `suite_commands.py`). It applies the
+`.DEFAULT_GOAL` assignments in order, as GNU make does (manual, "Other Special
+Variables"). `=` and `:=` replace the value, so the last one wins. `?=` changes
+nothing, because make defines `.DEFAULT_GOAL` itself, empty, before it reads a
+makefile. `+=` appends a word, and an empty value clears it. A value of several
+words, which make refuses, is not read, and the reader falls back to the first
+rule that is not a special or pattern target. `make test-cucumber` counts as a
+suite run to the reader; the contract exempts the one expected `build-test`
+step by workflow, job and exact command. The tests that pin the reader to GNU
+make (`test_the_reader_agrees_with_gnu_make`) run `make -f - -pn` on each
+fixture and compare the goal make settles on; they skip, with the reason, on a
+host where `make` is absent or is not GNU make.
+
+`tests/workflow_contracts/suite_properties_test.py` states what must hold over
+generated input: a suite command is found however it is joined and prefixed, a
+harmless command never is, quoted text never adds a suite run, and the default
+goal is what applying the assignments in order leaves. It also compares the
+reader with real GNU make over every sequence of up to three assignments, which
+is exhaustive rather than sampled. The properties use Hypothesis, which
+`make test-workflow-contracts` adds to the run.
+
 ## Automated packaging
 
 `make release` builds a local optimized binary and requires the Rust toolchain.
