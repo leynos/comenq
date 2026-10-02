@@ -2,6 +2,7 @@
 
 use super::{Args, Command, RepoSlug, RepoSlugParseError};
 use clap::Parser;
+use comenq_lib::protocol::Request;
 use rstest::rstest;
 use std::path::PathBuf;
 use test_support::EnvVarGuard;
@@ -56,6 +57,25 @@ fn parses_queue_management_subcommands(#[case] argv: &[&str]) {
         | ("del", Command::Del { id }) => assert_eq!(id, "1a2b3c4d"),
         (name, other) => panic!("unexpected parse for {name}: {other:?}"),
     }
+}
+
+/// Verify each queue-management command maps to its exact wire request.
+#[rstest]
+#[case::list(Command::List, Request::List)]
+#[case::bump(
+    Command::Bump { id: "bump-id".into() },
+    Request::Bump { id: "bump-id".into() }
+)]
+#[case::bust(
+    Command::Bust { id: "bust-id".into() },
+    Request::Bust { id: "bust-id".into() }
+)]
+#[case::del(
+    Command::Del { id: "delete-id".into() },
+    Request::Del { id: "delete-id".into() }
+)]
+fn queue_commands_create_exact_requests(#[case] command: Command, #[case] expected: Request) {
+    assert_eq!(command.to_request(), expected);
 }
 
 #[test]

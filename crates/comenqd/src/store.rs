@@ -132,6 +132,7 @@ fn entry_id(request: &CommentRequest, enqueued_at: u64) -> String {
     entry_id_with_salt(request, enqueued_at, None)
 }
 
+/// Derive an identifier, adding a salt only when resolving a collision.
 fn entry_id_with_salt(request: &CommentRequest, enqueued_at: u64, salt: Option<u64>) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -214,6 +215,7 @@ impl QueueStore {
         }
     }
 
+    /// Resolve a validated identifier to its persisted entry path.
     fn entry_path(&self, id: &str) -> Result<PathBuf> {
         if is_valid_id(id) {
             Ok(self.entries_dir.join(format!("{id}.json")))
@@ -222,6 +224,7 @@ impl QueueStore {
         }
     }
 
+    /// Read one entry by identifier, preserving typed missing-entry errors.
     fn find(&self, id: &str) -> Result<StoredEntry> {
         let path = self.entry_path(id)?;
         let entry = match bounds::read_entry(&path) {
@@ -237,6 +240,7 @@ impl QueueStore {
         Ok(entry)
     }
 
+    /// Apply an order-key change and atomically replace each affected file.
     fn reorder(
         &self,
         id: &str,
@@ -248,6 +252,7 @@ impl QueueStore {
         self.write_entry(&entry)
     }
 
+    /// Replace a file through a temporary sibling so partial writes are unseen.
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         let tmp = path.with_extension("tmp");
         let parent = path.parent().ok_or_else(|| {
@@ -264,6 +269,7 @@ impl QueueStore {
         Ok(())
     }
 
+    /// Find a request's stable identifier, salting only on content collisions.
     fn resolve_entry_id(
         &self,
         request: &CommentRequest,
@@ -285,6 +291,7 @@ impl QueueStore {
     }
 }
 
+/// Check whether an identifier is safe as a queue-entry filename.
 fn is_valid_id(id: &str) -> bool {
     id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

@@ -57,8 +57,7 @@ impl QueueStore {
                         Ok(metadata) => metadata.len(),
                         Err(error) => {
                             tracing::error!(
-                                path = %path.display(),
-                                error = %error,
+                                error_kind = io_error_kind(&error),
                                 "Skipping unreadable queue entry"
                             );
                             continue;
@@ -75,17 +74,15 @@ impl QueueStore {
                         usage.headroom_bytes.saturating_add(entry_headroom(&entry));
                     entries.push(entry);
                 }
-                Ok(entry) => {
+                Ok(_) => {
                     tracing::error!(
-                        path = %path.display(),
-                        id = %entry.id,
+                        error_kind = "unsafe_identifier",
                         "Skipping queue entry with an unsafe identifier"
                     );
                 }
                 Err(error) => {
                     tracing::error!(
-                        path = %path.display(),
-                        error = %error,
+                        error_kind = store_error_kind(&error),
                         "Skipping unreadable queue entry"
                     );
                 }
@@ -148,6 +145,7 @@ impl QueueStore {
         self.write_atomic(&path, &bytes)
     }
 
+    /// Collect entry-file metadata while enforcing count and aggregate limits.
     fn scan_entry_files(&self) -> Result<(Vec<PathBuf>, QueueUsage)> {
         let mut paths = Vec::new();
         let mut bytes = 0_u64;
@@ -159,7 +157,7 @@ impl QueueStore {
             }
             if !dirent.file_type()?.is_file() {
                 tracing::error!(
-                    path = %path.display(),
+                    error_kind = "non_regular_file",
                     "Skipping non-regular queue entry"
                 );
                 continue;
@@ -205,11 +203,38 @@ pub(super) fn read_entry(path: &Path) -> Result<StoredEntry> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// Reject an entry size above its durable per-file limit.
 fn ensure_entry_size(size: u64, limit: u64) -> Result<()> {
     if size > limit {
         Err(StoreError::EntryTooLarge { size, limit })
     } else {
         Ok(())
+    }
+}
+
+/// Classify a filesystem failure without including its path or nested message.
+fn io_error_kind(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::InvalidData => "invalid_data",
+        _ => "io_error",
+    }
+}
+
+/// Classify persisted-entry failures without formatting untrusted error data.
+fn store_error_kind(error: &StoreError) -> &'static str {
+    match error {
+        StoreError::Io(error) => io_error_kind(error),
+        StoreError::Serde(_) => "invalid_json",
+        StoreError::EntryTooLarge { .. } => "entry_too_large",
+        StoreError::QueueByteBudgetExceeded { .. } => "byte_budget_exceeded",
+        StoreError::QueueFull(_) => "queue_full",
+        StoreError::UnknownId(_) => "unknown_identifier",
+        StoreError::InvalidId(_) => "unsafe_identifier",
+        StoreError::InvalidRepositoryComponent(_) => "invalid_repository_component",
+        StoreError::LastPost(_) => "invalid_last_post",
+        StoreError::BlockingTask(_) => "blocking_task",
     }
 }
 
@@ -233,6 +258,7 @@ pub(super) fn entry_headroom(entry: &StoredEntry) -> u64 {
         .saturating_sub(claim_growth)
 }
 
+/// Calculate worst-case growth needed for the entry's order and claim fields.
 fn maximum_mutation_growth(entry: &StoredEntry) -> u64 {
     const MAX_ORDER_BYTES: u64 = 20;
     const UUID_JSON_BYTES: u64 = 38;
@@ -247,6 +273,7 @@ fn maximum_mutation_growth(entry: &StoredEntry) -> u64 {
     order_growth.saturating_add(claim_growth)
 }
 
+/// Reject a write whose persisted bytes and remaining reservations exceed budget.
 fn ensure_queue_bytes(used: u64, requested: u64) -> Result<()> {
     if used.saturating_add(requested) > MAX_QUEUE_BYTES {
         Err(StoreError::QueueByteBudgetExceeded {

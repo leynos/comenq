@@ -25,10 +25,17 @@ The supervisor starts the listener and worker against the same
 `Arc<SharedQueue>`. `SharedQueue` serializes access to the filesystem-backed
 `QueueStore` with a `std::sync::Mutex`; each synchronous store operation runs
 inside `spawn_blocking` so filesystem work does not occupy Tokio runtime
-threads. A `tokio::sync::Notify` wakes the worker after queue mutations.
-Restart tracing includes the task name, attempt, and backoff delay where
-applicable. Recovery is bounded to five restart attempts; when that limit is
-exhausted, the supervisor signals daemon shutdown.
+threads. A `tokio::sync::Notify` wakes the worker after queue mutations. The
+supervisor restarts failed tasks with jittered exponential backoff and no
+maximum attempt count; shutdown interrupts the wait, while normal task
+completion does not trigger a restart. Each restart event records `task`, a
+one-based `restart_attempt` that continues across stable runs,
+`selected_delay_ms`, `stable_run_duration_ms`, and `backoff_reset`. A stable
+run resets the delay sequence but does not reset the attempt count.
+
+Queue listing logs unreadable or corrupt entry files and skips them. These
+bounds logs use static error categories and omit filesystem paths and stored
+identifiers.
 
 ### Client and daemon API
 

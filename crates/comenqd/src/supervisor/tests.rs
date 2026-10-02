@@ -1,12 +1,14 @@
 //! Tests for task supervision and failure logging.
 
-use super::log_task_failure;
+use super::observability::log_task_restart;
+use super::{STABLE_TASK_RUN, backoff, log_task_failure, reset_backoff_after_stable_run};
 use crate::config::Config;
 use anyhow::anyhow;
 use rstest::rstest;
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::task::JoinError;
 
 /// Convert a test configuration into the runtime configuration in all builds.
@@ -98,6 +100,76 @@ fn logs_failures(
             assert_eq!(fields["message"], "Task failed");
         }
     }
+}
+
+/// Verify restart events expose bounded timing and backoff decision fields.
+#[rstest]
+#[case::transient_failure(1, 250, 3_000)]
+#[case::stable_run_reset(2, 100, 60_000)]
+fn logs_restart_decisions(
+    #[case] attempt: u64,
+    #[case] selected_delay_ms: u64,
+    #[case] stable_run_duration_ms: u64,
+) {
+    use tracing_subscriber::prelude::*;
+
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(move || writer.clone())
+            .with_filter(tracing_subscriber::filter::LevelFilter::WARN),
+    );
+    let stable_run_duration = Duration::from_millis(stable_run_duration_ms);
+    let mut restart_backoff = backoff(Duration::from_millis(100));
+    let backoff_reset = reset_backoff_after_stable_run(
+        &mut restart_backoff,
+        Duration::from_millis(100),
+        stable_run_duration,
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        log_task_restart(
+            "worker",
+            attempt,
+            Duration::from_millis(selected_delay_ms),
+            stable_run_duration,
+            backoff_reset,
+        );
+    });
+
+    let output = String::from_utf8(buffer.0.lock().expect("read buffer").clone())
+        .expect("log output is UTF-8");
+    let event: Value = serde_json::from_str(output.lines().next().expect("restart event"))
+        .expect("decode structured restart event");
+    let fields = &event["fields"];
+    assert_eq!(fields["task"], "worker");
+    assert_eq!(fields["restart_attempt"].as_u64(), Some(attempt));
+    assert_eq!(
+        fields["selected_delay_ms"].as_u64(),
+        Some(selected_delay_ms)
+    );
+    assert_eq!(
+        fields["stable_run_duration_ms"].as_u64(),
+        Some(stable_run_duration_ms)
+    );
+    assert_eq!(fields["backoff_reset"].as_bool(), Some(backoff_reset));
+    assert_eq!(fields["message"], "Restarting task after failure");
+}
+
+/// Reset the delay sequence exactly when a task reaches the stable-run floor.
+#[rstest]
+#[case::transient(59, false)]
+#[case::stable(STABLE_TASK_RUN.as_secs(), true)]
+fn stable_run_controls_backoff_reset(#[case] seconds: u64, #[case] expected_reset: bool) {
+    let mut restart_backoff = backoff(Duration::from_secs(1));
+    let was_reset = reset_backoff_after_stable_run(
+        &mut restart_backoff,
+        Duration::from_secs(1),
+        Duration::from_secs(seconds),
+    );
+
+    assert_eq!(was_reset, expected_reset);
 }
 
 /// The worker starts against the shared queue and shuts down cleanly.
