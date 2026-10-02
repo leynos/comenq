@@ -35,7 +35,7 @@ pub trait UnixClock: Debug + Send + Sync {
 }
 
 /// Provide the bounded random delay added to a newly enqueued comment.
-trait FlutterSampler: Debug + Send + Sync {
+pub(crate) trait FlutterSampler: Debug + Send + Sync {
     /// Sample flutter no greater than the caller's configured maximum.
     fn sample(&self, maximum: u64) -> u64;
 }
@@ -82,11 +82,10 @@ impl SharedQueue {
 
     /// Open the queue store using `clock` for persisted scheduling timestamps.
     pub fn open_with_clock(cfg: Arc<Config>, clock: Arc<dyn UnixClock>) -> StoreResult<Arc<Self>> {
-        Self::open_with_clock_and_flutter(cfg, clock, Arc::new(RandomFlutterSampler))
+        Self::open_with_sources(cfg, clock, Arc::new(RandomFlutterSampler))
     }
 
-    /// Open a queue with explicit wall-clock and enqueue-flutter sources.
-    fn open_with_clock_and_flutter(
+    fn open_with_sources(
         cfg: Arc<Config>,
         clock: Arc<dyn UnixClock>,
         flutter_sampler: Arc<dyn FlutterSampler>,
@@ -102,6 +101,19 @@ impl SharedQueue {
             flutter_sampler,
             changed: Notify::new(),
         }))
+    }
+
+    /// Open a queue with controlled clock and flutter sources in tests.
+    ///
+    /// For example, a sampler fixed at seven seconds makes a 60-second
+    /// cooldown project to a 67-second deferred ETA.
+    #[cfg(test)]
+    pub(crate) fn open_with_clock_and_flutter(
+        cfg: Arc<Config>,
+        clock: Arc<dyn UnixClock>,
+        flutter_sampler: Arc<dyn FlutterSampler>,
+    ) -> StoreResult<Arc<Self>> {
+        Self::open_with_sources(cfg, clock, flutter_sampler)
     }
 
     /// The daemon configuration this queue was opened with.
