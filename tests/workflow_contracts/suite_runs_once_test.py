@@ -379,6 +379,43 @@ def test_coverage_measures_the_scope_make_test_runs() -> None:
     assert not narrowed, f"coverage is narrowed by {narrowed}"
 
 
+UPLOAD_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-coverage@"
+
+
+def _step_index(
+    steps: list[dict[str, typ.Any]], matches: typ.Callable[[dict[str, typ.Any]], bool]
+) -> int:
+    """Return the position of the one step ``matches`` selects, or fail."""
+    found = [index for index, step in enumerate(steps) if matches(step)]
+    assert len(found) == 1, f"expected exactly one matching step, found {len(found)}"
+    return found[0]
+
+
+def test_the_cucumber_step_runs_after_the_coverage_upload() -> None:
+    """Hold the order: coverage, then the CodeScene upload, then cucumber.
+
+    A failing scenario must not stop the coverage or its upload, so the
+    cucumber step has to come after both.
+
+    Returns
+    -------
+    None
+        The test passes when the three steps are in that order.
+    """
+    steps = _suite_job_steps()
+    coverage = _step_index(
+        steps, lambda step: COVERAGE_ACTION in str(step.get("uses", ""))
+    )
+    upload = _step_index(steps, lambda step: UPLOAD_ACTION in str(step.get("uses", "")))
+    cucumber = _step_index(
+        steps, lambda step: str(step.get("run", "")).strip() == CUCUMBER_COMMAND
+    )
+    assert coverage < upload < cucumber, (
+        "`build-test` must run coverage, then the CodeScene upload, then "
+        f"`{CUCUMBER_COMMAND}`; their positions are {coverage}, {upload} and {cucumber}"
+    )
+
+
 def test_the_cucumber_harness_runs_in_its_own_step() -> None:
     """Require one unconditional step running ``make test-cucumber``."""
     steps = [
