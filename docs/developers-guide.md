@@ -116,6 +116,14 @@ make (`test_the_reader_agrees_with_gnu_make`) run `make -f - -pn` on each
 fixture and compare the goal make settles on; they skip, with the reason, on a
 host where `make` is absent or is not GNU make.
 
+`tests/workflow_contracts/suite_properties_test.py` states what must hold over
+generated input: a suite command is found however it is joined and prefixed, a
+harmless command never is, quoted text never adds a suite run, and the default
+goal is what applying the assignments in order leaves. It also compares the
+reader with real GNU make over every sequence of up to three assignments, which
+is exhaustive rather than sampled. The properties use Hypothesis, which
+`make test-workflow-contracts` adds to the run.
+
 ## Automated packaging
 
 `make release` builds a local optimized binary and requires the Rust toolchain.
