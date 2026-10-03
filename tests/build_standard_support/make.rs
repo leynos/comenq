@@ -250,9 +250,22 @@ fn held_out_command_problems(target: &str, assignment: &Assignment) -> Problems 
 ///
 /// Returns the reason when a listed target is not defined or unreadable.
 pub fn held_out_problems(runner: MakeRunner) -> Result<(Problems, usize), String> {
+    held_out_problems_for(runner, HELD_OUT_TARGETS)
+}
+
+/// Returns the complaints about a given list of held-out targets, so a test can name a
+/// synthetic target and exercise the check in a repository that defines none.
+///
+/// # Errors
+///
+/// Returns the reason when a named target is not defined or unreadable.
+pub fn held_out_problems_for(
+    runner: MakeRunner,
+    targets: &[&str],
+) -> Result<(Problems, usize), String> {
     let mut problems = Vec::new();
     let mut read = 0;
-    for target in HELD_OUT_TARGETS {
+    for target in targets {
         let commands = make_commands(runner, target, Host::Linux)?;
         read += commands.len();
         problems.extend(
