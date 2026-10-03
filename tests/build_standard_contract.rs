@@ -9,8 +9,12 @@
 //! listed `setup-rust` step passes `install-mold`. Fixtures come first, so no
 //! rule passes by detecting nothing.
 
+#[path = "build_standard_support/chain_exhaustive.rs"]
+mod chain_exhaustive;
 #[path = "build_standard_support/ci_steps.rs"]
 mod ci_steps;
+#[path = "build_standard_support/command_reader.rs"]
+mod command_reader;
 #[path = "build_standard_support/config.rs"]
 mod config;
 #[path = "build_standard_support/exhaustive.rs"]
@@ -21,6 +25,8 @@ mod fixtures;
 mod injected;
 #[path = "build_standard_support/make.rs"]
 mod make;
+#[path = "build_standard_support/shell.rs"]
+mod shell;
 #[path = "build_standard_support/workflow_exhaustive.rs"]
 mod workflow_exhaustive;
 use rstest::rstest;
@@ -148,36 +154,6 @@ fn the_command_reader_reads_each_assignment(
         Ok(())
     } else {
         Err(format!("`{line}` was read wrongly"))
-    }
-}
-
-/// Scenario: `make -n` output for commands that assign no `RUSTFLAGS`.
-///
-/// Invariant: a build, test or lint command that assigns nothing is read as bare, which a
-/// development recipe must not leave; a formatter, a metadata probe and a documentation
-/// build stay unassigned, because they run no compiled code under test.
-#[rstest]
-#[case::cargo_test("cargo test\n", Assignment::Bare("cargo test".to_owned()))]
-#[case::cargo_by_path("/home/user/.cargo/bin/cargo test --workspace\n", Assignment::Bare("/home/user/.cargo/bin/cargo test --workspace".to_owned()))]
-#[case::nextest("cargo +nightly nextest run\n", Assignment::Bare("cargo +nightly nextest run".to_owned()))]
-#[case::clippy("cargo clippy --all-targets\n", Assignment::Bare("cargo clippy --all-targets".to_owned()))]
-#[case::typecheck("cargo check --workspace\n", Assignment::Bare("cargo check --workspace".to_owned()))]
-#[case::whitaker("whitaker --all\n", Assignment::Bare("whitaker --all".to_owned()))]
-#[case::formatter("cargo fmt --all --check\n", Assignment::Unassigned)]
-#[case::metadata("cargo metadata --format-version 1\n", Assignment::Unassigned)]
-#[case::documentation(
-    "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace\n",
-    Assignment::Unassigned
-)]
-fn the_command_reader_tells_a_bare_tool_from_an_exempt_command(
-    #[case] stdout: &str,
-    #[case] expected: Assignment,
-) -> Result<(), String> {
-    let read = commands_from(stdout)?;
-    if read == [expected] {
-        Ok(())
-    } else {
-        Err(format!("`{stdout}` was read as {read:?}"))
     }
 }
 

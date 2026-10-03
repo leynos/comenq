@@ -4,7 +4,10 @@
 
 use std::process::Command;
 
-use super::config::{Flags, LINKER_FLAG, Pin, Problems, THREADS_FLAG};
+use super::{
+    config::{Flags, LINKER_FLAG, Pin, Problems, THREADS_FLAG},
+    shell::{compiles, shell_commands, without_leading_keywords},
+};
 
 /// Makefile targets that build for development. A command in one either assigns
 /// `RUSTFLAGS` with the standard flags or assigns none and so takes the
@@ -105,55 +108,25 @@ pub fn assigned_rustflags(line: &str) -> Result<Assignment, String> {
     ))
 }
 
-/// Cargo subcommands that compile or run code under test, so a recipe running one
-/// must assign `RUSTFLAGS`. Formatters, metadata probes and documentation builds are
-/// not among them.
-const FLAG_BEARING_SUBCOMMANDS: &[&str] = &["test", "nextest", "clippy", "check", "build"];
-
-/// Returns whether a command line runs a tool whose flags a development recipe must
-/// assign: one of the Cargo subcommands above, or Whitaker.
-///
-/// ```text
-/// runs_a_flag_bearing_tool("cargo +nightly clippy --all-targets") -> true
-/// runs_a_flag_bearing_tool("/home/u/.cargo/bin/cargo test")       -> true (Cargo exports its own path)
-/// runs_a_flag_bearing_tool("whitaker --all")                      -> true
-/// runs_a_flag_bearing_tool("cargo fmt --all --check")             -> false
-/// ```
-fn runs_a_flag_bearing_tool(line: &str) -> bool {
-    let words: Vec<&str> = line.split_whitespace().collect();
-    let cargo_subcommand = words
-        .iter()
-        .position(|word| word.rsplit('/').next() == Some("cargo"))
-        .and_then(|at| words.get(at + 1..))
-        .and_then(|rest| {
-            rest.iter()
-                .find(|word| !word.starts_with('+') && !word.starts_with('-'))
-        })
-        .is_some_and(|sub| FLAG_BEARING_SUBCOMMANDS.contains(sub));
-    cargo_subcommand
-        || words
-            .iter()
-            .any(|word| word.rsplit('/').next() == Some("whitaker"))
-}
-
-/// Reads the assignment of each cargo or whitaker command `make -n` printed.
+/// Reads the assignment of each cargo or whitaker command `make -n` printed. A line that chains
+/// commands is read one command at a time.
 ///
 /// # Errors
 ///
 /// Returns the reason when a command assigns `RUSTFLAGS` in an unreadable form.
 pub fn commands_from(stdout: &str) -> Result<Vec<Assignment>, String> {
-    // A recipe continued with a trailing backslash is one command.
+    // A recipe continued with a trailing backslash is one logical line.
     let joined = stdout.replace("\\\n", " ");
     joined
         .lines()
-        .filter(|line| !line.trim_start().starts_with("echo"))
+        .flat_map(shell_commands)
+        .map(|command| without_leading_keywords(&command).to_owned())
+        .filter(|command| !command.starts_with("echo"))
         // A tool-availability probe names Cargo but runs no build.
-        .filter(|line| !line.trim_start().starts_with("command -v"))
-        .filter(|line| line.contains("cargo") || line.contains("whitaker"))
-        .map(|line| match assigned_rustflags(line)? {
-            Assignment::Unassigned if runs_a_flag_bearing_tool(line) => {
-                Ok(Assignment::Bare(line.trim().to_owned()))
-            }
+        .filter(|command| !command.starts_with("command -v"))
+        .filter(|command| command.contains("cargo") || command.contains("whitaker"))
+        .map(|command| match assigned_rustflags(&command)? {
+            Assignment::Unassigned if compiles(&command) => Ok(Assignment::Bare(command)),
             other => Ok(other),
         })
         .collect()
@@ -277,10 +250,14 @@ pub fn development_problems(
 /// Returns every complaint about one held-out command: it assigns nothing, so
 /// it takes the configuration's flags, or the assignment names a standard flag.
 fn held_out_command_problems(target: &str, assignment: &Assignment) -> Problems {
-    let Assignment::Flags(flags, _) = assignment else {
-        return vec![format!(
-            "`make {target}` runs a command that takes the configuration's flags"
-        )];
+    let flags = match assignment {
+        Assignment::Flags(flags, _) => flags,
+        Assignment::Bare(command) => {
+            return vec![format!(
+                "`make {target}` runs `{command}`, which takes the configuration's flags"
+            )];
+        }
+        Assignment::Unassigned => return Vec::new(),
     };
     let named = [
         (flags.names_threads(), THREADS_FLAG),
