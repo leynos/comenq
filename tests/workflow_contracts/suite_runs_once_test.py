@@ -70,6 +70,30 @@ def _pull_request_steps() -> list[tuple[str, str, dict[str, typ.Any]]]:
     return found
 
 
+def _suite_job() -> dict[str, typ.Any]:
+    """Return the ``build-test`` job of ``ci.yml`` as written, metadata included."""
+    document = yaml.safe_load((WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+    return document["jobs"][SUITE_JOB]
+
+
+def test_the_suite_job_runs_on_every_pull_request() -> None:
+    """Refuse a job-level condition that would skip the whole suite job.
+
+    The steps are held unconditional elsewhere, but a job-level ``if`` skips
+    every step at once, so the suite would run zero times, not once.
+
+    Returns
+    -------
+    None
+        The test passes when ``build-test`` carries no ``if:`` of its own.
+    """
+    job = _suite_job()
+    assert "if" not in job, (
+        f"`{SUITE_JOB}` must run on every pull request, but it carries "
+        f"`if: {job.get('if')}`, which can skip the suite entirely"
+    )
+
+
 def _suite_job_steps() -> list[dict[str, typ.Any]]:
     """Return the steps of ``ci.yml``'s ``build-test`` job."""
     return [
