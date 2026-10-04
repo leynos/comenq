@@ -39,7 +39,7 @@ SCOPE_INPUTS = {"all-features": "true", "all-targets": "true"}
 #: Inputs that would narrow the run below that scope.
 NARROWING_INPUTS = ("features", "with-default-features", "cargo-manifest")
 #: The default goal the spelling cases assume: one that runs the suite.
-SUITE_GOAL = "all"
+SUITE_GOAL = "test"
 
 
 def _makefile_goal() -> str:
@@ -119,7 +119,7 @@ def _coverage_steps() -> list[dict[str, typ.Any]]:
         ("make test WITH_ACT=1", True),
         ("make -j2 test", True),
         ("make -C . test", True),
-        ("make all", True),
+        ("make all", False),
         ("cargo nextest run --all-targets", True),
         ("cargo test --all-features", True),
         ("cargo --config tools/dev-fast/config.toml test", True),
@@ -230,7 +230,7 @@ def test_every_wrapper_is_looked_through(prefix: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("goal", "expected"), [("build", False), ("all", True), ("test", True)]
+    ("goal", "expected"), [("build", False), ("all", False), ("test", True)]
 )
 def test_a_bare_make_runs_the_default_goal(goal: str, *, expected: bool) -> None:
     """Read a bare ``make`` as a suite run only when the default goal is one."""
@@ -265,7 +265,7 @@ def test_the_default_goal_is_read(makefile: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "target", ["test", "all", "coverage", "dev-test", "test-fast", "test-cucumber"]
+    "target", ["test", "coverage", "dev-test", "test-fast", "test-cucumber"]
 )
 def test_every_suite_target_runs_the_suite(target: str) -> None:
     """Read each suite target as a suite run, and a longer name as none."""
@@ -291,9 +291,9 @@ def test_every_suite_target_runs_the_suite(target: str) -> None:
 )
 def test_every_inert_make_option_runs_no_goal(option: str) -> None:
     """Refuse to read a make option that runs no goal as a suite run."""
-    assert not runs_suite(f"make {option}", "all")
-    assert not runs_suite(f"make {option} test", "all")
-    assert not runs_suite(f"make test {option}", "all")
+    assert not runs_suite(f"make {option}", "test")
+    assert not runs_suite(f"make {option} test", "test")
+    assert not runs_suite(f"make test {option}", "test")
 
 
 @pytest.mark.parametrize(
@@ -301,7 +301,7 @@ def test_every_inert_make_option_runs_no_goal(option: str) -> None:
 )
 def test_command_lookup_runs_nothing(line: str) -> None:
     """Read `command -v` and `command -V` as running nothing."""
-    assert not runs_suite(line, "all")
+    assert not runs_suite(line, "test")
 
 
 def _make_default_goal(makefile: str, gnu_make: str) -> str | None:
@@ -562,3 +562,27 @@ def test_the_cucumber_target_is_declared_phony() -> None:
         "the Makefile's `.PHONY` declaration must list `test-cucumber`, so a "
         f"file of that name cannot stop the target running; it declares {declared!r}"
     )
+
+
+def test_make_all_runs_no_suite_command(gnu_make: str) -> None:
+    """Assert that nothing `make all` would run is read as a suite run.
+
+    `all` is the Makefile's default goal here, and it builds the release binary
+    and checks spelling; it must not be modelled as a suite target, or a bare
+    `make` would hide a missing suite run from the contract.
+
+    Parameters
+    ----------
+    gnu_make : str
+        The path of a GNU make, from the shared fixture.
+
+    Returns
+    -------
+    None
+        The test passes when no expanded command is a suite run.
+    """
+    commands = _dry_run("all", gnu_make)
+    assert commands, "`make all` would run nothing, so the check proves nothing"
+    suite = [command for command in commands if runs_suite(command, "build")]
+    assert not suite, f"`make all` would run suite commands: {suite!r}"
+    assert not runs_suite("make all", "build"), "`make all` read as a suite run"

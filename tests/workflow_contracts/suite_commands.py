@@ -43,12 +43,12 @@ MAKE_INERT_OPTIONS = frozenset(
 MAKE_INERT_LETTERS = frozenset("nq")
 #: Short make options that take a value, which ends a cluster of letters.
 MAKE_VALUE_LETTERS = frozenset("CfIoWjl")
-#: Make targets that run the suite: ``test``, ``all`` (which runs it),
-#: ``coverage`` and the fast local variants. A bare ``make`` runs the
-#: Makefile's default goal, so it counts only where that goal is one of these.
-SUITE_TARGETS = frozenset(
-    {"test", "all", "coverage", "dev-test", "test-fast", "test-cucumber"}
-)
+#: Make targets that run the suite: ``test``, ``coverage`` and the fast local
+#: variants. ``all`` is not one: it builds the release binary and checks
+#: spelling, and a test asserts that against what make would run. A bare
+#: ``make`` runs the Makefile's default goal, so it counts only where that goal
+#: is one of these.
+SUITE_TARGETS = frozenset({"test", "coverage", "dev-test", "test-fast", "test-cucumber"})
 #: ``uv run`` and ``uvx`` options that take their value as the next word.
 UV_VALUE_OPTIONS = frozenset(
     {

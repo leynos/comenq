@@ -22,7 +22,6 @@ from suite_commands import default_goal, runs_suite
 
 SUITE_COMMANDS = (
     "make test",
-    "make all",
     "make",
     "cargo test",
     "cargo nextest run",
@@ -49,7 +48,7 @@ PREFIXES = (
 )
 #: A bare ``make`` runs the default goal, so the properties fix one that runs
 #: the suite and read the bare case against it.
-SUITE_GOAL = "all"
+SUITE_GOAL = "test"
 
 
 @given(
