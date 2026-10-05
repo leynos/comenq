@@ -69,7 +69,7 @@ jobs:
       - name: Test Only
         run: make test
       - name: Test and Measure Coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/generate-coverage@7d751eded578e48dacf43ab173d5820e6437c474
         with:
           output-path: lcov.info
           format: lcov
