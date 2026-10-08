@@ -24,7 +24,7 @@ jobs:
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check --git`; 0.6.0 is the
         # first release with `--check` and `--git`.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@b9a3bff63b1e19b3a48d433668184e24e1abd3ba
         with:
           version: "0.6.0"
 
