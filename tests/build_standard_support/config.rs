@@ -41,7 +41,17 @@ impl Pin {
     ///
     /// Returns the reason when the channel is missing, repeated or unsupported.
     pub fn read(toolchain: &str) -> Result<Self, String> {
-        let channels = toolchain_channels(toolchain);
+        let declarations = toolchain_channels(toolchain);
+        if let Some(reason) = declarations
+            .iter()
+            .find_map(|declaration| declaration.as_ref().err())
+        {
+            return Err(reason.clone());
+        }
+        let channels: Vec<&str> = declarations
+            .iter()
+            .filter_map(|declaration| declaration.as_ref().ok().copied())
+            .collect();
         match channels.as_slice() {
             [] => Err("rust-toolchain.toml names no channel".to_owned()),
             [channel] => Self::classify(channel),
@@ -76,17 +86,44 @@ impl Pin {
 }
 
 /// Returns the quoted value of a `channel = "..."` line, if the line is one.
-fn channel_value(line: &str) -> Option<&str> {
+///
+/// A `channel` key whose value is not a closed quoted string, or that carries
+/// anything but a comment after the closing quote, is a malformed declaration
+/// and an error: skipping it would let `channel = nightly` beside a valid
+/// `channel = "stable"` read as one stable pin.
+///
+/// ```text
+/// channel = "stable"            -> Some(Ok("stable"))
+/// channel = "stable" # pinned   -> Some(Ok("stable"))
+/// channel = nightly             -> Some(Err(..))
+/// channel = "stable             -> Some(Err(..))
+/// channel = "stable" junk       -> Some(Err(..))
+/// channel_x = "stable"          -> None
+/// ```
+fn channel_declaration(line: &str) -> Option<Result<&str, String>> {
     let (key, value) = line.split_once('=')?;
     if key.trim() != "channel" {
         return None;
     }
-    value.trim().strip_prefix('"')?.split('"').next()
+    let Some(rest) = value.trim().strip_prefix('"') else {
+        return Some(Err(format!("`{line}`: the channel is not a quoted string")));
+    };
+    let Some((name, after)) = rest.split_once('"') else {
+        return Some(Err(format!("`{line}`: the channel has no closing quote")));
+    };
+    let after = after.trim();
+    if after.is_empty() || after.starts_with('#') {
+        Some(Ok(name))
+    } else {
+        Some(Err(format!(
+            "`{line}`: unexpected content after the channel"
+        )))
+    }
 }
 
-/// Returns every `channel` value under `[toolchain]`, skipping comments, so a
+/// Returns every `channel` declaration under `[toolchain]`, skipping comments, so a
 /// lookalike key, a commented line or a key in another table is not counted.
-fn toolchain_channels(toolchain: &str) -> Vec<&str> {
+fn toolchain_channels(toolchain: &str) -> Vec<Result<&str, String>> {
     let mut table = "";
     let mut found = Vec::new();
     for line in toolchain
@@ -97,7 +134,7 @@ fn toolchain_channels(toolchain: &str) -> Vec<&str> {
         if line.starts_with('[') {
             table = line.trim_matches(|c| c == '[' || c == ']').trim();
         } else if table == "toolchain" {
-            found.extend(channel_value(line));
+            found.extend(channel_declaration(line));
         }
     }
     found

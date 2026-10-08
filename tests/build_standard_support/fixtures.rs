@@ -169,3 +169,11 @@ pub const COVERAGE_DENYING_WITH_COMMENT: &str = concat!(
     "steps:\n  - name: coverage\n    uses: org/generate-coverage@abc\n",
     "    env:\n      RUSTFLAGS: -D warnings # not -Zthreads=8, not mold\n"
 );
+/// A toolchain file whose second channel is not quoted, beside a valid one.
+pub const UNQUOTED_BESIDE_VALID: &str = "[toolchain]\nchannel = \"stable\"\nchannel = nightly\n";
+/// A toolchain file whose channel has no closing quote.
+pub const UNCLOSED_CHANNEL: &str = "[toolchain]\nchannel = \"stable\n";
+/// A toolchain file with content after the closing quote.
+pub const TRAILING_CONTENT: &str = "[toolchain]\nchannel = \"stable\" junk\n";
+/// A toolchain file whose channel carries only a comment after the closing quote.
+pub const COMMENT_AFTER_CHANNEL: &str = "[toolchain]\nchannel = \"1.94.0\" # pinned\n";
