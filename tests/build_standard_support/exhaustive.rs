@@ -32,31 +32,15 @@ pub fn sequences<T: Clone>(alphabet: &[T], max_len: usize) -> Vec<Vec<T>> {
     all
 }
 
-/// Returns whether a channel is a numbered release such as `1.94` or `1.94.0`.
-fn is_numbered_release(channel: &str) -> bool {
-    let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
-    channel.contains('.') && channel.split('.').all(digits)
-}
-
-/// Returns the expected classification of a channel the standard knows.
-fn expected_class(channel: &str) -> Option<Pin> {
-    if channel == "nightly" || channel.starts_with("nightly-") {
-        Some(Pin::Nightly)
-    } else if matches!(channel, "stable" | "beta") || is_numbered_release(channel) {
-        Some(Pin::Stable)
-    } else {
-        None
-    }
-}
-
 /// What a generated toolchain line is, declared beside its text so that the expectation never
 /// re-parses the text it judges.
 #[derive(Clone, Copy)]
 enum Line {
     /// A table header, naming the table that follows.
     Table(&'static str),
-    /// A well-formed `channel` declaration with its value.
-    Channel(&'static str),
+    /// A well-formed `channel` declaration, with the class the standard gives its value
+    /// (`None` for a channel the standard does not know).
+    Channel(Option<Pin>),
     /// A `channel` key whose value is malformed.
     Malformed,
     /// A lookalike key, a comment or a blank line.
@@ -77,15 +61,17 @@ fn the_pin_reader_agrees_with_an_independent_count_over_every_small_file() {
         ("[other]", Line::Table("other")),
         (
             "channel = \"nightly-2026-05-28\"",
-            Line::Channel("nightly-2026-05-28"),
+            Line::Channel(Some(Pin::Nightly)),
         ),
-        ("channel=\"stable\"", Line::Channel("stable")),
-        ("channel = \"1.94.0\"", Line::Channel("1.94.0")),
+        ("channel=\"stable\"", Line::Channel(Some(Pin::Stable))),
+        ("channel = \"1.94.0\"", Line::Channel(Some(Pin::Stable))),
+        ("channel = \"nightly-preview\"", Line::Channel(None)),
+        ("channel = \"nightly-2026-5-28\"", Line::Channel(None)),
+        ("channel = \"nightly\"", Line::Channel(Some(Pin::Nightly))),
         (
-            "channel = \"nightly-preview\"",
-            Line::Channel("nightly-preview"),
+            "channel = \"stable\" # pinned",
+            Line::Channel(Some(Pin::Stable)),
         ),
-        ("channel = \"stable\" # pinned", Line::Channel("stable")),
         ("channel = stable", Line::Malformed),
         ("channel = \"stable", Line::Malformed),
         ("channel = \"stable\" junk", Line::Malformed),
@@ -100,18 +86,18 @@ fn the_pin_reader_agrees_with_an_independent_count_over_every_small_file() {
             .collect::<Vec<_>>()
             .join("\n");
         let mut table = "";
-        let mut found: Vec<&str> = Vec::new();
+        let mut found: Vec<Option<Pin>> = Vec::new();
         let mut malformed = false;
         for (_, kind) in &file {
             match kind {
                 Line::Table(name) => table = name,
-                Line::Channel(name) if table == "toolchain" => found.push(name),
+                Line::Channel(class) if table == "toolchain" => found.push(*class),
                 Line::Malformed if table == "toolchain" => malformed = true,
                 _ => {}
             }
         }
         let expected = match found.as_slice() {
-            [channel] if !malformed => expected_class(channel).ok_or(()),
+            [class] if !malformed => class.ok_or(()),
             _ => Err(()),
         };
         assert_eq!(Pin::read(&text).map_err(|_| ()), expected, "file: {text:?}");

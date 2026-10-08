@@ -177,3 +177,7 @@ pub const UNCLOSED_CHANNEL: &str = "[toolchain]\nchannel = \"stable\n";
 pub const TRAILING_CONTENT: &str = "[toolchain]\nchannel = \"stable\" junk\n";
 /// A toolchain file whose channel carries only a comment after the closing quote.
 pub const COMMENT_AFTER_CHANNEL: &str = "[toolchain]\nchannel = \"1.94.0\" # pinned\n";
+/// A toolchain file whose nightly is not dated.
+pub const UNDATED_NIGHTLY: &str = "[toolchain]\nchannel = \"nightly-preview\"\n";
+/// A toolchain file whose nightly date is not zero-padded.
+pub const SHORT_DATED_NIGHTLY: &str = "[toolchain]\nchannel = \"nightly-2026-5-28\"\n";

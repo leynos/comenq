@@ -63,7 +63,8 @@ impl Pin {
 
     /// Classifies one channel name.
     fn classify(channel: &str) -> Result<Self, String> {
-        let is_nightly = channel == "nightly" || channel.starts_with("nightly-");
+        let is_nightly =
+            channel == "nightly" || channel.strip_prefix("nightly-").is_some_and(is_date);
         let is_release = channel.split('.').count() >= 2
             && channel
                 .split('.')
@@ -83,6 +84,18 @@ impl Pin {
     pub const fn takes_threads(self) -> bool {
         matches!(self, Self::Nightly)
     }
+}
+
+/// Returns whether text is a `YYYY-MM-DD` date, which is how a dated nightly names itself.
+///
+/// ```text
+/// is_date("2026-05-28") == true
+/// is_date("preview")    == false
+/// is_date("2026-5-28")  == false
+/// ```
+fn is_date(text: &str) -> bool {
+    let widths: Vec<usize> = text.split('-').map(str::len).collect();
+    widths == [4, 2, 2] && text.chars().all(|c| c.is_ascii_digit() || c == '-')
 }
 
 /// Returns the quoted value of a `channel = "..."` line, if the line is one.
