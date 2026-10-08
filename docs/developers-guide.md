@@ -147,6 +147,14 @@ development target on a Linux host and a macOS host (each keeping the caller's
 own `RUSTFLAGS`) and for each coverage and release target on a Linux host, and
 the `setup-rust` steps of the CI workflows (each must pass `install-mold`), so
 a flag lost through a recipe or workflow edit fails there.
+`tests/workflow_contracts/ci_rustflags_test.py` holds the two CI steps that call
+`cargo` themselves, `Install Merman CLI` and `Test and Measure Coverage`. It
+parses `ci.yml` with PyYAML and requires each to assign exactly
+`RUSTFLAGS: -D warnings` in its own `env` block: the Merman install builds on
+the isolated stable 1.95.0 toolchain, which must never see `-Zthreads`, and a
+coverage build is a measurement that takes neither standard flag. An assignment
+on a sibling step, the job or the workflow does not count. Run it with
+`make test-workflow-contracts`.
 
 ### Cranelift
 
