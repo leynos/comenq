@@ -291,9 +291,10 @@ def test_every_suite_target_runs_the_suite(target: str) -> None:
 )
 def test_every_inert_make_option_runs_no_goal(option: str) -> None:
     """Refuse to read a make option that runs no goal as a suite run."""
-    assert not runs_suite(f"make {option}", "test")
-    assert not runs_suite(f"make {option} test", "test")
-    assert not runs_suite(f"make test {option}", "test")
+    for line in (f"make {option}", f"make {option} test", f"make test {option}"):
+        assert not runs_suite(line, "test"), (
+            f"{line!r} was read as a suite run although {option} runs no goal"
+        )
 
 
 @pytest.mark.parametrize(
@@ -301,7 +302,9 @@ def test_every_inert_make_option_runs_no_goal(option: str) -> None:
 )
 def test_command_lookup_runs_nothing(line: str) -> None:
     """Read `command -v` and `command -V` as running nothing."""
-    assert not runs_suite(line, "test")
+    assert not runs_suite(line, "test"), (
+        f"{line!r} was read as a suite run but only looks a command up"
+    )
 
 
 def _make_default_goal(makefile: str, gnu_make: str) -> str | None:
