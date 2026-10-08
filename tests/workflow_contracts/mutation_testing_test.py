@@ -40,6 +40,8 @@ USES_RE = re.compile(
 #: crates covered by dependent crates' tests do not report false
 #: survivors.
 EXPECTED_WITH = {
+    # .cargo/config.toml links with mold on Linux; the reusable workflow installs it.
+    "install-mold": "true",
     "paths": "src/,crates/",
     "exclude-globs": "test-support/**,crates/test-utils/**",
     "extra-args": "--workspace --all-features --test-workspace=true",

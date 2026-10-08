@@ -384,6 +384,7 @@ dependencies = [
  "octocrab",
  "ortho_config",
  "regex",
+ "rstest",
  "serde",
  "serde_json",
  "serde_yaml",
