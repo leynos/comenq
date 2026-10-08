@@ -167,6 +167,10 @@ the repository-specific `typos.local.toml` overlay, then checks the tracked
 Markdown. `make markdownlint` depends on this gate, and `make all` runs it with
 the repository's release build.
 
+`TYPOS_CONFIG_BUILDER_VERSION` in the `Makefile` pins the
+`typos-config-builder` release the gate runs (currently `v0.1.3`). Raise it
+together with the regenerated `typos.toml`, never on its own.
+
 Do not edit `typos.toml` by hand. Add only narrow identifier, API, proper-name,
 or immutable-fixture exceptions to the local overlay; ordinary prose belongs in
 Oxford spelling. Because the dictionary is live, `typos.toml` must never be
