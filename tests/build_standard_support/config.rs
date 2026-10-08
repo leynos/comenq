@@ -111,8 +111,8 @@ fn channel_declaration(line: &str) -> Option<Result<&str, String>> {
     let Some((name, after)) = rest.split_once('"') else {
         return Some(Err(format!("`{line}`: the channel has no closing quote")));
     };
-    let after = after.trim();
-    if after.is_empty() || after.starts_with('#') {
+    let trailing = after.trim();
+    if trailing.is_empty() || trailing.starts_with('#') {
         Some(Ok(name))
     } else {
         Some(Err(format!(
