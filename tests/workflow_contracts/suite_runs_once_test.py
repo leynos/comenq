@@ -26,6 +26,7 @@ import typing as typ
 
 import pytest
 import yaml
+from make_oracle import make_default_goal
 from suite_commands import default_goal, runs_suite
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -307,30 +308,6 @@ def test_command_lookup_runs_nothing(line: str) -> None:
     )
 
 
-def _make_default_goal(makefile: str, gnu_make: str) -> str | None:
-    """Return the default goal GNU make itself settles on, or ``None``.
-
-    ``make -pn`` prints the variable database without running a recipe, and
-    ``.DEFAULT_GOAL`` is the value make settled on after reading every
-    assignment (GNU make manual, "Other Special Variables").
-    """
-    result = subprocess.run(  # noqa: S603 - a fixed command and a fixture
-        [gnu_make, "-f", "-", "-pn"],
-        input=makefile,
-        capture_output=True,
-        text=True,
-        check=False,
-        env={"PATH": os.environ["PATH"]},
-    )
-    if result.returncode:
-        return None
-    for line in result.stdout.splitlines():
-        name, _, value = line.replace(" := ", " = ").partition(" = ")
-        if name == ".DEFAULT_GOAL":
-            return value
-    return None
-
-
 MAKE_FIXTURES = [
     ".PHONY: a\nbuild: x\nx:\n",
     ".DEFAULT_GOAL := test\nbuild:\ntest:\n",
@@ -351,7 +328,7 @@ MAKE_FIXTURES = [
 @pytest.mark.parametrize("makefile", MAKE_FIXTURES)
 def test_the_reader_agrees_with_gnu_make(makefile: str, gnu_make: str) -> None:
     """Pin the default-goal reader to make itself, not to a reading of its manual."""
-    by_make = _make_default_goal(makefile, gnu_make)
+    by_make = make_default_goal(makefile, gnu_make)
     assert by_make is not None, "make must accept the fixture"
     assert default_goal(makefile) == by_make, makefile
 
@@ -363,7 +340,7 @@ def test_make_refuses_several_words_and_the_reader_does_not_read_them(
     makefile = (
         ".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\nfirst:\nsecond:\n"
     )
-    assert _make_default_goal(makefile, gnu_make) is None
+    assert make_default_goal(makefile, gnu_make) is None
     assert default_goal(makefile) == "build"
 
 

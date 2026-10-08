@@ -12,12 +12,11 @@ assignments, so make, not a second reading of its manual, is the oracle.
 from __future__ import annotations
 
 import itertools
-import os
-import subprocess
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from make_oracle import make_default_goal
 from suite_commands import default_goal, runs_suite
 
 SUITE_COMMANDS = (
@@ -166,25 +165,6 @@ def test_the_default_goal_is_what_the_assignments_leave(
     assert default_goal(makefile) == expected, makefile
 
 
-def _make_goal(makefile: str, gnu_make: str) -> str | None:
-    """Return the default goal GNU make settles on, or ``None`` where it refuses."""
-    result = subprocess.run(  # noqa: S603 - a fixed command and a fixture
-        [gnu_make, "-f", "-", "-pn"],
-        input=makefile,
-        capture_output=True,
-        text=True,
-        check=False,
-        env={"PATH": os.environ["PATH"]},
-    )
-    if result.returncode:
-        return None
-    for line in result.stdout.splitlines():
-        name, _, value = line.replace(" := ", " = ").partition(" = ")
-        if name == ".DEFAULT_GOAL":
-            return value
-    return None
-
-
 def test_every_bounded_assignment_sequence_agrees_with_gnu_make(gnu_make: str) -> None:
     """Compare the reader with make over every sequence of up to three assignments.
 
@@ -209,7 +189,7 @@ def test_every_bounded_assignment_sequence_agrees_with_gnu_make(gnu_make: str) -
     for length in range(4):
         for operations in itertools.product(options, repeat=length):
             makefile = _makefile(list(operations))
-            by_make = _make_goal(makefile, gnu_make)
+            by_make = make_default_goal(makefile, gnu_make)
             if by_make is None:
                 continue
             if default_goal(makefile) != by_make:

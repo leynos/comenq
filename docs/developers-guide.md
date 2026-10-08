@@ -106,7 +106,7 @@ A bare `make` runs the Makefile's default goal, so the reader takes that goal
 from the Makefile (`default_goal` in `suite_commands.py`). It applies the
 `.DEFAULT_GOAL` assignments in order, as GNU make does (manual, "Other Special
 Variables"). `=` and `:=` replace the value, so the last one wins. `?=` changes
-nothing, because make defines `.DEFAULT_GOAL` itself, empty, before it reads a
+nothing because make defines `.DEFAULT_GOAL` itself, empty, before it reads a
 makefile. `+=` appends a word, and an empty value clears it. A value of several
 words, which make refuses, is not read, and the reader falls back to the first
 rule that is not a special or pattern target. `make test-cucumber` counts as a
