@@ -16,7 +16,7 @@ import itertools
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from make_oracle import make_default_goal
+from make_oracle import Goal, MakeDatabase, make_default_goal
 from suite_commands import default_goal, runs_suite
 
 SUITE_COMMANDS = (
@@ -165,7 +165,9 @@ def test_the_default_goal_is_what_the_assignments_leave(
     assert default_goal(makefile) == expected, makefile
 
 
-def test_every_bounded_assignment_sequence_agrees_with_gnu_make(gnu_make: str) -> None:
+def test_every_bounded_assignment_sequence_agrees_with_gnu_make(
+    make_database: MakeDatabase,
+) -> None:
     """Compare the reader with make over every sequence of up to three assignments.
 
     The space is small enough to enumerate (the operators and values above,
@@ -174,8 +176,8 @@ def test_every_bounded_assignment_sequence_agrees_with_gnu_make(gnu_make: str) -
 
     Parameters
     ----------
-    gnu_make : str
-        The path of a GNU make, from the shared fixture.
+    make_database : MakeDatabase
+        The runner of ``make -pn``, from the shared fixture.
 
     Returns
     -------
@@ -189,11 +191,11 @@ def test_every_bounded_assignment_sequence_agrees_with_gnu_make(gnu_make: str) -
     for length in range(4):
         for operations in itertools.product(options, repeat=length):
             makefile = _makefile(list(operations))
-            by_make = make_default_goal(makefile, gnu_make)
-            if by_make is None:
+            by_make = make_default_goal(makefile, make_database)
+            if not isinstance(by_make, Goal):
                 continue
-            if default_goal(makefile) != by_make:
-                disagreements.append((operations, by_make, default_goal(makefile)))
+            if default_goal(makefile) != by_make.value:
+                disagreements.append((operations, by_make.value, default_goal(makefile)))
     assert not disagreements, f"the reader disagrees with make on {disagreements[:5]}"
 
 

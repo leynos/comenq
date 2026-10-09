@@ -27,7 +27,14 @@ import typing as typ
 
 import pytest
 import yaml
-from make_oracle import make_default_goal
+from make_oracle import (
+    Goal,
+    MakeDatabase,
+    MakeOutput,
+    Refused,
+    make_default_goal,
+    parse_default_goal,
+)
 from suite_commands import default_goal, runs_suite
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -327,21 +334,25 @@ MAKE_FIXTURES = [
 
 
 @pytest.mark.parametrize("makefile", MAKE_FIXTURES)
-def test_the_reader_agrees_with_gnu_make(makefile: str, gnu_make: str) -> None:
+def test_the_reader_agrees_with_gnu_make(
+    makefile: str, make_database: MakeDatabase
+) -> None:
     """Pin the default-goal reader to make itself, not to a reading of its manual."""
-    by_make = make_default_goal(makefile, gnu_make)
-    assert by_make is not None, "make must accept the fixture"
-    assert default_goal(makefile) == by_make, makefile
+    by_make = make_default_goal(makefile, make_database)
+    assert isinstance(by_make, Goal), f"make must accept the fixture: {by_make}"
+    assert default_goal(makefile) == by_make.value, makefile
 
 
 def test_make_refuses_several_words_and_the_reader_does_not_read_them(
-    gnu_make: str,
+    make_database: MakeDatabase,
 ) -> None:
     """Fall back to the first rule where make refuses a multi-word goal."""
     makefile = (
         ".DEFAULT_GOAL := first\n.DEFAULT_GOAL += second\nbuild:\nfirst:\nsecond:\n"
     )
-    assert make_default_goal(makefile, gnu_make) is None
+    refusal = make_default_goal(makefile, make_database)
+    assert isinstance(refusal, Refused), f"make must refuse the fixture: {refusal}"
+    assert refusal.returncode, "a refusal carries make's non-zero exit status"
     assert default_goal(makefile) == "build"
 
 
@@ -422,14 +433,18 @@ def test_the_cucumber_step_runs_after_the_coverage_upload() -> None:
 
 
 def test_the_cucumber_harness_runs_in_its_own_step() -> None:
-    """Require one unconditional step running ``make test-cucumber``."""
+    """Require one step running ``make test-cucumber`` that no failure can skip."""
     steps = [
         step
         for step in _suite_job_steps()
         if str(step.get("run", "")).strip() == CUCUMBER_COMMAND
     ]
     assert len(steps) == 1, f"{SUITE_JOB} must run `{CUCUMBER_COMMAND}` once"
-    assert "if" not in steps[0], "the cucumber step must run on every pull request"
+    condition = str(steps[0].get("if", "")).strip()
+    assert condition in {"", "${{ !cancelled() }}", "!cancelled()"}, (
+        "the cucumber step may be conditional only on the run not being cancelled "
+        f"(so it still runs after a failed upload); it has `if: {condition}`"
+    )
 
 
 def _recipe(target: str) -> list[str]:
@@ -457,7 +472,7 @@ def test_make_test_still_runs_nextest_and_the_cucumber_target() -> None:
     assert "test-cucumber" in recipe
 
 
-def _dry_run(target: str, gnu_make: str) -> list[str]:
+def _dry_run(target: str, gnu_make: str, env: dict[str, str]) -> list[str]:
     """Return the commands ``make`` would run for a target, in order.
 
     ``make -n`` prints each recipe line after expansion without running it, so
@@ -473,7 +488,7 @@ def _dry_run(target: str, gnu_make: str) -> list[str]:
         capture_output=True,
         text=True,
         check=True,
-        env={"PATH": os.environ["PATH"]},
+        env=env,
     )
     # `$(MAKE)` expands to the path make was started by, so name it `make`.
     return [
@@ -484,20 +499,24 @@ def _dry_run(target: str, gnu_make: str) -> list[str]:
     ]
 
 
-def test_make_test_runs_nextest_then_the_cucumber_target(gnu_make: str) -> None:
+def test_make_test_runs_nextest_then_the_cucumber_target(
+    gnu_make: str, make_env: dict[str, str]
+) -> None:
     """Assert the commands and order `make test` would run, not the recipe text.
 
     Parameters
     ----------
     gnu_make : str
         The path of a GNU make, from the shared fixture.
+    make_env : dict[str, str]
+        The environment make runs in, from the shared fixture.
 
     Returns
     -------
     None
         The test passes when the expanded commands match, in order.
     """
-    commands = _dry_run("test", gnu_make)
+    commands = _dry_run("test", gnu_make, make_env)
     assert commands == [
         'RUSTFLAGS="-D warnings" cargo nextest run --workspace --all-targets --all-features',
         "make test-cucumber",
@@ -508,20 +527,24 @@ def test_make_test_runs_nextest_then_the_cucumber_target(gnu_make: str) -> None:
     )
 
 
-def test_make_test_cucumber_runs_the_harness_over_the_workspace(gnu_make: str) -> None:
+def test_make_test_cucumber_runs_the_harness_over_the_workspace(
+    gnu_make: str, make_env: dict[str, str]
+) -> None:
     """Assert the one command `make test-cucumber` would run.
 
     Parameters
     ----------
     gnu_make : str
         The path of a GNU make, from the shared fixture.
+    make_env : dict[str, str]
+        The environment make runs in, from the shared fixture.
 
     Returns
     -------
     None
         The test passes when the single expanded command matches.
     """
-    commands = _dry_run("test-cucumber", gnu_make)
+    commands = _dry_run("test-cucumber", gnu_make, make_env)
     assert commands == [
         'RUSTFLAGS="-D warnings" cargo test --workspace --all-features --test cucumber'
     ], (
@@ -549,7 +572,9 @@ def test_the_cucumber_target_is_declared_phony() -> None:
     )
 
 
-def test_make_all_runs_no_suite_command(gnu_make: str) -> None:
+def test_make_all_runs_no_suite_command(
+    gnu_make: str, make_env: dict[str, str]
+) -> None:
     """Assert that nothing `make all` would run is read as a suite run.
 
     `all` is the Makefile's default goal here, and it builds the release binary
@@ -560,14 +585,51 @@ def test_make_all_runs_no_suite_command(gnu_make: str) -> None:
     ----------
     gnu_make : str
         The path of a GNU make, from the shared fixture.
+    make_env : dict[str, str]
+        The environment make runs in, from the shared fixture.
 
     Returns
     -------
     None
         The test passes when no expanded command is a suite run.
     """
-    commands = _dry_run("all", gnu_make)
+    commands = _dry_run("all", gnu_make, make_env)
     assert commands, "`make all` would run nothing, so the check proves nothing"
     suite = [command for command in commands if runs_suite(command, "build")]
     assert not suite, f"`make all` would run suite commands: {suite!r}"
     assert not runs_suite("make all", "build"), "`make all` read as a suite run"
+
+
+def _fake_database(output: MakeOutput) -> MakeDatabase:
+    """Return a runner that answers every makefile with ``output``."""
+
+    def run(_makefile: str) -> MakeOutput:
+        return output
+
+    return run
+
+
+def test_a_database_with_a_goal_line_is_read_as_that_goal() -> None:
+    """Read ``.DEFAULT_GOAL`` from either assignment spelling."""
+    assert parse_default_goal("a = 1\n.DEFAULT_GOAL := build\n") == "build"
+    assert parse_default_goal(".DEFAULT_GOAL = \n") == ""
+    assert parse_default_goal("a = 1\n") is None
+
+
+def test_a_failed_make_run_is_a_refusal_with_its_reason() -> None:
+    """Carry make's exit status and message, not a bare absence."""
+    database = _fake_database(MakeOutput(2, "", "Makefile:1: *** boom.  Stop.\n"))
+    assert make_default_goal("x", database) == Refused(2, "Makefile:1: *** boom.  Stop.")
+
+
+def test_a_clean_run_without_a_goal_line_is_a_refusal() -> None:
+    """Never read an unparseable database as an empty goal."""
+    refusal = make_default_goal("x", _fake_database(MakeOutput(0, "a = 1\n", "")))
+    assert isinstance(refusal, Refused)
+    assert refusal.reason == "make printed no .DEFAULT_GOAL"
+
+
+def test_a_clean_run_with_a_goal_line_is_that_goal() -> None:
+    """Return the goal make printed."""
+    database = _fake_database(MakeOutput(0, ".DEFAULT_GOAL := test\n", ""))
+    assert make_default_goal("x", database) == Goal("test")

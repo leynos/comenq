@@ -8,10 +8,13 @@ contracts take the ``gnu_make`` fixture, which skips them with the reason when
 
 from __future__ import annotations
 
+import functools
+import os
 import shutil
 import subprocess
 
 import pytest
+from make_oracle import MakeDatabase, run_make_database
 
 
 @pytest.fixture(scope="session")
@@ -26,3 +29,18 @@ def gnu_make() -> str:
     if "GNU Make" not in result.stdout:
         pytest.skip("make is not GNU make, so the reader cannot be pinned to it")
     return path
+
+
+@pytest.fixture
+def make_env() -> dict[str, str]:
+    """Return the environment make runs in: ``PATH`` and nothing else.
+
+    It is read here, at the test boundary, so no helper reads it.
+    """
+    return {"PATH": os.environ["PATH"]}
+
+
+@pytest.fixture
+def make_database(gnu_make: str, make_env: dict[str, str]) -> MakeDatabase:
+    """Return a runner of ``make -pn`` that sees only ``make_env``."""
+    return functools.partial(run_make_database, gnu_make=gnu_make, env=make_env)
