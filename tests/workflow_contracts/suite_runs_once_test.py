@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import typing as typ
 
@@ -461,7 +462,10 @@ def _dry_run(target: str, gnu_make: str) -> list[str]:
 
     ``make -n`` prints each recipe line after expansion without running it, so
     an ``echo``-only or commented-out recipe shows up as what it is. Directory
-    notices from the recursive ``$(MAKE)`` call are dropped.
+    notices from the recursive ``$(MAKE)`` call are dropped. The build
+    standard's compiler and linker flags change with the standard, not with
+    this contract, so a ``RUSTFLAGS`` value that denies warnings is read as
+    ``-D warnings``.
     """
     result = subprocess.run(  # noqa: S603 - a fixed command on a fixed target
         [gnu_make, "-n", target, "CARGO=cargo", "BUILD_JOBS="],
@@ -473,7 +477,8 @@ def _dry_run(target: str, gnu_make: str) -> list[str]:
     )
     # `$(MAKE)` expands to the path make was started by, so name it `make`.
     return [
-        line.strip().replace(f"{gnu_make} ", "make ", 1)
+        re.sub(r'RUSTFLAGS="[^"]*-D warnings[^"]*"', 'RUSTFLAGS="-D warnings"', line.strip())
+        .replace(f"{gnu_make} ", "make ", 1)
         for line in result.stdout.splitlines()
         if line.strip() and not line.startswith("make[")
     ]
