@@ -9,7 +9,7 @@ use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
@@ -18,6 +18,10 @@ use uuid::Uuid;
 use crate::metrics;
 use crate::queue::SharedQueue;
 use crate::supervisor::backoff;
+
+pub(crate) mod protocol;
+#[cfg(test)]
+pub(crate) use protocol::dispatch_request;
 
 /// Prepare a Unix domain socket for the listener.
 ///
@@ -186,15 +190,34 @@ enum ClientOutcome {
 /// # Errors
 /// Fails if reading from or writing to the socket fails, or if the payload
 /// exceeds [`MAX_REQUEST_BYTES`].
-#[tracing::instrument(skip(stream, queue), fields(task = "listener", outcome = tracing::field::Empty))]
+#[tracing::instrument(
+    skip(stream, queue),
+    fields(
+        task = "listener",
+        operation = tracing::field::Empty,
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        error_kind = tracing::field::Empty,
+    )
+)]
 pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
+    let started = Instant::now();
     let result = handle_client_inner(stream, queue).await;
-    let (outcome, operation) = match &result {
-        Ok((ClientOutcome::Accepted, operation)) => ("accepted", *operation),
-        Ok((ClientOutcome::Failed, operation)) => ("failed", *operation),
-        Err(_) => ("rejected", None),
+    let (outcome, operation, error_kind) = match &result {
+        Ok((ClientOutcome::Accepted, operation, error_kind)) => {
+            ("accepted", *operation, *error_kind)
+        }
+        Ok((ClientOutcome::Failed, operation, error_kind)) => ("failed", *operation, *error_kind),
+        Err(_) => ("rejected", None, Some("protocol_io")),
     };
-    tracing::Span::current().record("outcome", outcome);
+    let span = tracing::Span::current();
+    span.record("operation", operation.unwrap_or("unknown"));
+    span.record(
+        "elapsed_ms",
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
+    span.record("outcome", outcome);
+    span.record("error_kind", error_kind.unwrap_or("none"));
     metrics::record_request(operation, outcome);
     result.map(|_| ())
 }
@@ -202,7 +225,7 @@ pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Resul
 async fn handle_client_inner(
     stream: UnixStream,
     queue: Arc<SharedQueue>,
-) -> Result<(ClientOutcome, Option<&'static str>)> {
+) -> Result<(ClientOutcome, Option<&'static str>, Option<&'static str>)> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -215,26 +238,30 @@ async fn handle_client_inner(
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let (response, mut outcome, operation) = match serde_json::from_slice::<Request>(&buffer) {
-        Ok(request) => {
-            let operation = request_operation(&request);
-            let response = queue.execute(request).await;
-            let outcome = if matches!(&response, Response::Error { .. }) {
-                ClientOutcome::Failed
-            } else {
-                ClientOutcome::Accepted
-            };
-            (response, outcome, Some(operation))
-        }
-        Err(e) => (
-            Response::error(format!("invalid request: {e}")),
-            ClientOutcome::Failed,
-            None,
-        ),
-    };
+    let (response, mut outcome, operation, mut error_kind) =
+        match serde_json::from_slice::<Request>(&buffer) {
+            Ok(request) => {
+                let operation = request_operation(&request);
+                let (response, error_kind) =
+                    protocol::dispatch_request_with_error_kind(&queue, request).await;
+                let outcome = if matches!(&response, Response::Error { .. }) {
+                    ClientOutcome::Failed
+                } else {
+                    ClientOutcome::Accepted
+                };
+                (response, outcome, Some(operation), error_kind)
+            }
+            Err(e) => (
+                Response::error(format!("invalid request: {e}")),
+                ClientOutcome::Failed,
+                None,
+                Some("invalid_json"),
+            ),
+        };
     let mut bytes = serde_json::to_vec(&response)?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         outcome = ClientOutcome::Failed;
+        error_kind = Some("response_too_large");
         bytes = serde_json::to_vec(&Response::error(format!(
             "response exceeds {MAX_RESPONSE_BYTES} bytes"
         )))?;
@@ -252,7 +279,7 @@ async fn handle_client_inner(
     )
     .await
     .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
-    Ok((outcome, operation))
+    Ok((outcome, operation, error_kind))
 }
 
 fn request_operation(request: &Request) -> &'static str {
@@ -329,3 +356,6 @@ mod tests {
         drop(listener);
     }
 }
+
+#[cfg(test)]
+mod observability;

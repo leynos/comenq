@@ -1,22 +1,21 @@
-//! Shared queue state and protocol operation dispatch.
+//! Shared queue state and queue use-case operations.
 //!
 //! [`SharedQueue`] bundles the persistent [`QueueStore`] with the daemon
-//! configuration and a change signal. The listener executes protocol
-//! requests against it, and the worker waits on the change signal so queue
-//! mutations (put, bump, bust, del) are observed promptly.
+//! configuration and a change signal. The listener maps protocol operations
+//! to these typed operations, and the worker waits on the change signal so
+//! queue mutations are observed promptly.
 
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::{MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, Request, Response};
 use rand::Rng;
 use tokio::sync::Notify;
 
 use crate::config::Config;
 use crate::metrics;
-use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
+use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoreError, StoredEntry};
 
 /// Current Unix time in whole seconds.
 ///
@@ -136,7 +135,7 @@ impl SharedQueue {
     pub async fn next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
-        self.with_store(move |store| store.next_due(cooldown, now))
+        self.with_store("next_due", move |store| store.next_due(cooldown, now))
             .await
     }
 
@@ -145,7 +144,9 @@ impl SharedQueue {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
         let result = self
-            .with_store(move |store| store.claim_next_due(cooldown, now))
+            .with_store("claim_next_due", move |store| {
+                store.claim_next_due(cooldown, now)
+            })
             .await;
         if matches!(&result, Ok(Some((_, 0)))) {
             self.update_queue_gauges().await;
@@ -155,7 +156,8 @@ impl SharedQueue {
 
     /// Reconcile interrupted completion and release claims from a prior worker.
     pub(crate) async fn recover_worker_state(&self) -> StoreResult<()> {
-        self.with_store(QueueStore::recover_worker_state).await?;
+        self.with_store("recover_worker_state", QueueStore::recover_worker_state)
+            .await?;
         self.update_queue_gauges().await;
         Ok(())
     }
@@ -165,7 +167,9 @@ impl SharedQueue {
         let id = id.to_owned();
         let now = self.clock.unix_now();
         let result = self
-            .with_store(move |store| store.complete_claim(&id, claim_token.as_deref(), now))
+            .with_store("complete", move |store| {
+                store.complete_claim(&id, claim_token.as_deref(), now)
+            })
             .await;
         if result.is_ok() {
             self.update_queue_gauges().await;
@@ -178,7 +182,9 @@ impl SharedQueue {
         let id = id.to_owned();
         let claim_token = claim_token.to_owned();
         let result = self
-            .with_store(move |store| store.release_claim(&id, &claim_token))
+            .with_store("release_claim", move |store| {
+                store.release_claim(&id, &claim_token)
+            })
             .await;
         if result.is_ok() {
             self.update_queue_gauges().await;
@@ -186,97 +192,133 @@ impl SharedQueue {
         result
     }
 
-    /// Execute a protocol request and produce the reply.
-    ///
-    /// Mutations signal the worker through the change notifier. Failures are
-    /// reported to the client as [`Response::Error`]; they never propagate.
-    pub async fn execute(&self, request: Request) -> Response {
-        let (response, mutated) = match request {
-            Request::Put { request, immediate } => {
-                (self.execute_put(request, immediate).await, true)
-            }
-            Request::List => (self.execute_list().await, false),
-            Request::Bump { id } => (
-                self.with_store(move |store| store.bump(&id).map(|()| Response::ok()))
-                    .await,
-                true,
-            ),
-            Request::Bust { id } => (
-                self.with_store(move |store| store.bust(&id).map(|()| Response::ok()))
-                    .await,
-                true,
-            ),
-            Request::Del { id } => (
-                self.with_store(move |store| store.del(&id).map(|()| Response::ok()))
-                    .await,
-                true,
-            ),
-        };
-        match response {
-            Ok(reply) => {
-                if mutated {
-                    self.update_queue_gauges().await;
-                    // notify_one buffers a permit, so a worker that is busy
-                    // computing rather than parked still observes the change.
-                    self.changed.notify_one();
-                }
-                reply
-            }
-            Err(e) => Response::error(e.to_string()),
-        }
-    }
-
-    /// Persist a put request and return its schedule-stable pending entry.
-    async fn execute_put(&self, request: CommentRequest, immediate: bool) -> StoreResult<Response> {
+    /// Persist a put request and return its schedule-stable queue entry.
+    pub(crate) async fn put(
+        &self,
+        request: CommentRequest,
+        immediate: bool,
+    ) -> StoreResult<(StoredEntry, u64)> {
         validate_request(&request)?;
         let cooldown = self.cfg.cooldown_period_seconds;
         let flutter_max = self.cfg.cooldown_flutter_seconds;
         let flutter_seconds = self.flutter_sampler.sample(flutter_max).min(flutter_max);
         let now = self.clock.unix_now();
-        self.with_store(move |store| {
-            let options = PutOptions {
-                cooldown,
-                flutter_seconds,
-                immediate,
-            };
-            store
-                .put_with_eta(request, &options, now)
-                .map(|(entry, eta)| Response::entry(entry.to_pending(eta)))
-        })
-        .await
+        let result = self
+            .with_store("put", move |store| {
+                let options = PutOptions {
+                    cooldown,
+                    flutter_seconds,
+                    immediate,
+                };
+                store.put_with_eta(request, &options, now)
+            })
+            .await;
+        if result.is_ok() {
+            self.mutation_finished().await;
+        }
+        result
     }
 
-    /// Convert the current persisted schedule into a list response.
-    async fn execute_list(&self) -> StoreResult<Response> {
+    /// Return the ordered schedule without constructing a protocol response.
+    pub(crate) async fn list(&self) -> StoreResult<Vec<(StoredEntry, u64)>> {
         let cooldown = self.cfg.cooldown_period_seconds;
         let now = self.clock.unix_now();
-        self.with_store(move |store| {
-            store
-                .schedule(cooldown, now)
-                .and_then(response_for_schedule)
-        })
-        .await
+        self.with_store("list", move |store| store.schedule(cooldown, now))
+            .await
+    }
+
+    /// Move the identified entry to the head of the queue.
+    pub(crate) async fn bump(&self, id: &str) -> StoreResult<()> {
+        self.mutate_entry("bump", id, QueueStore::bump).await
+    }
+
+    /// Move the identified entry to the tail of the queue.
+    pub(crate) async fn bust(&self, id: &str) -> StoreResult<()> {
+        self.mutate_entry("bust", id, QueueStore::bust).await
+    }
+
+    /// Remove the identified entry from the queue.
+    pub(crate) async fn del(&self, id: &str) -> StoreResult<()> {
+        self.mutate_entry("del", id, QueueStore::del).await
+    }
+
+    async fn mutate_entry(
+        &self,
+        operation: &'static str,
+        id: &str,
+        mutate: fn(&QueueStore, &str) -> StoreResult<()>,
+    ) -> StoreResult<()> {
+        let id = id.to_owned();
+        let result = self
+            .with_store(operation, move |store| mutate(store, &id))
+            .await;
+        if result.is_ok() {
+            self.mutation_finished().await;
+        }
+        result
+    }
+
+    async fn mutation_finished(&self) {
+        self.update_queue_gauges().await;
+        // notify_one buffers a permit while the worker is processing an entry.
+        self.changed.notify_one();
     }
 
     /// Run synchronous store work outside Tokio's asynchronous executor.
-    async fn with_store<T, F>(&self, operation: F) -> StoreResult<T>
+    async fn with_store<T, F>(&self, operation: &'static str, work: F) -> StoreResult<T>
     where
         T: Send + 'static,
         F: FnOnce(&QueueStore) -> StoreResult<T> + Send + 'static,
     {
+        let started = Instant::now();
         let store = Arc::clone(&self.store);
-        tokio::task::spawn_blocking(move || {
+        let span = tracing::info_span!(
+            "queue_store",
+            operation,
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            error_kind = tracing::field::Empty,
+        );
+        let worker_span = span.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let _entered = worker_span.enter();
             let store = store
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            operation(&store)
+            work(&store)
         })
-        .await?
+        .await
+        .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        span.record("elapsed_ms", elapsed_ms);
+        match &result {
+            Ok(_) => {
+                span.record("outcome", "success");
+                span.record("error_kind", "none");
+            }
+            Err(error) => {
+                let error_kind = error.category();
+                span.record("outcome", "failure");
+                span.record("error_kind", error_kind);
+                if error.is_unexpected() {
+                    tracing::error!(
+                        parent: &span,
+                        operation,
+                        error_kind,
+                        "Queue store operation failed",
+                    );
+                }
+            }
+        }
+        result
     }
 
     /// Refresh entry-count and accounted-byte gauges from persisted data.
     async fn update_queue_gauges(&self) {
-        match self.with_store(QueueStore::queue_metrics_snapshot).await {
+        match self
+            .with_store("queue_metrics_snapshot", QueueStore::queue_metrics_snapshot)
+            .await
+        {
             Ok((count, bytes)) => {
                 metrics::record_queue_entries(count);
                 metrics::record_queue_bytes(bytes);
@@ -287,33 +329,6 @@ impl SharedQueue {
             ),
         }
     }
-}
-
-/// Build the ordered client response unless its serialized form exceeds the protocol limit.
-///
-/// Returning an error keeps the daemon from sending a response that the client
-/// would reject for exceeding the shared wire-size limit.
-fn response_for_schedule(schedule: Vec<(StoredEntry, u64)>) -> StoreResult<Response> {
-    let mut projected_size = serde_json::to_vec(&Response::entries(Vec::new()))?.len();
-    let mut entries = Vec::with_capacity(schedule.len().min(MAX_PENDING_ENTRIES));
-
-    for (entry, eta) in schedule.into_iter().take(MAX_PENDING_ENTRIES) {
-        let pending = entry.to_pending(eta);
-        let pending_size = serde_json::to_vec(&pending)?.len();
-        let separator_size = usize::from(!entries.is_empty());
-        let next_size = projected_size
-            .saturating_add(pending_size)
-            .saturating_add(separator_size);
-        if next_size > MAX_RESPONSE_BYTES {
-            return Ok(Response::error(format!(
-                "list response exceeds the {MAX_RESPONSE_BYTES}-byte limit"
-            )));
-        }
-        projected_size = next_size;
-        entries.push(pending);
-    }
-
-    Ok(Response::entries(entries))
 }
 
 /// Reject repository components that could alter paths, URLs, or terminal output.

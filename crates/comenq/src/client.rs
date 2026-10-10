@@ -105,22 +105,26 @@ async fn transact_with_timeout(
     timeout: Duration,
 ) -> Result<Response, ClientError> {
     let payload = serde_json::to_vec(request)?;
-    let mut stream = connect_first(candidates).await?;
-    stream
-        .write_all(&payload)
-        .await
-        .map_err(ClientError::Write)?;
-    stream.shutdown().await.map_err(ClientError::Shutdown)?;
-    let mut reply = Vec::with_capacity(8 * 1024);
-    let mut limited = stream.take((MAX_RESPONSE_BYTES as u64) + 1);
-    tokio::time::timeout(timeout, limited.read_to_end(&mut reply))
-        .await
-        .map_err(|_| ClientError::ReplyTimeout)?
-        .map_err(ClientError::Read)?;
-    if reply.len() > MAX_RESPONSE_BYTES {
-        return Err(ClientError::ReplyTooLarge);
-    }
-    Ok(serde_json::from_slice(&reply)?)
+    tokio::time::timeout(timeout, async {
+        let mut stream = connect_first(candidates).await?;
+        stream
+            .write_all(&payload)
+            .await
+            .map_err(ClientError::Write)?;
+        stream.shutdown().await.map_err(ClientError::Shutdown)?;
+        let mut reply = Vec::with_capacity(8 * 1024);
+        let mut limited = stream.take((MAX_RESPONSE_BYTES as u64) + 1);
+        limited
+            .read_to_end(&mut reply)
+            .await
+            .map_err(ClientError::Read)?;
+        if reply.len() > MAX_RESPONSE_BYTES {
+            return Err(ClientError::ReplyTooLarge);
+        }
+        Ok(serde_json::from_slice(&reply)?)
+    })
+    .await
+    .map_err(|_| ClientError::ReplyTimeout)?
 }
 
 /// Execute the parsed command against the daemon and print the outcome.

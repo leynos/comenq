@@ -13,7 +13,9 @@ use anyhow::Context as _;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
+use comenqd::daemon::{
+    SharedQueue, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -71,7 +73,7 @@ impl WorkerWorld {
 
 /// Pending entries as reported through the protocol.
 async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingEntry>> {
-    match queue.execute(Request::List).await {
+    match dispatch_request(queue, Request::List).await {
         Response::Ok {
             entries: Some(entries),
             ..
@@ -85,8 +87,9 @@ async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(0)));
     let queue = SharedQueue::open(cfg).context("open queue")?;
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "o".into(),
                 repo: "r".into(),
@@ -94,8 +97,9 @@ async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
                 body: "b".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     anyhow::ensure!(
         matches!(response, Response::Ok { .. }),
         "put should succeed, got {response:?}"

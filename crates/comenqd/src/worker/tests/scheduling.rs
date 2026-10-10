@@ -2,6 +2,7 @@
 
 use super::{WorkerControl, WorkerHooks, run_worker};
 use crate::config::Config;
+use crate::listener::dispatch_request;
 use crate::queue::{FlutterSampler, SharedQueue, UnixClock};
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
@@ -59,7 +60,7 @@ fn response_template() -> ResponseTemplate {
 }
 
 async fn pending_entries(queue: &SharedQueue) -> Vec<PendingEntry> {
-    let response = queue.execute(Request::List).await;
+    let response = dispatch_request(queue, Request::List).await;
     let Response::Ok {
         entries: Some(entries),
         ..
@@ -168,12 +169,14 @@ async fn timer_expiry_posts_first_and_successive_entries_at_flutter_etas() {
     let mut ids = Vec::new();
     let mut etas = Vec::new();
     for pr_number in [7, 8] {
-        let response = queue
-            .execute(Request::Put {
+        let response = dispatch_request(
+            &queue,
+            Request::Put {
                 request: request(pr_number),
                 immediate: false,
-            })
-            .await;
+            },
+        )
+        .await;
         let Response::Ok {
             entry: Some(entry), ..
         } = response
@@ -271,21 +274,25 @@ async fn queue_mutation_wakes_a_worker_waiting_for_a_deferred_entry() {
     .await;
     wait_for_hook_with_real_timeout(&drained, "worker did not become idle").await;
 
-    let deferred = queue
-        .execute(Request::Put {
+    let deferred = dispatch_request(
+        &queue,
+        Request::Put {
             request: request(7),
             immediate: false,
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(matches!(deferred, Response::Ok { .. }));
     wait_for_hook_with_real_timeout(&waiting, "worker did not register deferred wait").await;
 
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: request(8),
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     let Response::Ok {
         entry: Some(entry), ..
     } = response
@@ -293,7 +300,7 @@ async fn queue_mutation_wakes_a_worker_waiting_for_a_deferred_entry() {
         panic!("expected immediate entry, got {response:?}");
     };
     assert!(matches!(
-        queue.execute(Request::Bump { id: entry.id }).await,
+        dispatch_request(&queue, Request::Bump { id: entry.id }).await,
         Response::Ok { .. }
     ));
 
@@ -326,12 +333,14 @@ async fn deleting_an_in_flight_entry_makes_completion_idempotent() {
     let dir = tempdir().expect("create temporary queue directory");
     let queue = SharedQueue::open(Arc::new(Config::from(temp_config(&dir).with_cooldown(0))))
         .expect("open queue");
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: request(9),
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     let Response::Ok {
         entry: Some(entry), ..
     } = response
@@ -367,7 +376,7 @@ async fn deleting_an_in_flight_entry_makes_completion_idempotent() {
         .await
         .expect("worker should claim the entry");
     assert!(matches!(
-        queue.execute(Request::Del { id: entry.id }).await,
+        dispatch_request(&queue, Request::Del { id: entry.id }).await,
         Response::Ok { .. }
     ));
     tokio::time::timeout(Duration::from_secs(5), idle.notified())

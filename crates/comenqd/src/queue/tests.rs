@@ -2,6 +2,7 @@
 
 use super::{FlutterSampler, SharedQueue, StoredEntry, UnixClock};
 use crate::config::Config;
+use crate::listener::dispatch_request;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, Request, Response};
 use std::fs;
@@ -111,8 +112,9 @@ async fn put_uses_the_injected_flutter_sample() {
     )
     .expect("open queue");
 
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -120,8 +122,9 @@ async fn put_uses_the_injected_flutter_sample() {
                 body: "comment".into(),
             },
             immediate: false,
-        })
-        .await;
+        },
+    )
+    .await;
 
     assert!(matches!(
         response,
@@ -150,8 +153,9 @@ async fn fixed_clock_controls_deferred_put_eta() {
     )
     .expect("open queue");
 
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -159,8 +163,9 @@ async fn fixed_clock_controls_deferred_put_eta() {
                 body: "comment".into(),
             },
             immediate: false,
-        })
-        .await;
+        },
+    )
+    .await;
     let Response::Ok {
         entry: Some(entry), ..
     } = response
@@ -185,8 +190,9 @@ async fn put_rejects_unsafe_repository_components() {
     }))
     .expect("open queue");
 
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat\u{1b}[2J".into(),
                 repo: "hello-world".into(),
@@ -194,11 +200,12 @@ async fn put_rejects_unsafe_repository_components() {
                 body: "comment".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(matches!(response, Response::Error { .. }));
     assert!(
-        matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
+        matches!(dispatch_request(&queue, Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
     );
 }
 
@@ -219,8 +226,9 @@ async fn put_does_not_persist_when_eta_projection_fails() {
     .expect("open queue");
     fs::write(queue_path.join("last_post"), "not a timestamp").expect("write malformed marker");
 
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -228,13 +236,14 @@ async fn put_does_not_persist_when_eta_projection_fails() {
                 body: "comment".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(matches!(response, Response::Error { .. }));
 
     fs::remove_file(queue_path.join("last_post")).expect("remove malformed marker");
     assert!(
-        matches!(queue.execute(Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
+        matches!(dispatch_request(&queue, Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
     );
 }
 
@@ -242,7 +251,7 @@ async fn put_does_not_persist_when_eta_projection_fails() {
 async fn list_returns_at_most_the_pending_entry_limit() {
     let body_sizes = ["comment".len(); MAX_PENDING_ENTRIES];
     let (_dir, queue) = open_queue_with_bodies(&body_sizes);
-    let response = queue.execute(Request::List).await;
+    let response = dispatch_request(&queue, Request::List).await;
     let Response::Ok {
         entries: Some(entries),
         ..
@@ -264,7 +273,7 @@ async fn list_returns_error_instead_of_exceeding_the_response_byte_limit() {
     let body_sizes = body_sizes_at_response_limit(1);
     let (_dir, queue) = open_queue_with_bodies(&body_sizes);
 
-    let response = queue.execute(Request::List).await;
+    let response = dispatch_request(&queue, Request::List).await;
 
     assert!(matches!(response, Response::Error { .. }));
     assert!(
@@ -280,7 +289,7 @@ async fn list_allows_a_response_exactly_at_the_byte_limit() {
     let body_sizes = body_sizes_at_response_limit(0);
     let (_dir, queue) = open_queue_with_bodies(&body_sizes);
 
-    let response = queue.execute(Request::List).await;
+    let response = dispatch_request(&queue, Request::List).await;
     let serialized = serde_json::to_vec(&response).expect("serialize list response");
 
     assert!(matches!(response, Response::Ok { .. }));

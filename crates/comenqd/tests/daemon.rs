@@ -8,7 +8,7 @@ use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
     SharedQueue, WorkerControl, WorkerHooks,
-    listener::{handle_client, prepare_listener, run_listener},
+    listener::{dispatch_request, handle_client, prepare_listener, run_listener},
     run, run_worker,
 };
 use rstest::{fixture, rstest};
@@ -65,12 +65,14 @@ fn sample_request() -> comenq_lib::CommentRequest {
 
 /// Enqueue the sample request and return its reported entry.
 async fn seed_queue(queue: &Arc<SharedQueue>) -> PendingEntry {
-    match queue
-        .execute(Request::Put {
+    match dispatch_request(
+        queue,
+        Request::Put {
             request: sample_request(),
             immediate: true,
-        })
-        .await
+        },
+    )
+    .await
     {
         Response::Ok {
             entry: Some(entry), ..
@@ -81,7 +83,7 @@ async fn seed_queue(queue: &Arc<SharedQueue>) -> PendingEntry {
 
 /// Pending entries as reported by the daemon.
 async fn list_entries(queue: &Arc<SharedQueue>) -> Vec<PendingEntry> {
-    match queue.execute(Request::List).await {
+    match dispatch_request(queue, Request::List).await {
         Response::Ok {
             entries: Some(entries),
             ..
@@ -458,8 +460,9 @@ mod worker_tests {
         let queue = SharedQueue::open(cfg).expect("open queue");
         // Two entries: the second is due one full cooldown after the first.
         seed_queue(&queue).await;
-        queue
-            .execute(Request::Put {
+        dispatch_request(
+            &queue,
+            Request::Put {
                 request: comenq_lib::CommentRequest {
                     owner: "o".into(),
                     repo: "r".into(),
@@ -467,8 +470,9 @@ mod worker_tests {
                     body: "second".into(),
                 },
                 immediate: true,
-            })
-            .await;
+            },
+        )
+        .await;
 
         let server = MockServer::start().await;
         let response_body: serde_json::Value =
