@@ -85,6 +85,17 @@ async fn scrape_metrics() -> String {
     response
 }
 
+/// Find a Prometheus histogram count with the expected fixed labels.
+fn has_histogram_count(response: &str, name: &str, labels: &[(&str, &str)], count: u64) -> bool {
+    response.lines().any(|line| {
+        line.starts_with(&format!("{name}_count{{"))
+            && line.ends_with(&format!("}} {count}"))
+            && labels
+                .iter()
+                .all(|(key, value)| line.contains(&format!("{key}=\"{value}\"")))
+    })
+}
+
 /// Exercise queue metrics across durable state transitions and malformed input.
 #[tokio::test(flavor = "current_thread")]
 async fn exporter_serves_listener_request_metrics() {
@@ -224,6 +235,17 @@ async fn exporter_serves_listener_request_metrics() {
     ));
     assert_queue_gauges(&dir.path().join("queue"), 0).await;
 
+    assert!(matches!(
+        dispatch_request(
+            &queue,
+            comenq_lib::protocol::Request::Del {
+                id: "deadbeef".into(),
+            },
+        )
+        .await,
+        comenq_lib::protocol::Response::Error { .. }
+    ));
+
     let (mut malformed_client, malformed_server) =
         UnixStream::pair().expect("create malformed-request stream pair");
     malformed_client
@@ -247,10 +269,72 @@ async fn exporter_serves_listener_request_metrics() {
         Ok(comenq_lib::protocol::Response::Error { .. })
     ));
 
+    let (mut io_client, io_server) = UnixStream::pair().expect("create I/O-error stream pair");
+    io_client
+        .write_all(&serde_json::to_vec(&comenq_lib::protocol::Request::List).expect("serialize"))
+        .await
+        .expect("write request before closing client");
+    io_client
+        .shutdown()
+        .await
+        .expect("close request before closing client");
+    drop(io_client);
+    assert!(handle_client(io_server, Arc::clone(&queue)).await.is_err());
+
     let response = scrape_metrics().await;
 
     assert!(response.starts_with("HTTP/1.1 200"));
     assert!(response.contains("comenqd_requests_total{operation=\"put\",outcome=\"accepted\"}"));
     assert!(response.contains("comenqd_requests_total{outcome=\"failed\"} 1"));
     assert!(!response.contains("comenqd_requests_total{outcome=\"accepted\"}"));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_protocol_transaction_duration_seconds",
+        &[
+            ("operation", "put"),
+            ("outcome", "accepted"),
+            ("error_kind", "none"),
+        ],
+        1,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_protocol_transaction_duration_seconds",
+        &[
+            ("operation", "unknown"),
+            ("outcome", "failed"),
+            ("error_kind", "invalid_json"),
+        ],
+        1,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_protocol_transaction_duration_seconds",
+        &[
+            ("operation", "list"),
+            ("outcome", "rejected"),
+            ("error_kind", "protocol_io"),
+        ],
+        1,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_queue_store_operation_duration_seconds",
+        &[
+            ("operation", "put"),
+            ("outcome", "success"),
+            ("error_kind", "none"),
+        ],
+        2,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_queue_store_operation_duration_seconds",
+        &[
+            ("operation", "del"),
+            ("outcome", "failure"),
+            ("error_kind", "unknown_identifier"),
+        ],
+        1,
+    ));
 }
