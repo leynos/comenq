@@ -153,11 +153,10 @@ subcommands. The implementation delegates protocol and socket work to the
 client module.
 
 ```rust
-// In src/bin/comenq/main.rs
+// crates/comenq/src/lib.rs
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use comenq::RepoSlug;
 
 /// A CLI client to enqueue a comment for a GitHub Pull Request.
 #[derive(Debug, Parser)]
@@ -469,7 +468,7 @@ sequenceDiagram
     Q-->>A: typed queue result
     A-->>L: Response
     Q-->>W: notify_one() on mutation
-    W->>Q: next_due()
+    W->>Q: claim_next_due()
     W->>W: post to GitHub
     W->>Q: complete(id)
   and Error/backoff
@@ -748,8 +747,11 @@ Configuration is loaded using the `ortho_config` crate. The daemon calls
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults, while an absent `github_token` or invalid TOML results in a
-configuration error.
+defaults. Configuration fails if neither a non-empty `github_token` nor
+`github_token_file` is available. When a token file is selected, it is read at
+startup and its trimmed contents take precedence over the configured token
+unless `--github-token` is supplied; an unreadable or empty selected file is an
+error. Invalid TOML also results in a configuration error.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background
@@ -1082,7 +1084,7 @@ subcommands described in Section 2.4 and sends tagged `Request` values, then
 reads and handles a `Response` from the daemon.
 
 ```rust
-// crates/comenq/src/main.rs
+// Historical pseudocode for crates/comenq/src/main.rs
 use clap::Parser;
 use std::path::PathBuf;
 use std::process;
@@ -1092,7 +1094,8 @@ use comenq_lib::CommentRequest; // Using the shared library
 use tracing::warn;
 use comenq::RepoSlug;
 
-// Historical pseudocode; the shipped client is in crates/comenq/src/main.rs.
+// The shipped parser is in crates/comenq/src/lib.rs; transport is in
+// crates/comenq/src/client.rs.
 struct Args {
     repo_slug: RepoSlug,
     pr_number: u64,
@@ -1172,7 +1175,7 @@ sequenceDiagram
     participant WatchChannel
     participant WorkerHooks
     loop Process queue
-        Worker->>Queue: next_due()
+        Worker->>Queue: claim_next_due()
         alt Nothing queued
             Worker->>WorkerHooks: (optional) drained.notify_one()
             Worker->>WatchChannel: shutdown.changed() (watch signal)
@@ -1186,13 +1189,13 @@ sequenceDiagram
             Worker->>Worker: post to GitHub
             alt Success
                 Worker->>Queue: complete(id)
+                Worker->>WorkerHooks: (optional) idle.notify_one()
             else Failure
                 Worker->>WorkerHooks: (optional) idle.notify_one()
                 Worker->>WatchChannel: shutdown.changed() (watch signal)
                 Worker->>Queue: queue.changed() (Notify signal)
                 Worker->>Worker: sleep(cooldown_period_seconds)
             end
-            Worker->>WorkerHooks: (optional) idle.notify_one()
         end
     end
 ```

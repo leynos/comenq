@@ -61,9 +61,9 @@ pub struct Config {
     pub cooldown_period_seconds: u64,
     /// Maximum random flutter added to each cooldown, in seconds.
     ///
-    /// After every post the worker waits the full cooldown plus a fresh
-    /// uniformly random duration between zero and this value. Flutter only
-    /// ever lengthens the wait; zero (the default) disables it.
+    /// The daemon samples flutter once when it enqueues an entry and stores
+    /// the value with that entry. It only lengthens the cooldown-derived ETA;
+    /// zero (the default) disables flutter.
     #[serde(default = "default_cooldown_flutter")]
     pub cooldown_flutter_seconds: u64,
     /// Minimum delay in milliseconds applied between task restarts.

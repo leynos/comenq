@@ -5,7 +5,7 @@
 //! `lib.rs` so that argument parsing remains focused and the network logic
 //! is easily testable.
 
-use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
+use comenq_lib::protocol::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Request, Response};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,6 +31,9 @@ pub enum ClientError {
     /// Serializing the request or parsing the reply failed.
     #[error("failed to encode or decode a daemon message: {0}")]
     Serialize(#[from] serde_json::Error),
+    /// The serialized request exceeds the daemon's request-size limit.
+    #[error("request payload is {size} bytes, exceeding the {limit}-byte limit")]
+    RequestTooLarge { size: usize, limit: usize },
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
     Write(#[source] std::io::Error),
@@ -105,6 +108,12 @@ async fn transact_with_timeout(
     timeout: Duration,
 ) -> Result<Response, ClientError> {
     let payload = serde_json::to_vec(request)?;
+    if payload.len() > MAX_REQUEST_BYTES {
+        return Err(ClientError::RequestTooLarge {
+            size: payload.len(),
+            limit: MAX_REQUEST_BYTES,
+        });
+    }
     tokio::time::timeout(timeout, async {
         let mut stream = connect_first(candidates).await?;
         stream

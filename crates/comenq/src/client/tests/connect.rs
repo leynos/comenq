@@ -43,7 +43,7 @@ async fn connect_first_reports_failure_when_all_candidates_fail() {
 #[test]
 fn public_run_future_is_send() {
     fn require_send<T: Send>(_: T) {}
-    require_send(super::run(crate::Args {
+    require_send(super::super::run(crate::Args {
         socket: None,
         command: crate::Command::List,
     }));
