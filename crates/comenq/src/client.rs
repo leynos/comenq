@@ -144,22 +144,33 @@ async fn transact_with_timeout(
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
+    let response = transact(&args.socket_candidates(), &args.command.to_request()).await?;
     let stdout = std::io::stdout();
-    run_with_writer(args, &mut stdout.lock()).await
+    render_reply(&args.command, response, &mut stdout.lock())
 }
 
 /// Execute the parsed command and render its result through `writer`.
 ///
 /// A closed output pipe stops rendering successfully so commands can be used
 /// in pipelines whose downstream consumer exits early.
+#[cfg(test)]
 async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
     let request = args.command.to_request();
     let response = transact(&args.socket_candidates(), &request).await?;
+    render_reply(&args.command, response, writer)
+}
+
+/// Check the daemon result and render it without holding a writer across I/O.
+fn render_reply<W: Write>(
+    command: &Command,
+    response: Response,
+    writer: &mut W,
+) -> Result<(), ClientError> {
     let (entry, entries) = match response {
         Response::Error { message } => return Err(ClientError::Daemon(message)),
         Response::Ok { entry, entries } => (entry, entries),
     };
-    render_response(&args.command, entry, entries, writer)
+    render_response(command, entry, entries, writer)
 }
 
 /// Render a response whose shape has already been checked against `command`.

@@ -91,11 +91,11 @@ hold an `Arc<SharedQueue>` wrapping the on-disk `QueueStore`, the daemon
 configuration, and a `tokio::sync::Notify` used to wake the worker promptly
 when the queue changes.
 
-- The listener executes each client request directly against the shared
-  queue (via `SharedQueue::execute`) and writes the reply before the connection
-  closes. A request is durably persisted to disk before the client receives its
-  acknowledgement, so there is no in-memory backlog that could be lost if the
-  daemon exits unexpectedly.
+- The listener's `listener::protocol::dispatch_request` adapter maps each
+  client request to a typed `SharedQueue` operation and writes the resulting
+  reply before the connection closes. A request is durably persisted to disk
+  before the client receives its acknowledgement, so there is no in-memory
+  backlog that could be lost if the daemon exits unexpectedly.
 
 - Mutating operations (`put`, `bump`, `bust`, `del`) call `notify_one` on the
   shared `Notify` after the change is written, so the worker interrupts any
@@ -454,6 +454,7 @@ sequenceDiagram
   actor OS as OS Signals
   participant Sup as Supervisor::run
   participant L as Listener
+  participant A as dispatch_request
   participant W as Worker
   participant Q as SharedQueue
 
@@ -463,7 +464,10 @@ sequenceDiagram
   Sup->>W: spawn run_worker(queue, octocrab, control)
 
   par Normal flow
-    L->>Q: execute(Request) [persist & reply]
+    L->>A: dispatch_request(Request)
+    A->>Q: typed operation (put, list, bump, bust, or del)
+    Q-->>A: typed queue result
+    A-->>L: Response
     Q-->>W: notify_one() on mutation
     W->>Q: next_due()
     W->>W: post to GitHub
@@ -597,16 +601,17 @@ Its workflow is as follows:
    `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
    rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
-   adjusted. It deserializes the received JSON into a `Request`, executes it
-   directly against the shared queue (`SharedQueue::execute`), and writes the
-   resulting `Response` back to the client before closing the connection.
-   Responses are capped at 2 MiB on both client and daemon, and `list` returns
-   at most 1,024 entries. If the complete list exceeds the response cap, the
-   daemon returns an error rather than a partial response. Persisted entry
-   reads accept files up to 2 MiB. Up to 80 bytes per entry are reserved for
-   metadata growth, and the store admits at most 32 MiB of file bytes plus
-   remaining reservations. A request that fails to deserialize receives an error
-   `Response` rather than a silently dropped connection.
+   adjusted. It deserializes the received JSON into a `Request` and passes it to
+   `listener::protocol::dispatch_request`, which maps it to a typed
+   `SharedQueue` operation and returns the resulting `Response` for the client
+   before the connection closes. Responses are capped at 2 MiB on both client
+   and daemon, and `list` returns at most 1,024 entries. If the complete list
+   exceeds the response cap, the daemon returns an error rather than a partial
+   response. Persisted entry reads accept files up to 2 MiB. Up to 80 bytes per
+   entry are reserved for metadata growth, and the store admits at most 32 MiB
+   of file bytes plus remaining reservations. A request that fails to
+   deserialize receives an error `Response` rather than a silently dropped
+   connection.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -623,14 +628,17 @@ sequenceDiagram
   participant Client as Client
   participant L as Listener
   participant H as handle_client
+  participant A as dispatch_request
   participant Q as SharedQueue
 
   Client->>L: connect(socket)
   L->>H: spawn handler(stream)
   Client->>H: write JSON Request
   H->>H: read & deserialize
-  H->>Q: execute(Request)
-  Q-->>H: Response
+  H->>A: dispatch_request(Request)
+  A->>Q: typed operation (put, list, bump, bust, or del)
+  Q-->>A: typed queue result
+  A-->>H: Response
   H-->>Client: write JSON Response, close
 ```
 

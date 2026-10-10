@@ -8,12 +8,13 @@ use backon::{ExponentialBackoff, ExponentialBuilder};
 use octocrab::Octocrab;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::fs;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use crate::listener::run_listener;
 use crate::metrics;

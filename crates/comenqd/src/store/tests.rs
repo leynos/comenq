@@ -1,8 +1,8 @@
 //! Tests for the reorderable persistent queue store.
 
 use super::{PutOptions, QueueStore, StoreError, StoredEntry, entry_id};
+use crate::store::MAX_QUEUE_ENTRIES;
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use proptest::prelude::*;
 use rstest::rstest;
 use std::fs;
@@ -95,7 +95,7 @@ fn put_persists_the_supplied_flutter() {
 fn put_rejects_entries_beyond_the_pending_limit() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
-    for index in 0..MAX_PENDING_ENTRIES {
+    for index in 0..MAX_QUEUE_ENTRIES {
         store
             .put(
                 request(&format!("body {index}")),
@@ -107,8 +107,8 @@ fn put_rejects_entries_beyond_the_pending_limit() {
     let error = store
         .put(request("over capacity"), &immediate(0), 9_999)
         .expect_err("capacity must be enforced before persistence");
-    assert!(matches!(error, StoreError::QueueFull(MAX_PENDING_ENTRIES)));
-    assert_eq!(ids(&store).len(), MAX_PENDING_ENTRIES);
+    assert!(matches!(error, StoreError::QueueFull(MAX_QUEUE_ENTRIES)));
+    assert_eq!(ids(&store).len(), MAX_QUEUE_ENTRIES);
 }
 
 #[rstest]

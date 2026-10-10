@@ -1,8 +1,8 @@
 //! Queue scheduling and atomic enqueue projection.
 
 use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
+use crate::store::MAX_QUEUE_ENTRIES;
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use uuid::Uuid;
 
 impl QueueStore {
@@ -26,8 +26,8 @@ impl QueueStore {
                 .map_or(0, |(_, eta)| eta);
             return Ok((entry, eta));
         }
-        if entries.len() >= MAX_PENDING_ENTRIES {
-            return Err(StoreError::QueueFull(MAX_PENDING_ENTRIES));
+        if entries.len() >= MAX_QUEUE_ENTRIES {
+            return Err(StoreError::QueueFull(MAX_QUEUE_ENTRIES));
         }
 
         let entry = StoredEntry {

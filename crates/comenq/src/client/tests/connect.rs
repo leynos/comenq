@@ -38,3 +38,13 @@ async fn connect_first_reports_failure_when_all_candidates_fail() {
     };
     assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
 }
+
+/// Public execution can be spawned without retaining a non-Send stdout guard.
+#[test]
+fn public_run_future_is_send() {
+    fn require_send<T: Send>(_: T) {}
+    require_send(super::run(crate::Args {
+        socket: None,
+        command: crate::Command::List,
+    }));
+}

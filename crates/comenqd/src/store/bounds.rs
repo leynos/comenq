@@ -1,7 +1,7 @@
 //! Bounded queue-entry reads, admission, and list materialization.
 
 use super::{QueueStore, Result, StoreError, StoredEntry, is_valid_id};
-use comenq_lib::protocol::MAX_PENDING_ENTRIES;
+use crate::store::MAX_QUEUE_ENTRIES;
 use std::fs;
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
@@ -122,8 +122,8 @@ impl QueueStore {
             Err(error) => return Err(error.into()),
         };
         let count = usage.count + usize::from(previous_bytes.is_none());
-        if count > MAX_PENDING_ENTRIES {
-            return Err(StoreError::QueueFull(MAX_PENDING_ENTRIES));
+        if count > MAX_QUEUE_ENTRIES {
+            return Err(StoreError::QueueFull(MAX_QUEUE_ENTRIES));
         }
         let entry_limit = if previous_bytes.is_none() {
             MAX_ENTRY_BYTES.saturating_sub(ENTRY_MUTATION_HEADROOM_BYTES)
@@ -162,8 +162,8 @@ impl QueueStore {
                 );
                 continue;
             }
-            if paths.len() == MAX_PENDING_ENTRIES {
-                return Err(StoreError::QueueFull(MAX_PENDING_ENTRIES));
+            if paths.len() == MAX_QUEUE_ENTRIES {
+                return Err(StoreError::QueueFull(MAX_QUEUE_ENTRIES));
             }
             let file_bytes = dirent.metadata()?.len();
             ensure_queue_bytes(bytes, file_bytes)?;

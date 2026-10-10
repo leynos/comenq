@@ -8,7 +8,6 @@
 //! temporary siblings and renames them so entries are never half-written.
 
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::PendingEntry;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write as _};
@@ -16,6 +15,8 @@ use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
 /// Sub-directory of the queue path holding one JSON file per entry.
 const ENTRIES_DIR: &str = "entries";
+/// Maximum entries retained by the durable queue, independent of wire limits.
+pub(crate) const MAX_QUEUE_ENTRIES: usize = 1024;
 /// File recording the Unix time of the most recent successful post.
 const LAST_POST_FILE: &str = "last_post";
 /// Recovery record for a GitHub post that succeeded before its queue cleanup.
@@ -46,20 +47,6 @@ pub struct StoredEntry {
     pub request: CommentRequest,
 }
 
-impl StoredEntry {
-    /// Convert to the wire representation with the given ETA.
-    #[must_use]
-    pub fn to_pending(&self, eta_seconds: u64) -> PendingEntry {
-        PendingEntry {
-            id: self.id.clone(),
-            eta_seconds,
-            owner: self.request.owner.clone(),
-            repo: self.request.repo.clone(),
-            pr_number: self.request.pr_number,
-            body: self.request.body.clone(),
-        }
-    }
-}
 /// Errors raised by queue store operations.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
