@@ -55,9 +55,11 @@ ETA in seconds, repository target, pull request number, and full comment body.
 Clients must treat response fields as untrusted and reject a successful reply
 whose payload shape does not match the request.
 
-The listener adapter passes valid requests to `SharedQueue::execute`. It
-performs queue mutations and scheduling through `QueueStore`, then notifies the
-worker after a successful mutation. `SharedQueue::claim_next_due()` selects the
+The listener's `listener::protocol::dispatch_request` adapter maps each valid
+request to a typed `SharedQueue` operation: `put`, `list`, `bump`, `bust`, or
+`del`. It converts the operation result to a protocol `Response`; queue
+mutations notify the worker after success. The queue performs scheduling and
+persistence through `QueueStore`. `SharedQueue::claim_next_due()` selects the
 due head and durably claims it while holding the store lock; the lock is
 released before the worker calls GitHub. A failed post releases its claim and
 retains a full cooldown retry deadline. `bump` and `bust` may reorder a claimed

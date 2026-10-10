@@ -65,7 +65,7 @@ fn body_sizes_at_response_limit(extra_bytes: usize) -> [usize; 2] {
                 body: String::new(),
             },
         })
-        .map(|entry| entry.to_pending(0))
+        .map(|entry| crate::listener::protocol::pending_entry(entry, 0))
         .collect();
     let base_size = serde_json::to_vec(&Response::entries(entries))
         .expect("serialize empty-body response")

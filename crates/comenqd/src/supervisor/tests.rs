@@ -194,3 +194,5 @@ async fn worker_starts_and_stops_cleanly() {
         .expect("worker task should not panic");
     assert!(res.is_ok(), "worker must exit cleanly on shutdown: {res:?}");
 }
+
+mod restart;

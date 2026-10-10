@@ -1,12 +1,12 @@
 //! Durable capacity and bounded persisted-entry read tests.
 
 use super::{StoreError, immediate, open_store, request};
+use crate::store::MAX_QUEUE_ENTRIES;
 use crate::store::bounds::{
     ENTRY_MUTATION_HEADROOM_BYTES, MAX_ENTRY_BYTES, MAX_QUEUE_BYTES, entry_headroom,
 };
 use crate::store::{QueueStore, StoredEntry};
 use comenq_lib::CommentRequest;
-use comenq_lib::protocol::MAX_PENDING_ENTRIES;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -220,16 +220,16 @@ fn startup_fails_closed_when_existing_entry_count_exceeds_the_limit() {
     let dir = TempDir::new().expect("create queue directory");
     let entries_dir = dir.path().join("entries");
     fs::create_dir_all(&entries_dir).expect("create entries directory");
-    for index in 0..=MAX_PENDING_ENTRIES {
+    for index in 0..=MAX_QUEUE_ENTRIES {
         fs::write(entries_dir.join(format!("{index:08x}.json")), b"{}").expect("write entry");
     }
 
     let error = QueueStore::open(dir.path()).expect_err("reject too many existing entries");
 
-    assert!(matches!(error, StoreError::QueueFull(MAX_PENDING_ENTRIES)));
+    assert!(matches!(error, StoreError::QueueFull(MAX_QUEUE_ENTRIES)));
     assert_eq!(
         fs::read_dir(entries_dir).expect("entries remain").count(),
-        MAX_PENDING_ENTRIES + 1
+        MAX_QUEUE_ENTRIES + 1
     );
 }
 
