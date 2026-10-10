@@ -1,14 +1,16 @@
 # Migrate to 0.1.0
 
 This guide shows how to update an existing Comenq deployment for 0.1.0's
-token-file configuration and user-service socket discovery. Use it when moving
-an existing configuration to the released binaries; it does not move or delete
-an existing queue.
+token-file configuration, user-service socket discovery, and queue-management
+subcommands. Use it when moving an existing configuration to the released
+binaries.
 
 ## Prerequisites
 
 - Install the 0.1.0 `comenq` and `comenqd` binaries.
 - Keep the existing configuration and queue path available for rollback.
+- Upgrade `comenq` and `comenqd` together: their JSON wire protocol changed in
+  0.1.0 and the old client cannot talk to the new daemon (or vice versa).
 - Create a readable file containing a non-empty GitHub Personal Access Token
   (PAT), with permissions restricted to the account running `comenqd`.
 
@@ -53,3 +55,25 @@ socket at `/run/comenq/comenq.sock` when the first connection fails.
 For a complete user-service installation using `LoadCredential`, see the
 [users' guide](users-guide.md). For the full configuration reference, see
 [Comenq design](comenq-design.md).
+
+## Migrate the queue and client protocol
+
+The 0.1.0 daemon replaces the former append-only queue with a persistent store
+under `<queue_path>/entries`, containing one JSON file per pending comment and a
+`<queue_path>/last_post` marker. The old queue files are not imported. Before
+upgrading, let the old daemon drain its queue or save any pending requests so
+they can be submitted again with the new client.
+
+After both binaries are upgraded, use the subcommands to manage the new queue:
+
+```bash
+comenq put owner/repository 123 "Please review this change"
+comenq list
+comenq bump 1a2b3c4d
+comenq bust 1a2b3c4d
+comenq del 1a2b3c4d
+```
+
+`put` reports an identifier and approximate ETA; `list` reports the pending
+schedule. `bump`, `bust`, and `del` operate on the identifier returned by `put`
+or `list`, and `put --now` removes the default initial cooldown floor.

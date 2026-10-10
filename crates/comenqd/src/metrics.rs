@@ -8,13 +8,17 @@
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
+mod duration;
+
+pub(crate) use duration::{record_protocol_duration, record_queue_store_duration};
+
 /// Local address of the daemon's Prometheus scrape endpoint.
 pub const PROMETHEUS_LISTEN_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 9000);
 
 const TASK_RESTARTS: &str = "comenqd_task_restarts_total";
-const QUEUE_WRITER_FAILURES: &str = "comenqd_queue_writer_failures_total";
-const CLIENT_CHANNEL_DEPTH: &str = "comenqd_client_channel_depth";
 const REQUESTS: &str = "comenqd_requests_total";
+const QUEUE_ENTRIES: &str = "comenqd_queue_entries";
+const QUEUE_BYTES: &str = "comenqd_queue_bytes";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
 const GITHUB_POSTS: &str = "comenqd_github_posts_total";
 const GITHUB_POST_DURATION: &str = "comenqd_github_post_duration_seconds";
@@ -36,19 +40,23 @@ pub(crate) fn record_task_restart(task: &'static str) {
     counter!(TASK_RESTARTS, "task" => task).increment(1);
 }
 
-/// Record an enqueue failure from the persistent queue writer.
-pub(crate) fn record_queue_writer_failure() {
-    counter!(QUEUE_WRITER_FAILURES, "queue_side" => "sender").increment(1);
-}
-
-/// Record the currently buffered client requests as a bounded depth proxy.
-pub(crate) fn record_client_channel_depth(depth: usize) {
-    gauge!(CLIENT_CHANNEL_DEPTH).set(depth as f64);
-}
-
 /// Record whether a client request reached the daemon queue.
-pub(crate) fn record_request_outcome(outcome: &'static str) {
-    counter!(REQUESTS, "outcome" => outcome).increment(1);
+pub(crate) fn record_request(operation: Option<&'static str>, outcome: &'static str) {
+    if let Some(operation) = operation {
+        counter!(REQUESTS, "operation" => operation, "outcome" => outcome).increment(1);
+    } else {
+        counter!(REQUESTS, "outcome" => outcome).increment(1);
+    }
+}
+
+/// Record the current number of persisted pending entries without labels.
+pub(crate) fn record_queue_entries(count: usize) {
+    gauge!(QUEUE_ENTRIES).set(count as f64);
+}
+
+/// Record persisted entry bytes plus reserved mutation headroom without labels.
+pub(crate) fn record_queue_bytes(bytes: u64) {
+    gauge!(QUEUE_BYTES).set(bytes as f64);
 }
 
 /// Record the configured duration of a cooldown wait.
@@ -94,9 +102,11 @@ mod tests {
         let snapshotter = recorder.snapshotter();
         with_local_recorder(&recorder, || {
             record_task_restart("worker");
-            record_queue_writer_failure();
-            record_request_outcome("accepted");
-            record_request_outcome("rejected");
+            record_request(Some("put"), "accepted");
+            record_request(Some("list"), "rejected");
+            record_request(Some("bump"), "failed");
+            record_request(Some("bust"), "accepted");
+            record_request(Some("del"), "accepted");
             record_github_post_outcome("success");
             record_github_post_outcome("api_error");
             record_github_post_outcome("timeout");
@@ -106,14 +116,13 @@ mod tests {
         let names = metric_names(&metrics);
 
         assert!(names.contains(&TASK_RESTARTS));
-        assert!(names.contains(&QUEUE_WRITER_FAILURES));
         assert!(names.contains(&GITHUB_POSTS));
         assert_eq!(
             metrics
                 .iter()
                 .filter(|(key, _, _, _)| key.key().name() == REQUESTS)
                 .count(),
-            2
+            5
         );
         assert_eq!(
             metrics
@@ -126,9 +135,9 @@ mod tests {
             key.key().labels().all(|label| {
                 matches!(
                     (label.key(), label.value()),
-                    ("task", "listener" | "worker" | "writer")
-                        | ("queue_side", "sender")
-                        | ("outcome", "accepted" | "rejected")
+                    ("task", "listener" | "worker")
+                        | ("operation", "put" | "list" | "bump" | "bust" | "del")
+                        | ("outcome", "accepted" | "failed" | "rejected")
                         | ("outcome", "success" | "api_error" | "timeout")
                 )
             })
@@ -136,18 +145,161 @@ mod tests {
     }
 
     #[test]
-    fn records_bounded_depth_and_cooldown_duration() {
+    fn records_label_free_queue_depth_and_accounted_bytes_gauges() {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         with_local_recorder(&recorder, || {
-            record_client_channel_depth(3);
+            record_queue_entries(7);
+            record_queue_bytes(4096);
+        });
+        let metrics = snapshotter.snapshot().into_vec();
+        let queue_metrics: Vec<_> = metrics
+            .iter()
+            .filter(|(key, _, _, _)| matches!(key.key().name(), QUEUE_ENTRIES | QUEUE_BYTES))
+            .collect();
+        assert_eq!(queue_metrics.len(), 2);
+        for (key, _, _, _) in &queue_metrics {
+            assert!(key.key().labels().next().is_none());
+        }
+        assert!(queue_metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == QUEUE_ENTRIES
+                && matches!(value, DebugValue::Gauge(value) if value.into_inner() == 7.0)
+        }));
+        assert!(queue_metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == QUEUE_BYTES
+                && matches!(value, DebugValue::Gauge(value) if value.into_inner() == 4096.0)
+        }));
+    }
+
+    #[test]
+    fn records_cooldown_duration() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
             record_cooldown_wait(45);
             record_github_post_duration(std::time::Duration::from_secs(2));
         });
 
         let metrics = snapshotter.snapshot().into_vec();
-        assert!(metric_names(&metrics).contains(&CLIENT_CHANNEL_DEPTH));
         assert!(metric_names(&metrics).contains(&COOLDOWN_WAIT_DURATION));
         assert!(metric_names(&metrics).contains(&GITHUB_POST_DURATION));
+    }
+
+    #[test]
+    fn records_bounded_protocol_and_store_duration_labels() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            record_protocol_duration(
+                Some("put"),
+                "accepted",
+                None,
+                std::time::Duration::from_millis(10),
+            );
+            record_protocol_duration(
+                None,
+                "failed",
+                Some("invalid_json"),
+                std::time::Duration::from_millis(20),
+            );
+            record_protocol_duration(
+                Some("raw-request-value"),
+                "unexpected-outcome",
+                Some("/private/path"),
+                std::time::Duration::from_millis(30),
+            );
+            record_queue_store_duration(
+                "del",
+                "failure",
+                Some("unknown_identifier"),
+                std::time::Duration::from_millis(40),
+            );
+            record_queue_store_duration(
+                "raw-store-operation",
+                "unexpected-outcome",
+                Some("/private/path"),
+                std::time::Duration::from_millis(50),
+            );
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "put"),
+                ("outcome", "accepted"),
+                ("error_kind", "none"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "failed"),
+                ("error_kind", "invalid_json"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "unknown"),
+                ("error_kind", "unknown"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "del"),
+                ("outcome", "failure"),
+                ("error_kind", "unknown_identifier"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "unknown"),
+                ("error_kind", "unknown"),
+            ],
+        );
+        assert!(metrics.iter().all(|(key, _, _, _)| {
+            !key.key().labels().any(|label| {
+                matches!(
+                    label.value(),
+                    "raw-request-value" | "raw-store-operation" | "/private/path"
+                )
+            })
+        }));
+    }
+
+    /// Assert that one histogram sample was recorded with exactly the labels
+    /// required by a metric scenario.
+    fn assert_histogram_labels(
+        metrics: &[(
+            metrics_util::CompositeKey,
+            Option<metrics::Unit>,
+            Option<metrics::SharedString>,
+            DebugValue,
+        )],
+        name: &str,
+        expected_labels: &[(&str, &str)],
+    ) {
+        assert!(metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == name
+                && expected_labels
+                    .iter()
+                    .all(|(expected_key, expected_value)| {
+                        key.key().labels().any(|label| {
+                            label.key() == *expected_key && label.value() == *expected_value
+                        })
+                    })
+                && matches!(value, DebugValue::Histogram(samples) if samples.len() == 1)
+        }));
     }
 }
