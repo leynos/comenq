@@ -4,6 +4,7 @@
 //! against the shared queue, and writes the JSON reply back to the client.
 
 use anyhow::{Context, Result};
+pub use comenq_lib::protocol::MAX_REQUEST_BYTES;
 use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
@@ -167,8 +168,6 @@ pub async fn run_listener(
     Ok(())
 }
 
-/// Maximum accepted request payload, in bytes.
-pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
 /// Seconds a client has to transmit its request.
 pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
 /// Seconds a client has to receive the daemon response and close cleanly.

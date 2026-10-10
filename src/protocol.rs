@@ -10,6 +10,8 @@ use crate::CommentRequest;
 
 /// Maximum JSON response size accepted by the client and emitted by the daemon.
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum JSON request size emitted by the client and accepted by the daemon.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum number of pending entries retained and returned by `list`.
 pub const MAX_PENDING_ENTRIES: usize = 1024;
 
