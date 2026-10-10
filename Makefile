@@ -90,7 +90,7 @@ check-cv005: ## Run the shared CV-005 contract against this repository
 	$(CV005_CONTRACTS) check --repository .
 
 test-workflow-contracts: check-cv005 ## Validate the workflow contracts (CV-005 CodeScene coverage, mutation testing)
-	$(UV_ENV) $(UV) run --with 'pytest>=8' --with 'pyyaml>=6' --with 'hypothesis>=6' pytest tests/workflow_contracts -q
+	$(UV_ENV) $(UV) run --python 3.13 --with 'pytest>=8,<10' --with 'pyyaml>=6,<7' --with 'hypothesis>=6,<7' pytest tests/workflow_contracts -q
 
 target/%/$(APP): ## Build binary in debug or release mode
 	$(if $(findstring release,$(@)),RUSTFLAGS="$${RUSTFLAGS-}",RUSTFLAGS="$${RUSTFLAGS:+$$RUSTFLAGS }$(STANDARD_RUSTFLAGS)") $(CARGO) build $(BUILD_JOBS) $(if $(findstring release,$(@)),--release) --bin $(APP)
