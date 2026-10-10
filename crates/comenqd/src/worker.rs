@@ -17,6 +17,8 @@ use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
+const RETRY_OVERFLOW_FALLBACK: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
 enum PostCommentError {
@@ -308,7 +310,7 @@ pub async fn run_worker(
                 control.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.
                 metrics::record_cooldown_wait(config.cooldown_period_seconds);
-                let deadline = Instant::now() + Duration::from_secs(config.cooldown_period_seconds);
+                let deadline = retry_deadline(Duration::from_secs(config.cooldown_period_seconds));
                 if wait_for_retry_deadline(deadline, queue.change_notifier(), &mut control.shutdown)
                     .await
                 {
@@ -320,6 +322,14 @@ pub async fn run_worker(
         control.notify_idle();
     }
     Ok(())
+}
+
+/// Calculate a retry deadline without panicking on an unrepresentable cooldown.
+fn retry_deadline(cooldown: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(cooldown)
+        .or_else(|| now.checked_add(RETRY_OVERFLOW_FALLBACK))
+        .unwrap_or(now)
 }
 
 #[cfg(test)]

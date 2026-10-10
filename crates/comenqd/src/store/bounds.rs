@@ -224,18 +224,7 @@ fn io_error_kind(error: &io::Error) -> &'static str {
 
 /// Classify persisted-entry failures without formatting untrusted error data.
 fn store_error_kind(error: &StoreError) -> &'static str {
-    match error {
-        StoreError::Io(error) => io_error_kind(error),
-        StoreError::Serde(_) => "invalid_json",
-        StoreError::EntryTooLarge { .. } => "entry_too_large",
-        StoreError::QueueByteBudgetExceeded { .. } => "byte_budget_exceeded",
-        StoreError::QueueFull(_) => "queue_full",
-        StoreError::UnknownId(_) => "unknown_identifier",
-        StoreError::InvalidId(_) => "unsafe_identifier",
-        StoreError::InvalidRepositoryComponent(_) => "invalid_repository_component",
-        StoreError::LastPost(_) => "invalid_last_post",
-        StoreError::BlockingTask(_) => "blocking_task",
-    }
+    error.category()
 }
 
 /// Remaining reservation for the only fields changed after enqueue.

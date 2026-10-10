@@ -3,7 +3,10 @@ mod connect;
 
 use super::{ClientError, render_response, run, run_with_writer, transact_with_timeout};
 use crate::{Args, Command};
-use comenq_lib::protocol::{MAX_RESPONSE_BYTES, PendingEntry, Request, Response};
+use comenq_lib::{
+    CommentRequest,
+    protocol::{MAX_RESPONSE_BYTES, PendingEntry, Request, Response},
+};
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Duration;
@@ -378,6 +381,36 @@ async fn transaction_times_out_when_the_daemon_keeps_the_reply_open() {
         .expect_err("open reply must time out");
     assert!(matches!(err, ClientError::ReplyTimeout));
     request_received.notified().await;
+    peer.abort();
+}
+
+#[tokio::test]
+async fn transaction_deadline_covers_a_blocked_request_write() {
+    let dir = tempdir().expect("temp dir");
+    let socket = dir.path().join("sock");
+    let listener = UnixListener::bind(&socket).expect("bind socket");
+    let peer = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept");
+        std::future::pending::<()>().await;
+    });
+    let request = Request::Put {
+        request: CommentRequest {
+            owner: "octocat".into(),
+            repo: "hello-world".into(),
+            pr_number: 1,
+            body: "x".repeat(4 * 1024 * 1024),
+        },
+        immediate: false,
+    };
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        transact_with_timeout(&[socket], &request, Duration::from_millis(10)),
+    )
+    .await
+    .expect("transaction must observe its overall deadline");
+
+    assert!(matches!(result, Err(ClientError::ReplyTimeout)));
     peer.abort();
 }
 

@@ -12,7 +12,9 @@ use anyhow::Context as _;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::{SharedQueue, WorkerControl, WorkerHooks, run_worker};
+use comenqd::daemon::{
+    SharedQueue, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+};
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
 use test_support::{octocrab_for, temp_config};
@@ -90,8 +92,9 @@ impl QueueWorld {
 
     async fn put(&mut self, body: &str) -> anyhow::Result<PendingEntry> {
         let queue = self.queue()?.clone();
-        let response = queue
-            .execute(Request::Put {
+        let response = dispatch_request(
+            &queue,
+            Request::Put {
                 request: CommentRequest {
                     owner: "octocat".into(),
                     repo: "hello-world".into(),
@@ -99,8 +102,9 @@ impl QueueWorld {
                     body: body.into(),
                 },
                 immediate: self.immediate_puts,
-            })
-            .await;
+            },
+        )
+        .await;
         let Response::Ok {
             entry: Some(entry), ..
         } = response
@@ -112,7 +116,7 @@ impl QueueWorld {
     }
 
     async fn entries(&self) -> anyhow::Result<Vec<PendingEntry>> {
-        let response = self.queue()?.execute(Request::List).await;
+        let response = dispatch_request(self.queue()?, Request::List).await;
         match response {
             Response::Ok {
                 entries: Some(entries),
@@ -199,7 +203,7 @@ async fn comment_is_moved(
         "deleted" => Request::Del { id },
         other => anyhow::bail!("unsupported operation '{other}'"),
     };
-    let response = world.queue()?.execute(request).await;
+    let response = dispatch_request(world.queue()?, request).await;
     anyhow::ensure!(
         matches!(response, Response::Ok { .. }),
         "operation should succeed, got {response:?}"
@@ -209,7 +213,7 @@ async fn comment_is_moved(
 
 #[when(regex = r#"^the unknown identifier \"(.+)\" is bumped$"#)]
 async fn unknown_id_is_bumped(world: &mut QueueWorld, id: String) -> anyhow::Result<()> {
-    let response = world.queue()?.execute(Request::Bump { id }).await;
+    let response = dispatch_request(world.queue()?, Request::Bump { id }).await;
     world.last_response = Some(response);
     Ok(())
 }

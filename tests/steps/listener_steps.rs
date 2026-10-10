@@ -14,7 +14,10 @@ use tokio::sync::watch;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
-use comenqd::daemon::{SharedQueue, listener::run_listener};
+use comenqd::daemon::{
+    SharedQueue,
+    listener::{dispatch_request, run_listener},
+};
 
 #[derive(Default, World)]
 pub struct ListenerWorld {
@@ -34,7 +37,7 @@ impl std::fmt::Debug for ListenerWorld {
 
 /// Pending entries as reported through the protocol.
 async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingEntry>> {
-    match queue.execute(Request::List).await {
+    match dispatch_request(queue, Request::List).await {
         Response::Ok {
             entries: Some(entries),
             ..

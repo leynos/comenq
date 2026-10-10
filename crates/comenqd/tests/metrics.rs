@@ -1,8 +1,8 @@
 //! End-to-end verification of the daemon Prometheus scrape endpoint.
 
 use comenqd::config::Config;
-use comenqd::daemon::SharedQueue;
 use comenqd::daemon::listener::handle_client;
+use comenqd::daemon::{SharedQueue, listener::dispatch_request};
 use comenqd::metrics::{PROMETHEUS_LISTEN_ADDR, install_prometheus};
 use std::net::Ipv4Addr;
 use std::path::Path;
@@ -134,8 +134,9 @@ async fn exporter_serves_listener_request_metrics() {
     };
     assert_queue_gauges(&dir.path().join("queue"), 1).await;
 
-    let second_response = queue
-        .execute(comenq_lib::protocol::Request::Put {
+    let second_response = dispatch_request(
+        &queue,
+        comenq_lib::protocol::Request::Put {
             request: comenq_lib::CommentRequest {
                 owner: "owner".into(),
                 repo: "repo".into(),
@@ -143,8 +144,9 @@ async fn exporter_serves_listener_request_metrics() {
                 body: "second body".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     let comenq_lib::protocol::Response::Ok {
         entry: Some(second_entry),
         ..
@@ -155,20 +157,24 @@ async fn exporter_serves_listener_request_metrics() {
     assert_queue_gauges(&dir.path().join("queue"), 2).await;
 
     assert!(matches!(
-        queue
-            .execute(comenq_lib::protocol::Request::Bump {
+        dispatch_request(
+            &queue,
+            comenq_lib::protocol::Request::Bump {
                 id: second_entry.id.clone(),
-            })
-            .await,
+            },
+        )
+        .await,
         comenq_lib::protocol::Response::Ok { .. }
     ));
     assert_queue_gauges(&dir.path().join("queue"), 2).await;
     assert!(matches!(
-        queue
-            .execute(comenq_lib::protocol::Request::Bust {
+        dispatch_request(
+            &queue,
+            comenq_lib::protocol::Request::Bust {
                 id: second_entry.id.clone(),
-            })
-            .await,
+            },
+        )
+        .await,
         comenq_lib::protocol::Response::Ok { .. }
     ));
     assert_queue_gauges(&dir.path().join("queue"), 2).await;
@@ -207,11 +213,13 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("complete posted entry");
     assert_queue_gauges(&dir.path().join("queue"), 1).await;
     assert!(matches!(
-        queue
-            .execute(comenq_lib::protocol::Request::Del {
+        dispatch_request(
+            &queue,
+            comenq_lib::protocol::Request::Del {
                 id: second_entry.id,
-            })
-            .await,
+            },
+        )
+        .await,
         comenq_lib::protocol::Response::Ok { .. }
     ));
     assert_queue_gauges(&dir.path().join("queue"), 0).await;

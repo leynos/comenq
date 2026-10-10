@@ -200,44 +200,24 @@ time, so the client can try the user runtime socket before the system socket.
 
 ### 2.2. Client-Daemon IPC Protocol
 
-Effective communication between the client and daemon requires a clearly
-defined data contract. This ensures that both components have a shared
-understanding of the information being exchanged.
+Each Unix domain socket connection carries one JSON-encoded `Request`. The
+client writes the complete request and shuts down its write side; the daemon
+deserializes it, sends one JSON-encoded `Response`, then closes the connection.
+The shared protocol types are defined in `src/protocol.rs`; `CommentRequest` in
+`src/lib.rs` is the payload nested inside a `put` request, not a standalone
+wire message.
 
-#### 2.2.1. The `CommentRequest` Data Structure
+`Request` is tagged by its `op` field, with variant names serialized in
+snake_case. `put` contains a `request` object with `owner`, `repo`,
+`pr_number`, and `body`; its optional `immediate` field defaults to `false`.
+`list` has no additional fields. `bump`, `bust`, and `del` each contain an `id`
+string. A successful response is tagged with `"outcome":"ok"` and may contain an
+`entry` (for `put`) or `entries` (for `list`). A failed response is tagged with
+`"outcome":"error"` and contains a human-readable `message`. Absent `entry` and
+`entries` fields are omitted.
 
-A shared `CommentRequest` struct will serve as the message format. To be used
-by both the client and the daemon, this struct will reside in a shared library
-crate (e.g., `comenq-lib`). It must be serializable, so it will derive
-`serde::Serialize` for the client to encode it and `serde::Deserialize` for the
-daemon to decode it.
-
-```rust
-// In src/lib.rs (or a dedicated lib crate)
-
-use serde::{Deserialize, Serialize};
-
-/// The data structure sent from the client to the daemon over the UDS.
-/// It contains all necessary information to post a GitHub comment.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CommentRequest {
-    pub owner: String,
-    pub repo: String,
-    pub pr_number: u64,
-    pub body: String,
-}
-```
-
-#### 2.2.2. Serialization and Transport
-
-The client will serialize the `CommentRequest` instance into a JSON string
-using the `serde_json` crate. JSON is selected for this purpose due to its
-excellent debugging characteristics (it is human-readable) and its robust,
-widespread support within the Rust ecosystem.
-
-The serialized JSON data will be sent over a `tokio::net::UnixStream`. The
-choice of a Unix Domain Socket (UDS) is deliberate and carries significant
-advantages for this application:
+The JSON is sent over a `tokio::net::UnixStream`. A Unix Domain Socket (UDS) is
+used for local IPC:
 
 - **Performance:** For local Inter-Process Communication (IPC), UDS bypasses
   much of the TCP/IP stack overhead, resulting in lower latency and higher
@@ -1061,22 +1041,33 @@ strip = true
 panic = "abort"
 ```
 
-### 5.3. Source Code for Shared Library (`src/lib.rs`)
+### 5.3. Current Client-Daemon Protocol
 
-```rust
-// src/lib.rs
-use serde::{Deserialize, Serialize};
+The wire contract is defined by `Request` and `Response` in `src/protocol.rs`.
+`CommentRequest` in `src/lib.rs` supplies the `request` payload for `put`; it
+is not sent by itself. These examples show the tagged JSON shape for every
+request operation:
 
-/// The data structure sent from the client to the daemon over the UDS.
-/// It contains all necessary information to post a GitHub comment.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CommentRequest {
-    pub owner: String,
-    pub repo: String,
-    pub pr_number: u64,
-    pub body: String,
+```json
+{
+  "op": "put",
+  "request": {
+    "owner": "owner",
+    "repo": "repo",
+    "pr_number": 123,
+    "body": "Comment body"
+  },
+  "immediate": false
 }
+{"op":"list"}
+{"op":"bump","id":"1a2b3c4d"}
+{"op":"bust","id":"1a2b3c4d"}
+{"op":"del","id":"1a2b3c4d"}
 ```
+
+Replies use one tagged `Response` per connection. `put` replies include an
+`entry`, `list` replies include `entries`, other successful operations return
+`{"outcome":"ok"}`, and failures return `{"outcome":"error","message":"..."}`.
 
 ### 5.4. Historical Source for `comenq` (Client)
 
@@ -1220,7 +1211,7 @@ described above. Structured logging is initialized using `tracing_subscriber`
 with JSON output controlled by the `RUST_LOG` environment variable. The queue
 directory is created asynchronously on start if it does not already exist,
 before `QueueStore::open` runs in a blocking task and reads or creates the
-`entries` sub-directory within it. There is no dedicated queue-writer task or
+`entries` subdirectory within it. There is no dedicated queue-writer task or
 inter-task channel: the listener and worker both hold an `Arc<SharedQueue>`,
 which wraps the store in a `std::sync::Mutex`. `SharedQueue` runs each
 synchronous store operation in `spawn_blocking`, preserving single-writer

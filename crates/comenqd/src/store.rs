@@ -100,6 +100,37 @@ pub enum StoreError {
         limit: u64,
     },
 }
+
+impl StoreError {
+    /// Return a bounded classification that does not expose stored values.
+    pub(crate) fn category(&self) -> &'static str {
+        match self {
+            Self::Io(error) => match error.kind() {
+                io::ErrorKind::NotFound => "not_found",
+                io::ErrorKind::PermissionDenied => "permission_denied",
+                io::ErrorKind::InvalidData => "invalid_data",
+                _ => "io_error",
+            },
+            Self::Serde(_) => "invalid_json",
+            Self::UnknownId(_) => "unknown_identifier",
+            Self::InvalidId(_) => "unsafe_identifier",
+            Self::InvalidRepositoryComponent(_) => "invalid_repository_component",
+            Self::LastPost(_) => "invalid_last_post",
+            Self::BlockingTask(_) => "blocking_task",
+            Self::QueueFull(_) => "queue_full",
+            Self::EntryTooLarge { .. } => "entry_too_large",
+            Self::QueueByteBudgetExceeded { .. } => "byte_budget_exceeded",
+        }
+    }
+
+    /// Whether this error represents an unexpected persistence or task failure.
+    pub(crate) fn is_unexpected(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_) | Self::Serde(_) | Self::LastPost(_) | Self::BlockingTask(_)
+        )
+    }
+}
 /// Result alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
 /// Scheduling inputs for [`QueueStore::put`].

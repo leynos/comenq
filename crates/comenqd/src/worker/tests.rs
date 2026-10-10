@@ -1,7 +1,10 @@
 //! Tests for the worker's shutdown waits and notification hooks.
 
-use super::{Notify, WorkerControl, WorkerHooks, run_worker, wait_for_retry_deadline};
+use super::{
+    Notify, WorkerControl, WorkerHooks, retry_deadline, run_worker, wait_for_retry_deadline,
+};
 use crate::config::Config;
+use crate::listener::dispatch_request;
 use crate::queue::SharedQueue;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::Request;
@@ -18,6 +21,14 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod post_span;
 mod scheduling;
+
+#[test]
+fn overflowing_retry_cooldown_uses_a_far_future_deadline() {
+    let started = Instant::now();
+    let deadline = retry_deadline(Duration::from_secs(u64::MAX));
+
+    assert!(deadline.duration_since(started) >= Duration::from_secs(99 * 365 * 24 * 60 * 60));
+}
 
 /// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
 ///
@@ -95,8 +106,9 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
     let dir = tempdir().expect("create temporary queue directory");
     let queue = SharedQueue::open(Arc::new(Config::from(temp_config(&dir).with_cooldown(0))))
         .expect("open queue");
-    let put = queue
-        .execute(Request::Put {
+    let put = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -104,8 +116,9 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
                 body: "recover claim".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     let comenq_lib::protocol::Response::Ok {
         entry: Some(entry), ..
     } = put
@@ -156,7 +169,7 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
         .await
         .expect("restarted worker should post the recovered entry");
     assert!(matches!(
-        queue.execute(Request::List).await,
+        dispatch_request(&queue, Request::List).await,
         comenq_lib::protocol::Response::Ok {
             entries: Some(entries),
             ..
@@ -175,8 +188,9 @@ async fn failed_post_retries_after_a_full_cooldown() {
     let dir = tempdir().expect("create temporary queue directory");
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
     let queue = SharedQueue::open(cfg).expect("open queue");
-    let response = queue
-        .execute(Request::Put {
+    let response = dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -184,8 +198,9 @@ async fn failed_post_retries_after_a_full_cooldown() {
                 body: "retry".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(matches!(
         response,
         comenq_lib::protocol::Response::Ok { .. }
@@ -247,12 +262,14 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
         pr_number: 7,
         body: "retry".into(),
     };
-    queue
-        .execute(Request::Put {
+    dispatch_request(
+        &queue,
+        Request::Put {
             request: failed_request,
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -278,8 +295,9 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
     ));
 
     idle.notified().await;
-    queue
-        .execute(Request::Put {
+    dispatch_request(
+        &queue,
+        Request::Put {
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -287,8 +305,9 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
                 body: "queue mutation".into(),
             },
             immediate: true,
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(
         tokio::time::timeout(Duration::from_millis(100), idle.notified())
             .await
