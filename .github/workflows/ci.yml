@@ -77,7 +77,7 @@ jobs:
       # scope: every workspace target with every feature), so it is the only
       # place the suite runs. The cucumber harness has its own `main`, which
       # nextest cannot execute, so it keeps a step of its own, after the
-      # CodeScene upload so that a failing scenario cannot stop the upload.
+      # coverage step so that a failing scenario cannot stop the coverage.
       # tests/workflow_contracts/suite_runs_once_test.py holds the split.
       - name: Test and Measure Coverage
         env:
@@ -86,21 +86,18 @@ jobs:
           # linker. Assigning RUSTFLAGS displaces every `rustflags` table in
           # .cargo/config.toml.
           RUSTFLAGS: -D warnings
-        uses: leynos/shared-actions/.github/actions/generate-coverage@c17d433f99daa94e53ca5eb566088518a312cb71
+        uses: leynos/shared-actions/.github/actions/generate-coverage@cabf105ae230e3759cf77b1c2d1d73ea0b67e9a9
         with:
           output-path: lcov.info
           format: lcov
           all-features: 'true'
           all-targets: 'true'
-      - name: Upload coverage data to CodeScene
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-        if: ${{ env.CS_ACCESS_TOKEN }}
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c17d433f99daa94e53ca5eb566088518a312cb71
-        with:
-          format: lcov
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
-          installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
+          # The pull request measures coverage for its own ratchet check and
+          # nothing else: it neither publishes the report nor contacts
+          # CodeScene. Main owns both, in coverage-main.yml, and
+          # `make test-workflow-contracts` holds the split.
+          with-ratchet: 'true'
+          publish-artefact: 'false'
       - name: Run the cucumber scenarios
         if: ${{ !cancelled() }}
         run: make test-cucumber
