@@ -582,22 +582,19 @@ implemented as an asynchronous function spawned by the main `tokio` runtime.
 
 Its workflow is as follows:
 
-1. **Cleanup and Binding:** The task first attempts to remove any stale socket
-   file from a previous run. It then creates and binds a
-   `tokio::net::UnixListener` to the configured socket path.[^2]
+1. **Prepare the Socket:** `prepare_listener` binds a uniquely named temporary
+   socket in the configured path's parent directory, sets its mode to `0o660`,
+   then atomically renames it over the configured path.[^2] It enforces mode
+   `0o660` again after the rename.
 
-2. **Set Permissions:** After binding, it must set the permissions on the
-   socket file to enforce the security model (e.g., `0o660`), allowing access
-   only to the owner user and group.
-
-3. **Accept Loop:** The task enters an infinite `loop`, waiting for new client
+2. **Accept Loop:** The task enters an infinite `loop`, waiting for new client
    connections via `listener.accept().await`.[^13]
 
-4. **Spawn Connection Handler:** To ensure the listener is never blocked, upon
+3. **Spawn Connection Handler:** To ensure the listener is never blocked, upon
    accepting a new connection, it immediately spawns a new, short-lived `tokio`
    task (`handle_client`) to handle that specific client.
 
-5. **Handle Client:** This per-client task reads at most 1 MiB within
+4. **Handle Client:** This per-client task reads at most 1 MiB within
    `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
    rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
@@ -1153,20 +1150,17 @@ At a high level, the daemon:
 
 - loads configuration and initializes logging
 - spawns a Unix socket listener for incoming requests
-- constructs a [WorkerControl](../crates/comenqd/src/worker.rs#L108) with a
-  shutdown channel and optional test hooks
-- starts the worker with [run_worker](../crates/comenqd/src/worker.rs#L122)
-- awaits one task, signals shutdown, and then awaits both tasks to terminate
-   within a bounded timeout for a clean, deterministic shutdown
+- starts the worker with [`run_worker`](../crates/comenqd/src/worker.rs),
+  controlled by [`WorkerControl`](../crates/comenqd/src/worker.rs)
+- supervises the listener and worker concurrently, restarting failures with
+  jittered exponential backoff
+- turns SIGINT or SIGTERM into a shared shutdown signal. Each supervisor waits
+  up to 100 ms for its task to stop, then aborts it if needed; `tokio::join!`
+  waits for both supervisors to finish
 
-Refer to [supervisor::run](../crates/comenqd/src/supervisor.rs#L168) for the
-canonical shutdown sequence, which signals both tasks and awaits them with a
-timeout.
-
-The worker task itself is implemented in
-[run_worker](../crates/comenqd/src/worker.rs#L122), which accepts a
-[WorkerControl](../crates/comenqd/src/worker.rs#L108) struct bundling shutdown
-and optional test hooks.
+See [`supervisor::run`](../crates/comenqd/src/supervisor.rs) for the daemon
+startup and shutdown flow. The worker accepts a `WorkerControl` that carries
+the shutdown signal and optional test hooks.
 
 The sequence diagram in Figure&nbsp;1 illustrates how the worker interacts with
 the queue, shutdown channel, and optional hooks.

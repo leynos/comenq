@@ -202,30 +202,32 @@ enum ClientOutcome {
 )]
 pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
     let started = Instant::now();
-    let result = handle_client_inner(stream, queue).await;
-    let (outcome, operation, error_kind) = match &result {
-        Ok((ClientOutcome::Accepted, operation, error_kind)) => {
-            ("accepted", *operation, *error_kind)
-        }
-        Ok((ClientOutcome::Failed, operation, error_kind)) => ("failed", *operation, *error_kind),
-        Err(_) => ("rejected", None, Some("protocol_io")),
+    let mut operation = None;
+    let result = handle_client_inner(stream, queue, &mut operation).await;
+    let (outcome, error_kind) = match &result {
+        Ok((ClientOutcome::Accepted, error_kind)) => ("accepted", *error_kind),
+        Ok((ClientOutcome::Failed, error_kind)) => ("failed", *error_kind),
+        Err(_) => ("rejected", Some("protocol_io")),
     };
     let span = tracing::Span::current();
     span.record("operation", operation.unwrap_or("unknown"));
+    let duration = started.elapsed();
     span.record(
         "elapsed_ms",
-        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
     );
     span.record("outcome", outcome);
     span.record("error_kind", error_kind.unwrap_or("none"));
     metrics::record_request(operation, outcome);
+    metrics::record_protocol_duration(operation, outcome, error_kind, duration);
     result.map(|_| ())
 }
 
 async fn handle_client_inner(
     stream: UnixStream,
     queue: Arc<SharedQueue>,
-) -> Result<(ClientOutcome, Option<&'static str>, Option<&'static str>)> {
+    operation: &mut Option<&'static str>,
+) -> Result<(ClientOutcome, Option<&'static str>)> {
     let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
@@ -238,26 +240,24 @@ async fn handle_client_inner(
     if buffer.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
     }
-    let (response, mut outcome, operation, mut error_kind) =
-        match serde_json::from_slice::<Request>(&buffer) {
-            Ok(request) => {
-                let operation = request_operation(&request);
-                let (response, error_kind) =
-                    protocol::dispatch_request_with_error_kind(&queue, request).await;
-                let outcome = if matches!(&response, Response::Error { .. }) {
-                    ClientOutcome::Failed
-                } else {
-                    ClientOutcome::Accepted
-                };
-                (response, outcome, Some(operation), error_kind)
-            }
-            Err(e) => (
-                Response::error(format!("invalid request: {e}")),
-                ClientOutcome::Failed,
-                None,
-                Some("invalid_json"),
-            ),
-        };
+    let (response, mut outcome, mut error_kind) = match serde_json::from_slice::<Request>(&buffer) {
+        Ok(request) => {
+            *operation = Some(request_operation(&request));
+            let (response, error_kind) =
+                protocol::dispatch_request_with_error_kind(&queue, request).await;
+            let outcome = if matches!(&response, Response::Error { .. }) {
+                ClientOutcome::Failed
+            } else {
+                ClientOutcome::Accepted
+            };
+            (response, outcome, error_kind)
+        }
+        Err(e) => (
+            Response::error(format!("invalid request: {e}")),
+            ClientOutcome::Failed,
+            Some("invalid_json"),
+        ),
+    };
     let mut bytes = serde_json::to_vec(&response)?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         outcome = ClientOutcome::Failed;
@@ -279,7 +279,7 @@ async fn handle_client_inner(
     )
     .await
     .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
-    Ok((outcome, operation, error_kind))
+    Ok((outcome, error_kind))
 }
 
 fn request_operation(request: &Request) -> &'static str {

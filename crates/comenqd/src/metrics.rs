@@ -8,6 +8,10 @@
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
+mod duration;
+
+pub(crate) use duration::{record_protocol_duration, record_queue_store_duration};
+
 /// Local address of the daemon's Prometheus scrape endpoint.
 pub const PROMETHEUS_LISTEN_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 9000);
 
@@ -179,5 +183,123 @@ mod tests {
         let metrics = snapshotter.snapshot().into_vec();
         assert!(metric_names(&metrics).contains(&COOLDOWN_WAIT_DURATION));
         assert!(metric_names(&metrics).contains(&GITHUB_POST_DURATION));
+    }
+
+    #[test]
+    fn records_bounded_protocol_and_store_duration_labels() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            record_protocol_duration(
+                Some("put"),
+                "accepted",
+                None,
+                std::time::Duration::from_millis(10),
+            );
+            record_protocol_duration(
+                None,
+                "failed",
+                Some("invalid_json"),
+                std::time::Duration::from_millis(20),
+            );
+            record_protocol_duration(
+                Some("raw-request-value"),
+                "unexpected-outcome",
+                Some("/private/path"),
+                std::time::Duration::from_millis(30),
+            );
+            record_queue_store_duration(
+                "del",
+                "failure",
+                Some("unknown_identifier"),
+                std::time::Duration::from_millis(40),
+            );
+            record_queue_store_duration(
+                "raw-store-operation",
+                "unexpected-outcome",
+                Some("/private/path"),
+                std::time::Duration::from_millis(50),
+            );
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "put"),
+                ("outcome", "accepted"),
+                ("error_kind", "none"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "failed"),
+                ("error_kind", "invalid_json"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "unknown"),
+                ("error_kind", "unknown"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "del"),
+                ("outcome", "failure"),
+                ("error_kind", "unknown_identifier"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "unknown"),
+                ("outcome", "unknown"),
+                ("error_kind", "unknown"),
+            ],
+        );
+        assert!(metrics.iter().all(|(key, _, _, _)| {
+            !key.key().labels().any(|label| {
+                matches!(
+                    label.value(),
+                    "raw-request-value" | "raw-store-operation" | "/private/path"
+                )
+            })
+        }));
+    }
+
+    /// Assert that one histogram sample was recorded with exactly the labels
+    /// required by a metric scenario.
+    fn assert_histogram_labels(
+        metrics: &[(
+            metrics_util::CompositeKey,
+            Option<metrics::Unit>,
+            Option<metrics::SharedString>,
+            DebugValue,
+        )],
+        name: &str,
+        expected_labels: &[(&str, &str)],
+    ) {
+        assert!(metrics.iter().any(|(key, _, _, value)| {
+            key.key().name() == name
+                && expected_labels
+                    .iter()
+                    .all(|(expected_key, expected_value)| {
+                        key.key().labels().any(|label| {
+                            label.key() == *expected_key && label.value() == *expected_value
+                        })
+                    })
+                && matches!(value, DebugValue::Histogram(samples) if samples.len() == 1)
+        }));
     }
 }

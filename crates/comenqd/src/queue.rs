@@ -289,12 +289,14 @@ impl SharedQueue {
         })
         .await
         .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let duration = started.elapsed();
+        let elapsed_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         span.record("elapsed_ms", elapsed_ms);
-        match &result {
+        let (outcome, error_kind) = match &result {
             Ok(_) => {
                 span.record("outcome", "success");
                 span.record("error_kind", "none");
+                ("success", None)
             }
             Err(error) => {
                 let error_kind = error.category();
@@ -308,8 +310,10 @@ impl SharedQueue {
                         "Queue store operation failed",
                     );
                 }
+                ("failure", Some(error_kind))
             }
-        }
+        };
+        metrics::record_queue_store_duration(operation, outcome, error_kind, duration);
         result
     }
 

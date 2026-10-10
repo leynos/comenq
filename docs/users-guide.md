@@ -129,6 +129,18 @@ The stable metric names and labels are:
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
   `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
   `rejected`); requests without a parsed operation omit the `operation` label.
+- `comenqd_protocol_transaction_duration_seconds` measures complete listener
+  transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
+  `bust`, `del`, and `unknown`; `outcome` is `accepted`, `failed`, `rejected`,
+  or `unknown`. `error_kind` uses fixed classifications and is `none` on
+  success.
+- `comenqd_queue_store_operation_duration_seconds` measures queue-store
+  operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
+  `del`, `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
+  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
+  fixed classifications and is `none` on success.
+- These histograms never use request values, paths, identifiers, payloads,
+  tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
 - `comenqd_queue_bytes` for persisted entry-record bytes plus reserved
   mutation headroom, without labels.
