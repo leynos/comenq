@@ -264,8 +264,9 @@ impl WorkerControl {
 /// Posts queued comments as they fall due, enforcing the scheduled cooldowns.
 ///
 /// The worker recomputes the head entry's due time on every iteration, so
-/// queue mutations (put, bump, bust, del) take effect immediately: the shared
-/// queue's change signal interrupts any wait.
+/// queue mutations (put, bump, bust, del) interrupt empty-queue and scheduled
+/// entry waits. A failed-post retry still waits for the full cooldown after a
+/// queue change to avoid retrying the same failed request early.
 pub async fn run_worker(
     queue: Arc<SharedQueue>,
     octocrab: Arc<Octocrab>,

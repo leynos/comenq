@@ -18,6 +18,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const COOLDOWN_SECONDS: u64 = 60;
 const FLUTTER_SECONDS: u64 = 7;
 
+mod mutations;
+
 #[derive(Debug)]
 struct AdvancingClock(AtomicU64);
 
@@ -89,7 +91,7 @@ async fn received_post_count(server: &MockServer) -> usize {
         .len()
 }
 
-async fn wait_for_hook_with_real_timeout(hook: &Notify, message: &str) {
+pub(super) async fn wait_for_hook_with_real_timeout(hook: &Notify, message: &str) {
     let (timeout_tx, timeout_rx) = tokio::sync::oneshot::channel();
     let (cancel_tx, cancel_rx) = std::sync::mpsc::channel();
     let timer = std::thread::spawn(move || {
@@ -237,89 +239,6 @@ async fn timer_expiry_posts_first_and_successive_entries_at_flutter_etas() {
     wait_for_hook_with_real_timeout(&idle, "worker did not complete the second timed post").await;
     assert_eq!(received_post_count(&server).await, 2);
     assert!(pending_entries(&queue).await.is_empty());
-
-    shutdown_tx.send(()).expect("signal shutdown");
-    worker
-        .await
-        .expect("worker task should not panic")
-        .expect("worker should exit cleanly");
-}
-
-#[tokio::test(start_paused = true)]
-async fn queue_mutation_wakes_a_worker_waiting_for_a_deferred_entry() {
-    let dir = tempdir().expect("create temporary queue directory");
-    let clock = Arc::new(AdvancingClock(AtomicU64::new(1_000)));
-    let queue_clock: Arc<dyn UnixClock> = clock.clone();
-    let queue = SharedQueue::open_with_clock(
-        Arc::new(Config::from(
-            temp_config(&dir).with_cooldown(COOLDOWN_SECONDS),
-        )),
-        queue_clock,
-    )
-    .expect("open queue");
-    let server = MockServer::start().await;
-    let enqueued = Arc::new(Notify::new());
-    let idle = Arc::new(Notify::new());
-    let drained = Arc::new(Notify::new());
-    let waiting = Arc::new(Notify::new());
-    let (shutdown_tx, worker) = worker_with_successful_posts(
-        Arc::clone(&queue),
-        &server,
-        1,
-        Arc::clone(&enqueued),
-        Arc::clone(&idle),
-        Arc::clone(&drained),
-        Arc::clone(&waiting),
-    )
-    .await;
-    wait_for_hook_with_real_timeout(&drained, "worker did not become idle").await;
-
-    let deferred = dispatch_request(
-        &queue,
-        Request::Put {
-            request: request(7),
-            immediate: false,
-        },
-    )
-    .await;
-    assert!(matches!(deferred, Response::Ok { .. }));
-    wait_for_hook_with_real_timeout(&waiting, "worker did not register deferred wait").await;
-
-    let response = dispatch_request(
-        &queue,
-        Request::Put {
-            request: request(8),
-            immediate: true,
-        },
-    )
-    .await;
-    let Response::Ok {
-        entry: Some(entry), ..
-    } = response
-    else {
-        panic!("expected immediate entry, got {response:?}");
-    };
-    assert!(matches!(
-        dispatch_request(&queue, Request::Bump { id: entry.id }).await,
-        Response::Ok { .. }
-    ));
-
-    wait_for_hook_with_real_timeout(&enqueued, "worker did not claim the immediate entry").await;
-    wait_for_hook_with_real_timeout(&idle, "worker did not post the immediate entry").await;
-    assert_eq!(pending_entries(&queue).await.len(), 1);
-    let remaining = pending_entries(&queue).await;
-    assert_eq!(
-        remaining.first().expect("deferred entry remains").pr_number,
-        7
-    );
-    assert_eq!(
-        server
-            .received_requests()
-            .await
-            .expect("read requests")
-            .len(),
-        1
-    );
 
     shutdown_tx.send(()).expect("signal shutdown");
     worker

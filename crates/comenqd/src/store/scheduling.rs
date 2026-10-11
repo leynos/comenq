@@ -18,9 +18,9 @@ impl QueueStore {
     ) -> Result<(StoredEntry, u64)> {
         let (id, existing) = self.resolve_entry_id(&request, now)?;
         let (mut entries, usage) = self.entries_with_usage()?;
-        let last_post = self.last_post()?;
+        let previous_activity = self.previous_activity()?;
         if let Some(entry) = existing {
-            let eta = projected_schedule(entries, last_post, options.cooldown, now)
+            let eta = projected_schedule(entries, previous_activity, options.cooldown, now)
                 .into_iter()
                 .find(|(scheduled, _)| scheduled.id == entry.id)
                 .map_or(0, |(_, eta)| eta);
@@ -47,7 +47,7 @@ impl QueueStore {
             request,
         };
         entries.push(entry.clone());
-        let eta = projected_schedule(entries, last_post, options.cooldown, now)
+        let eta = projected_schedule(entries, previous_activity, options.cooldown, now)
             .into_iter()
             .find(|(scheduled, _)| scheduled.id == entry.id)
             .map_or(0, |(_, eta)| eta);
@@ -70,7 +70,7 @@ impl QueueStore {
     pub fn schedule(&self, cooldown: u64, now: u64) -> Result<Vec<(StoredEntry, u64)>> {
         Ok(projected_schedule(
             self.entries()?,
-            self.last_post()?,
+            self.previous_activity()?,
             cooldown,
             now,
         ))
@@ -102,17 +102,31 @@ impl QueueStore {
     }
 
     /// Release a failed post's claim so the worker can retry it later.
-    pub fn release_claim(&self, id: &str, claim_token: &str) -> Result<()> {
+    pub fn release_claim(&self, id: &str, claim_token: &str, attempted_at: u64) -> Result<()> {
         let mut entry = match self.find(id) {
             Ok(entry) => entry,
             Err(StoreError::UnknownId(_)) => return Ok(()),
             Err(error) => return Err(error),
         };
         if entry.claim_token.as_deref() == Some(claim_token) {
+            let latest_attempt = self.last_attempt()?.unwrap_or(0).max(attempted_at);
+            self.write_atomic(
+                &self.last_attempt_path,
+                latest_attempt.to_string().as_bytes(),
+            )?;
             entry.claim_token = None;
             self.write_entry(&entry)?;
         }
         Ok(())
+    }
+
+    /// Latest completed post or failed attempt, used as the cooldown anchor.
+    fn previous_activity(&self) -> Result<Option<u64>> {
+        Ok(self
+            .last_post()?
+            .into_iter()
+            .chain(self.last_attempt()?)
+            .max())
     }
 
     /// Clear claims left by a worker that exited before completing its post.

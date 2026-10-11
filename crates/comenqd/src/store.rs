@@ -1,8 +1,9 @@
 //! Persistent, reorderable comment queue.
 //!
 //! Pending comments use one JSON file beneath `<queue_path>/entries`, with an
-//! ordering key for `bump`, `bust`, and `del`. `<queue_path>/last_post`
-//! persists the last successful post for restart-stable ETAs.
+//! ordering key for `bump`, `bust`, and `del`. `<queue_path>/last_post` and
+//! `<queue_path>/last_attempt` preserve successful-post and failed-post timing
+//! across daemon restarts.
 //!
 //! The store holds no in-memory state; callers serialize mutations. It writes
 //! temporary siblings and renames them so entries are never half-written.
@@ -19,6 +20,8 @@ const ENTRIES_DIR: &str = "entries";
 pub(crate) const MAX_QUEUE_ENTRIES: usize = 1024;
 /// File recording the Unix time of the most recent successful post.
 const LAST_POST_FILE: &str = "last_post";
+/// File recording the Unix time of the most recent failed post attempt.
+const LAST_ATTEMPT_FILE: &str = "last_attempt";
 /// Recovery record for a GitHub post that succeeded before its queue cleanup.
 const COMPLETION_FILE: &str = "completion";
 /// A queued comment with its scheduling metadata.
@@ -68,6 +71,9 @@ pub enum StoreError {
     /// The persisted last-post marker cannot be parsed as a Unix timestamp.
     #[error("last-post marker is invalid: {0}")]
     LastPost(#[from] ParseIntError),
+    /// The persisted last-attempt marker cannot be parsed as a Unix timestamp.
+    #[error("last-attempt marker is invalid: {0}")]
+    LastAttempt(ParseIntError),
     /// The blocking queue operation did not complete.
     #[error("queue operation task failed: {0}")]
     BlockingTask(#[from] tokio::task::JoinError),
@@ -111,6 +117,7 @@ impl StoreError {
             Self::InvalidId(_) => "unsafe_identifier",
             Self::InvalidRepositoryComponent(_) => "invalid_repository_component",
             Self::LastPost(_) => "invalid_last_post",
+            Self::LastAttempt(_) => "invalid_last_attempt",
             Self::BlockingTask(_) => "blocking_task",
             Self::QueueFull(_) => "queue_full",
             Self::EntryTooLarge { .. } => "entry_too_large",
@@ -122,7 +129,11 @@ impl StoreError {
     pub(crate) fn is_unexpected(&self) -> bool {
         matches!(
             self,
-            Self::Io(_) | Self::Serde(_) | Self::LastPost(_) | Self::BlockingTask(_)
+            Self::Io(_)
+                | Self::Serde(_)
+                | Self::LastPost(_)
+                | Self::LastAttempt(_)
+                | Self::BlockingTask(_)
         )
     }
 }
@@ -145,6 +156,7 @@ pub struct PutOptions {
 pub struct QueueStore {
     entries_dir: PathBuf,
     last_post_path: PathBuf,
+    last_attempt_path: PathBuf,
     completion_path: PathBuf,
 }
 
@@ -191,6 +203,7 @@ impl QueueStore {
         let store = Self {
             entries_dir,
             last_post_path: queue_path.join(LAST_POST_FILE),
+            last_attempt_path: queue_path.join(LAST_ATTEMPT_FILE),
             completion_path: queue_path.join(COMPLETION_FILE),
         };
         store.reconcile_completion()?;
@@ -236,6 +249,15 @@ impl QueueStore {
     pub fn last_post(&self) -> Result<Option<u64>> {
         match fs::read_to_string(&self.last_post_path) {
             Ok(text) => Ok(Some(text.trim().parse()?)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Unix time of the most recent failed post attempt, when any.
+    pub fn last_attempt(&self) -> Result<Option<u64>> {
+        match fs::read_to_string(&self.last_attempt_path) {
+            Ok(text) => Ok(Some(text.trim().parse().map_err(StoreError::LastAttempt)?)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }

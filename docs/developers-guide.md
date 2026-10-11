@@ -61,17 +61,21 @@ request to a typed `SharedQueue` operation: `put`, `list`, `bump`, `bust`, or
 mutations notify the worker after success. The queue performs scheduling and
 persistence through `QueueStore`. `SharedQueue::claim_next_due()` selects the
 due head and durably claims it while holding the store lock; the lock is
-released before the worker calls GitHub. A failed post releases its claim and
-retains a full cooldown retry deadline. `bump` and `bust` may reorder a claimed
-entry without changing its claim, while `del` removes it. Completion checks the
-claim token so a successful post cannot delete a replacement entry.
+released before the worker calls GitHub. A failed post records its timestamp
+before releasing its claim, so the cooldown remains in the persisted schedule
+after a daemon restart. Queue changes cannot shorten the worker's in-process
+retry deadline. `bump` and `bust` may reorder a claimed entry without changing
+its claim, while `del` removes it. Completion checks the claim token so a
+successful post cannot delete a replacement entry.
 
 `SharedQueue::complete()` records the successful posting timestamp and removes
 the entry. Completion first writes a durable recovery record containing the
 entry identifier, claim token, and posting time; startup reconciliation
 finishes the deletion and `last_post` update before clearing that record, then
-reclaims claims left by an interrupted worker. Queue-store failures become
-daemon error responses.
+reclaims claims left by an interrupted worker. Failed attempts are recorded in
+`last_attempt`, and scheduling uses the later of the successful-post and failed
+attempt timestamps as its cooldown anchor. Queue-store failures become daemon
+error responses.
 
 The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
@@ -100,13 +104,13 @@ when the file is missing or invalid, or when no usable GitHub credential is
 available.
 
 Structured tracing records socket probes, the selected credential source (but
-never the token value), queue-side opens and task restarts, each effective
-cooldown wait, and GitHub post spans. The post span contains only
-`task="worker"` and an `outcome` of `success`, `api_error`, or `timeout`; spans
-exclude credentials, payloads, repository names, paths, request identifiers,
-and raw errors. Operators and developers can select the emitted detail through
-`RUST_LOG`. The credential reader rejects files larger than 64 KiB before
-trimming their contents.
+never the token value), listener transactions and blocking queue-store
+operations, task restarts, each effective cooldown wait, and GitHub post spans.
+The post span contains only `task="worker"` and an `outcome` of `success`,
+`api_error`, or `timeout`; spans exclude credentials, payloads, repository
+names, paths, request identifiers, and raw errors. Operators and developers can
+select the emitted detail through `RUST_LOG`. The credential reader rejects
+files larger than 64 KiB before trimming their contents.
 
 The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`.
 The stable metric vocabulary is:

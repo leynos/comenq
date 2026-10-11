@@ -99,6 +99,7 @@ fn bounded_error_label(error_kind: Option<&'static str>) -> &'static str {
             | "unsafe_identifier"
             | "invalid_repository_component"
             | "invalid_last_post"
+            | "invalid_last_attempt"
             | "blocking_task"
             | "queue_full"
             | "entry_too_large"

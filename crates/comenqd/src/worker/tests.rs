@@ -1,4 +1,5 @@
-//! Tests for the worker's shutdown waits and notification hooks.
+//! Tests for worker retry pacing, claim recovery, queue notifications, and
+//! shutdown waits.
 
 use super::{
     Notify, WorkerControl, WorkerHooks, retry_deadline, run_worker, wait_for_retry_deadline,
@@ -289,9 +290,18 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
     .await;
 
     let server = MockServer::start().await;
+    let post_times = Arc::new(Mutex::new(Vec::new()));
+    let recorded_post_times = Arc::clone(&post_times);
     Mock::given(method("POST"))
         .and(path("/repos/octocat/hello-world/issues/7/comments"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(move |_: &wiremock::Request| {
+            recorded_post_times
+                .lock()
+                .expect("POST time lock should not be poisoned")
+                .push(Instant::now());
+            // Measure worker retries without the HTTP client's own 5xx retries.
+            ResponseTemplate::new(400)
+        })
         .mount(&server)
         .await;
     let octocrab = octocrab_for(&server).expect("create GitHub client");
@@ -311,7 +321,9 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
         ),
     ));
 
-    idle.notified().await;
+    scheduling::wait_for_hook_with_real_timeout(&idle, "worker should report the failed post")
+        .await;
+    assert_eq!(post_times.lock().expect("POST time lock").len(), 1);
     dispatch_request(
         &queue,
         Request::Put {
@@ -331,10 +343,12 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
             .is_err(),
         "a queue mutation must not trigger an immediate retry"
     );
+    assert_eq!(post_times.lock().expect("POST time lock").len(), 1);
 
     tokio::time::timeout(Duration::from_secs(cooldown + 1), idle.notified())
         .await
         .expect("worker should retry after the cooldown");
+    assert_retry_respects_cooldown(&post_times, Duration::from_secs(cooldown));
 
     shutdown_tx.send(()).expect("signal shutdown");
     worker

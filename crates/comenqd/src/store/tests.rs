@@ -197,6 +197,17 @@ fn malformed_last_post_marker_is_an_error() {
 }
 
 #[rstest]
+fn malformed_last_attempt_marker_is_an_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    fs::write(dir.path().join("last_attempt"), "not a timestamp").expect("write marker");
+    assert!(matches!(
+        store.last_attempt(),
+        Err(StoreError::LastAttempt(_))
+    ));
+}
+
+#[rstest]
 fn id_collision_with_a_different_request_uses_a_salted_id() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);

@@ -181,9 +181,10 @@ impl SharedQueue {
     pub async fn release_claim(&self, id: &str, claim_token: &str) -> StoreResult<()> {
         let id = id.to_owned();
         let claim_token = claim_token.to_owned();
+        let attempted_at = self.clock.unix_now();
         let result = self
             .with_store("release_claim", move |store| {
-                store.release_claim(&id, &claim_token)
+                store.release_claim(&id, &claim_token, attempted_at)
             })
             .await;
         if result.is_ok() {
@@ -351,10 +352,11 @@ fn validate_request(request: &CommentRequest) -> StoreResult<()> {
 /// Report whether a GitHub owner or repository name is safe at this boundary.
 fn is_safe_repository_component(component: &str) -> bool {
     !component.is_empty()
-        && component.chars().all(|character| {
-            !character.is_control()
-                && !matches!(character, '/' | '\\' | '?' | '#' | '\u{2028}' | '\u{2029}')
-        })
+        && component != "."
+        && component != ".."
+        && component
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 #[cfg(test)]

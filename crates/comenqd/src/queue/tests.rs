@@ -190,20 +190,28 @@ async fn put_rejects_unsafe_repository_components() {
     }))
     .expect("open queue");
 
-    let response = dispatch_request(
-        &queue,
-        Request::Put {
-            request: CommentRequest {
-                owner: "octocat\u{1b}[2J".into(),
-                repo: "hello-world".into(),
-                pr_number: 7,
-                body: "comment".into(),
+    for (owner, repo) in [
+        ("octocat\u{1b}[2J", "hello-world"),
+        ("..", "hello-world"),
+        ("octocat", ".."),
+        ("octo%2Fcat", "hello-world"),
+        ("octocat", "hello world"),
+    ] {
+        let response = dispatch_request(
+            &queue,
+            Request::Put {
+                request: CommentRequest {
+                    owner: owner.into(),
+                    repo: repo.into(),
+                    pr_number: 7,
+                    body: "comment".into(),
+                },
+                immediate: true,
             },
-            immediate: true,
-        },
-    )
-    .await;
-    assert!(matches!(response, Response::Error { .. }));
+        )
+        .await;
+        assert!(matches!(response, Response::Error { .. }), "{owner}/{repo}");
+    }
     assert!(
         matches!(dispatch_request(&queue, Request::List).await, Response::Ok { entries: Some(entries), .. } if entries.is_empty())
     );

@@ -77,9 +77,39 @@ fn claim_is_released_after_a_failed_post() {
     let token = claimed.claim_token.clone().expect("claim token");
     assert!(store.next_due(600, 1000).expect("next due").is_none());
     store
-        .release_claim(&entry.id, &token)
+        .release_claim(&entry.id, &token, 1000)
         .expect("release claim");
     assert!(store.next_due(600, 1000).expect("next due").is_some());
+    assert_eq!(store.last_attempt().expect("last attempt"), Some(1000));
+}
+
+#[rstest]
+fn failed_post_retry_floor_survives_store_reopen() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("retry after restart"), &immediate(0), 1000)
+        .expect("put entry");
+    let (claimed, _) = store
+        .claim_next_due(600, 1000)
+        .expect("claim entry")
+        .expect("entry is due");
+    let token = claimed.claim_token.expect("claim token");
+    store
+        .release_claim(&entry.id, &token, 1000)
+        .expect("release failed claim");
+    drop(store);
+
+    let reopened = open_store(&dir);
+    let schedule = reopened.schedule(600, 1030).expect("schedule after reopen");
+    assert_eq!(schedule.len(), 1);
+    assert_eq!(schedule[0].0.id, entry.id);
+    assert_eq!(schedule[0].1, 570);
+
+    let inserted = reopened
+        .put_with_eta(request("new entry during cooldown"), &immediate(0), 1030)
+        .expect("put during cooldown");
+    assert_eq!(inserted.1, 1170);
 }
 
 #[rstest]
