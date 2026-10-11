@@ -41,6 +41,12 @@ pub struct TimeoutConfig {
 
 impl TimeoutConfig {
     /// Create a configuration with a base timeout and a complexity class.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let config = TimeoutConfig::new(30, TestComplexity::Moderate);
+    /// ```
     pub const fn new(base_seconds: u64, complexity: TestComplexity) -> Self {
         Self {
             base_seconds,
@@ -66,6 +72,16 @@ impl TimeoutConfig {
 
     /// Compute the timeout after the complexity, build, coverage and CI factors,
     /// clamped to the minimum and maximum.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let timeout = TimeoutConfig::new(10, TestComplexity::Simple)
+    ///     .with_ci(false)
+    ///     .with_coverage(false)
+    ///     .calculate_timeout();
+    /// assert!(timeout.as_secs() >= MIN_TIMEOUT_SECS);
+    /// ```
     pub fn calculate_timeout(&self) -> Duration {
         let mut timeout = self.base_seconds;
         timeout = timeout.saturating_mul(match self.complexity {
@@ -94,6 +110,13 @@ impl TimeoutConfig {
 
     /// Return the timeouts for successive attempts, as percentages of the computed
     /// timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let attempts = TimeoutConfig::new(10, TestComplexity::Simple).with_progressive_retry();
+    /// assert_eq!(attempts.len(), PROGRESSIVE_RETRY_PERCENTS.len());
+    /// ```
     pub fn with_progressive_retry(&self) -> Vec<Duration> {
         let base = self.calculate_timeout().as_secs();
         PROGRESSIVE_RETRY_PERCENTS
@@ -111,6 +134,14 @@ impl TimeoutConfig {
 /// # Errors
 /// Returns the operation's own error, or a message naming `operation_name` when
 /// every attempt times out.
+///
+/// # Examples
+///
+/// ```ignore
+/// let config = TimeoutConfig::new(10, TestComplexity::Simple);
+/// let value = timeout_with_retries(config, "fetch", || async { Ok::<_, String>(42) }).await?;
+/// assert_eq!(value, 42);
+/// ```
 pub async fn timeout_with_retries<F, Fut, T>(
     config: TimeoutConfig,
     operation_name: &str,
