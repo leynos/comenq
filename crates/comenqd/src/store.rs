@@ -76,14 +76,22 @@ pub enum StoreError {
     QueueFull(usize),
     /// An entry exceeds the maximum serialized file size.
     #[error("queue entry is {size} bytes, exceeding the per-entry limit of {limit} bytes")]
-    EntryTooLarge { size: u64, limit: u64 },
+    EntryTooLarge {
+        /// Serialized entry size in bytes.
+        size: u64,
+        /// Maximum allowed serialized size in bytes.
+        limit: u64,
+    },
     /// Persisted queue bytes plus the requested write exceed the durable budget.
     #[error(
         "queue byte budget exceeded: {used} bytes used, {requested} more requested, {limit} allowed"
     )]
     QueueByteBudgetExceeded {
+        /// Persisted queue size before the requested write, in bytes.
         used: u64,
+        /// Size of the requested write, in bytes.
         requested: u64,
+        /// Configured maximum queue size, in bytes.
         limit: u64,
     },
 }

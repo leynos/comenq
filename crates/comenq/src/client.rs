@@ -33,7 +33,12 @@ pub enum ClientError {
     Serialize(#[from] serde_json::Error),
     /// The serialized request exceeds the daemon's request-size limit.
     #[error("request payload is {size} bytes, exceeding the {limit}-byte limit")]
-    RequestTooLarge { size: usize, limit: usize },
+    RequestTooLarge {
+        /// Serialized request size in bytes.
+        size: usize,
+        /// Maximum request size accepted by the daemon, in bytes.
+        limit: usize,
+    },
     /// Writing the request to the socket failed.
     #[error("failed to write to daemon: {0}")]
     Write(#[source] std::io::Error),

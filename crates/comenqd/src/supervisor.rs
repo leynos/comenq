@@ -35,6 +35,7 @@ pub enum SupervisorError {
     /// The GitHub client failed.
     #[error(transparent)]
     Octocrab(#[from] octocrab::Error),
+    /// A queue-store operation failed.
     #[error(transparent)]
     Store(#[from] StoreError),
 }

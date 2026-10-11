@@ -9,7 +9,7 @@ use crate::queue::SharedQueue;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::Request;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 use tempfile::tempdir;
@@ -186,7 +186,10 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
 #[tokio::test]
 async fn failed_post_retries_after_a_full_cooldown() {
     let dir = tempdir().expect("create temporary queue directory");
-    let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(1)));
+    let cooldown = Duration::from_secs(1);
+    let cfg = Arc::new(Config::from(
+        temp_config(&dir).with_cooldown(cooldown.as_secs()),
+    ));
     let queue = SharedQueue::open(cfg).expect("open queue");
     let response = dispatch_request(
         &queue,
@@ -207,10 +210,19 @@ async fn failed_post_retries_after_a_full_cooldown() {
     ));
 
     let server = MockServer::start().await;
+    let post_times = Arc::new(Mutex::new(Vec::new()));
+    let recorded_post_times = Arc::clone(&post_times);
+    // Use a client-non-retryable failure so timestamps measure worker retries.
     Mock::given(method("POST"))
         .and(path("/repos/octocat/hello-world/issues/7/comments"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(2..)
+        .respond_with(move |_: &wiremock::Request| {
+            recorded_post_times
+                .lock()
+                .expect("POST time lock should not be poisoned")
+                .push(Instant::now());
+            ResponseTemplate::new(400)
+        })
+        .expect(2)
         .mount(&server)
         .await;
     let octocrab = octocrab_for(&server).expect("create GitHub client");
@@ -240,13 +252,16 @@ async fn failed_post_retries_after_a_full_cooldown() {
         .await
         .expect("worker task should not panic")
         .expect("worker should exit cleanly");
+    let requests = server.received_requests().await.expect("read requests");
+    assert_eq!(requests.len(), 2, "worker should retry exactly once");
+    let post_times = post_times
+        .lock()
+        .expect("POST time lock should not be poisoned");
+    assert_eq!(post_times.len(), 2, "mock should record both POST attempts");
     assert!(
-        server
-            .received_requests()
-            .await
-            .expect("read requests")
-            .len()
-            >= 2
+        post_times[1].duration_since(post_times[0]) >= cooldown,
+        "retry must wait at least {cooldown:?}, but elapsed {:?}",
+        post_times[1].duration_since(post_times[0]),
     );
 }
 
