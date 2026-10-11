@@ -3,6 +3,7 @@
 //! `EnvVarGuard` temporarily sets an environment variable and restores the
 //! previous value on drop.
 
+/// Guard that restores an environment variable to its previous value on drop.
 #[derive(Debug)]
 pub struct EnvVarGuard {
     key: String,

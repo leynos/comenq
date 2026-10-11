@@ -27,14 +27,18 @@ use observability::log_task_failure;
 pub use writer::queue_writer;
 use writer::{QueueWriterState, spawn_queue_writer, supervise_writer, writer_backoff};
 
+/// Errors that stop the daemon's supervisor.
 #[derive(Debug, Error)]
 pub enum SupervisorError {
+    /// An I/O operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// The GitHub client failed.
     #[error(transparent)]
     Octocrab(#[from] octocrab::Error),
 }
 
+/// Result type for supervisor operations.
 pub type Result<T> = std::result::Result<T, SupervisorError>;
 
 /// Asynchronously create the queue directory and any missing parents.

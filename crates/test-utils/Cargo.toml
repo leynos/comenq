@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 test-support = { path = "../../test-support" }
+
+[lints]
+workspace = true
