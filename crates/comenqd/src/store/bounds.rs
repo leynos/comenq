@@ -52,7 +52,13 @@ impl QueueStore {
         let mut entries = Vec::with_capacity(files.len());
         for path in files {
             match read_entry(&path) {
-                Ok(entry) if is_valid_id(&entry.id) => {
+                Ok(entry) if !is_valid_id(&entry.id) => {
+                    tracing::error!(
+                        error_kind = "unsafe_identifier",
+                        "Skipping queue entry with an unsafe identifier"
+                    );
+                }
+                Ok(entry) if path_matches_id(&path, &entry.id) => {
                     let file_bytes = match fs::metadata(&path) {
                         Ok(metadata) => metadata.len(),
                         Err(error) => {
@@ -76,8 +82,8 @@ impl QueueStore {
                 }
                 Ok(_) => {
                     tracing::error!(
-                        error_kind = "unsafe_identifier",
-                        "Skipping queue entry with an unsafe identifier"
+                        error_kind = "identifier_mismatch",
+                        "Skipping queue entry whose identifier does not match its filename"
                     );
                 }
                 Err(error) => {
@@ -180,6 +186,13 @@ impl QueueStore {
             },
         ))
     }
+}
+
+/// Require the persisted identifier to name the file that stores it.
+fn path_matches_id(path: &Path, id: &str) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == id)
 }
 
 /// Read at most one entry's limit plus a sentinel byte before deserializing.

@@ -259,6 +259,26 @@ fn entries_skip_a_valid_but_oversized_record_and_keep_other_entries() {
     assert!(entries_dir.join(format!("{}.json", oversized.id)).exists());
 }
 
+#[test]
+fn entries_skip_records_whose_stored_id_does_not_match_the_filename() {
+    let dir = TempDir::new().expect("create queue directory");
+    let store = open_store(&dir);
+    let entries_dir = dir.path().join("entries");
+    let mut mismatched = entry(request("mismatched"), 0, 1_000);
+    mismatched.id = "feedface".into();
+    let path = entries_dir.join("deadbeef.json");
+    let bytes = serde_json::to_vec_pretty(&mismatched).expect("serialize mismatched entry");
+    fs::write(&path, bytes).expect("write mismatched entry");
+
+    let entries = store.entries().expect("read queue entries");
+
+    assert!(entries.is_empty());
+    assert!(
+        path.exists(),
+        "listing must not remove the persisted record"
+    );
+}
+
 /// Captures formatted tracing output without installing a process-wide subscriber.
 #[derive(Clone, Default)]
 struct LogBuffer(Arc<Mutex<Vec<u8>>>);
@@ -290,6 +310,11 @@ fn entries_skip_corrupt_and_unsafe_records_without_logging_paths_or_ids() {
     unsafe_entry.id = malicious_id.into();
     let unsafe_bytes = serde_json::to_vec_pretty(&unsafe_entry).expect("serialize unsafe entry");
     fs::write(entries_dir.join("feedface.json"), unsafe_bytes).expect("write unsafe entry");
+    let mut mismatched_entry = entry(request("mismatched"), 0, 1_001);
+    mismatched_entry.id = "deadbeef".into();
+    let mismatched_bytes =
+        serde_json::to_vec_pretty(&mismatched_entry).expect("serialize mismatched entry");
+    fs::write(entries_dir.join("badc0ffe.json"), mismatched_bytes).expect("write mismatched entry");
     fs::write(entries_dir.join("cafebabe.json"), b"{not valid json").expect("write corrupt entry");
 
     let buffer = LogBuffer::default();
@@ -308,9 +333,13 @@ fn entries_skip_corrupt_and_unsafe_records_without_logging_paths_or_ids() {
 
     assert!(entries.is_empty());
     assert!(output.contains("unsafe_identifier"));
+    assert!(output.contains("identifier_mismatch"));
     assert!(output.contains("invalid_json"));
     assert!(!output.contains(malicious_id));
+    assert!(!output.contains("deadbeef"));
+    assert!(!output.contains("badc0ffe"));
     assert!(!output.contains(&dir.path().to_string_lossy().to_string()));
     assert!(entries_dir.join("feedface.json").exists());
+    assert!(entries_dir.join("badc0ffe.json").exists());
     assert!(entries_dir.join("cafebabe.json").exists());
 }
