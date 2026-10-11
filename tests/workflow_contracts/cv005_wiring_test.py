@@ -31,11 +31,16 @@ FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 PIN = re.compile(r"^CV005_CONTRACTS_REF \?= (\S+)$", re.MULTILINE)
 
 
-def _make_n(target: str) -> str:
-    """Return the commands ``make -n TARGET`` would run."""
-    result = subprocess.run(
-        ["make", "-n", target],
+def _make_n(gnu_make: str, env: dict[str, str], target: str, *overrides: str) -> str:
+    """Return the commands ``make -n TARGET [OVERRIDE=...]`` would run.
+
+    The ``make`` executable and its environment are injected by the caller (the
+    ``gnu_make`` and ``make_env`` fixtures), so no helper reads the ambient ones.
+    """
+    result = subprocess.run(  # noqa: S603 - a fixed command
+        [gnu_make, "-n", target, *overrides],
         cwd=ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
@@ -56,9 +61,9 @@ def test_the_pin_is_a_full_commit() -> None:
     assert FULL_COMMIT.fullmatch(pin), f"{pin!r} is not a full commit hash"
 
 
-def test_the_target_runs_the_pinned_checker_on_this_repository() -> None:
+def test_the_target_runs_the_pinned_checker_on_this_repository(gnu_make: str, make_env: dict[str, str]) -> None:
     """Run ``check --repository .`` from the pinned source under Python 3.13."""
-    commands = _make_n(TARGET)
+    commands = _make_n(gnu_make, make_env, TARGET)
     source = SOURCE.format(ref=_pinned_commit())
     runs = [line for line in commands.splitlines() if "cv005-contracts" in line]
     assert len(runs) == 1, f"expected one checker invocation, got {runs!r}"
@@ -75,9 +80,9 @@ def test_the_repository_parameter_names_this_repository() -> None:
     assert config.get("repository") == REPOSITORY, config
 
 
-def test_make_all_includes_the_target() -> None:
+def test_make_all_includes_the_target(gnu_make: str, make_env: dict[str, str]) -> None:
     """Run the checker from the comprehensive gate as well as on its own."""
-    assert "cv005-contracts check" in _make_n("all")
+    assert "cv005-contracts check" in _make_n(gnu_make, make_env, "all")
 
 
 def test_ci_runs_the_target_unconditionally() -> None:
@@ -96,22 +101,18 @@ def test_ci_runs_the_target_unconditionally() -> None:
     assert all("if" not in job for job, _ in runs), "the job carries an `if`"
 
 
-def test_both_contract_runs_use_the_configured_uv() -> None:
+def test_both_contract_runs_use_the_configured_uv(
+    gnu_make: str, make_env: dict[str, str]
+) -> None:
     """Route the checker and the pytest run through ``UV`` and ``UV_ENV``.
 
     A caller whose ``uv`` is not on ``PATH`` sets ``UV``; a run that calls a
     literal ``uv`` would ignore it.
     """
-    result = subprocess.run(
-        ["make", "-n", TARGET, "UV=/opt/injected/uv", "UV_ENV=INJECTED=1"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    output = _make_n(gnu_make, make_env, TARGET, "UV=/opt/injected/uv", "UV_ENV=INJECTED=1")
     runs = [
         line
-        for line in result.stdout.splitlines()
+        for line in output.splitlines()
         if "cv005-contracts" in line or "pytest" in line
     ]
     assert len(runs) == 2, runs
