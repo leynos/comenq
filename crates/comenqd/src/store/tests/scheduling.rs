@@ -70,8 +70,8 @@ fn deferred_floor_never_shortens_the_chain_schedule() {
     store
         .put(request("tail"), &deferred(), 1001)
         .expect("put tail");
-    // Head posted at t=1000; the tail's chain due time (1000 + 600) is
-    // later than its own floor (1001 + 600 = 1601)... choose the maximum.
+    // Head posted at t=1000; the tail's chain due time (1000 + 600 = 1600)
+    // is earlier than its own floor (1001 + 600 = 1601), so the floor wins.
     store.complete(&head.id, 1000).expect("complete head");
     let schedule = store.schedule(600, 1002).expect("schedule");
     assert_eq!(schedule.len(), 1);

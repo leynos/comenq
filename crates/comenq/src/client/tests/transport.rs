@@ -258,12 +258,17 @@ async fn transaction_times_out_when_the_daemon_keeps_the_reply_open() {
         std::future::pending::<()>().await;
     });
 
-    let err = transact_with_timeout(&[socket], &Request::List, Duration::from_millis(10))
-        .await
-        .expect_err("open reply must time out");
-    assert!(matches!(err, ClientError::ReplyTimeout));
-    request_received.notified().await;
+    let result = transact_with_timeout(&[socket], &Request::List, Duration::from_millis(10)).await;
+    let notification_received =
+        tokio::time::timeout(Duration::from_secs(1), request_received.notified()).await;
     peer.abort();
+
+    let err = result.expect_err("open reply must time out");
+    assert!(matches!(err, ClientError::ReplyTimeout));
+    assert!(
+        notification_received.is_ok(),
+        "peer should read the request"
+    );
 }
 
 #[tokio::test]
