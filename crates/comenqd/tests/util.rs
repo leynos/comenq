@@ -4,20 +4,31 @@ use rstest::rstest;
 use std::time::Duration;
 use tokio::task::JoinError;
 
+/// Shortest timeout, in seconds, any test is given.
 pub const MIN_TIMEOUT_SECS: u64 = 10;
+/// Longest timeout, in seconds, any test is given.
 pub const MAX_TIMEOUT_SECS: u64 = 600;
+/// Factor applied to a timeout in debug builds.
 pub const DEBUG_MULTIPLIER: u64 = 2;
+/// Factor applied to a timeout when running under coverage instrumentation.
 pub const COVERAGE_MULTIPLIER: u64 = 5;
+/// Factor applied to a timeout on CI runners.
 pub const CI_MULTIPLIER: u64 = 2;
+/// Percentages of the computed timeout used for successive retries.
 pub const PROGRESSIVE_RETRY_PERCENTS: [u64; 3] = [50, 100, 150];
 
+/// How much work a test does, which scales its base timeout.
 #[derive(Debug, Clone)]
 pub enum TestComplexity {
+    /// Base timeout.
     Simple,
+    /// Twice the base timeout.
     Moderate,
+    /// Three times the base timeout.
     Complex,
 }
 
+/// Inputs to the adaptive timeout calculation.
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
     base_seconds: u64,
@@ -29,6 +40,7 @@ pub struct TimeoutConfig {
 }
 
 impl TimeoutConfig {
+    /// Create a configuration with a base timeout and a complexity class.
     pub const fn new(base_seconds: u64, complexity: TestComplexity) -> Self {
         Self {
             base_seconds,
@@ -52,6 +64,8 @@ impl TimeoutConfig {
         self
     }
 
+    /// Compute the timeout after the complexity, build, coverage and CI factors,
+    /// clamped to the minimum and maximum.
     pub fn calculate_timeout(&self) -> Duration {
         let mut timeout = self.base_seconds;
         timeout = timeout.saturating_mul(match self.complexity {
@@ -78,6 +92,8 @@ impl TimeoutConfig {
         Duration::from_secs(timeout)
     }
 
+    /// Return the timeouts for successive attempts, as percentages of the computed
+    /// timeout.
     pub fn with_progressive_retry(&self) -> Vec<Duration> {
         let base = self.calculate_timeout().as_secs();
         PROGRESSIVE_RETRY_PERCENTS
@@ -87,6 +103,14 @@ impl TimeoutConfig {
     }
 }
 
+/// Run `operation` under each retry timeout in turn.
+///
+/// An attempt that completes returns at once, with its result or its error; an
+/// attempt that times out is retried under the next, longer timeout.
+///
+/// # Errors
+/// Returns the operation's own error, or a message naming `operation_name` when
+/// every attempt times out.
 pub async fn timeout_with_retries<F, Fut, T>(
     config: TimeoutConfig,
     operation_name: &str,

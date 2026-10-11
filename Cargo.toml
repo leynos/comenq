@@ -43,6 +43,11 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.rust]
+# Inherited by the member crates; the root package repeats it in its own table,
+# because a package cannot combine `lints.workspace` with its own lint tables.
+missing_docs = "deny"
+
 [workspace.dependencies]
 tokio = { version = "1.35", features = ["full"] }
 clap = { version = "4.4", features = ["derive", "env"] }
@@ -69,6 +74,9 @@ uuid = { version = "1", features = ["v4"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 metrics-util = "0.20"
+
+[lints.rust]
+missing_docs = "deny"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

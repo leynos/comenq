@@ -167,6 +167,11 @@ pub async fn run_listener(
     Ok(())
 }
 
+/// Largest request body, in bytes, that the listener accepts from one client.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
+/// Seconds a client has to send its request before the listener gives up on it.
+pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
+
 /// Read a single request from `stream` and forward it to the queue.
 ///
 /// Expects the client to send a JSON encoded [`CommentRequest`] and then close
@@ -176,9 +181,6 @@ pub async fn run_listener(
 /// # Errors
 /// Fails if reading from the socket or parsing JSON fails, or if the queue
 /// writer has shut down.
-pub const MAX_REQUEST_BYTES: usize = 1024 * 1024; // 1 MiB
-pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
-
 #[tracing::instrument(skip(stream, tx), fields(task = "listener", outcome = tracing::field::Empty))]
 pub async fn handle_client(stream: UnixStream, tx: mpsc::Sender<Vec<u8>>) -> Result<()> {
     let result = handle_client_inner(stream, tx).await;
