@@ -252,16 +252,18 @@ async fn failed_post_retries_after_a_full_cooldown() {
         .await
         .expect("worker task should not panic")
         .expect("worker should exit cleanly");
-    let requests = server.received_requests().await.expect("read requests");
-    assert_eq!(requests.len(), 2, "worker should retry exactly once");
+    assert_retry_respects_cooldown(&post_times, cooldown);
+}
+
+fn assert_retry_respects_cooldown(post_times: &Mutex<Vec<Instant>>, cooldown: Duration) {
     let post_times = post_times
         .lock()
         .expect("POST time lock should not be poisoned");
     assert_eq!(post_times.len(), 2, "mock should record both POST attempts");
+    let retry_delay = post_times[1].duration_since(post_times[0]);
     assert!(
-        post_times[1].duration_since(post_times[0]) >= cooldown,
-        "retry must wait at least {cooldown:?}, but elapsed {:?}",
-        post_times[1].duration_since(post_times[0]),
+        retry_delay >= cooldown,
+        "retry must wait at least {cooldown:?}, but elapsed {retry_delay:?}",
     );
 }
 
