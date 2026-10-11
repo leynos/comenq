@@ -221,3 +221,28 @@ drift checked in continuous integration.
 The shared `typos-config-builder` CLI refreshes the estate dictionary into an
 untracked local cache only when the authoritative copy is newer. A valid cache
 remains usable when the network is unavailable.
+
+## CodeScene coverage and the CV-005 contract
+
+Main owns coverage publication (estate rule CV-005). A pull request measures
+coverage for its own ratchet check only, in the `build-test` job of `ci.yml`
+(`with-ratchet: 'true'`, `publish-artefact: 'false'`); it never contacts
+CodeScene. `.github/workflows/coverage-main.yml` runs on every push to `main`
+in the `codescene` environment, generates coverage again and uploads it with
+`mode: upload`, guarded on `github.ref == 'refs/heads/main'` alone. The token
+reaches the uploader only through its `access-token` input, never an `env`.
+When the repository has no `CS_ACCESS_TOKEN` (no CodeScene project yet) the
+uploader records a `CodeScene upload skipped` notice and a step-summary line
+and the run still succeeds.
+
+`make test-workflow-contracts` checks that shape. It runs the shared
+`cv005-contracts check --repository .` from the commit named by
+`CV005_CONTRACTS_REF` in the `Makefile` (a bump of that pin is a reviewed
+change, never a silent upgrade), then the local wiring tests in
+`tests/workflow_contracts`. It needs `uv`, Python 3.13 for the checker, and
+`pytest` and `pyyaml`, which `uv run --with` supplies. Both runs go through
+`UV` and `UV_ENV`, so a `uv` outside `PATH` can be injected. `make all` and CI
+run the target; `.github/cv005.toml` holds the repository name and nothing
+else. A Dependabot pull request merged by the automerge workflow fires no push
+event, so that merge publishes nothing until the next push to `main`
+(shared-actions #518 tracks the fix).
