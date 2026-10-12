@@ -35,20 +35,13 @@ impl SharedQueue {
     /// # }
     /// ```
     pub async fn record_failure(&self, entry: &StoredEntry, error: &str) -> StoreResult<()> {
-        self.append_history(HistoryRecord::failure(
-            entry,
-            self.clock.unix_now(),
-            error,
-        ))
-        .await
+        self.append_history(HistoryRecord::failure(entry, self.clock.unix_now(), error))
+            .await
     }
 
     /// Return attempts in chronological order, retaining only the newest
     /// `limit` records when a limit is supplied.
-    pub(crate) async fn history(
-        &self,
-        limit: Option<usize>,
-    ) -> StoreResult<Vec<HistoryRecord>> {
+    pub(crate) async fn history(&self, limit: Option<usize>) -> StoreResult<Vec<HistoryRecord>> {
         self.with_store("history", move |store| {
             let records = store.history()?;
             let skip = limit.map_or(0, |count| records.len().saturating_sub(count));

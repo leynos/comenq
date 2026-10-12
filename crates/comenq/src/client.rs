@@ -16,7 +16,7 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
-use crate::output::{render_entry, render_history, render_put};
+use crate::output::{render_entry, render_history as render_history_line, render_put};
 use crate::{Args, Command};
 
 /// Maximum time to wait for a complete daemon reply.
@@ -204,15 +204,7 @@ fn render_response<W: Write>(
             let _ = write_line(writer, &render_put(&entry))?;
         }
         (Command::List, None, Some(entries), None) => {
-            if entries.is_empty() {
-                let _ = write_line(writer, "No comments queued.")?;
-            } else {
-                for entry in entries {
-                    if !write_line(writer, &render_entry(&entry))? {
-                        break;
-                    }
-                }
-            }
+            render_list_reply(entries, writer)?;
         }
         (Command::Bump { id }, None, None, None) => {
             let _ = write_line(writer, &format!("Moved {id} to the head of the queue."))?;
@@ -224,20 +216,46 @@ fn render_response<W: Write>(
             let _ = write_line(writer, &format!("Removed {id} from the queue."))?;
         }
         (Command::Hist { .. }, None, None, Some(history)) => {
-            if history.is_empty() {
-                let _ = write_line(writer, "No posting history recorded.")?;
-            } else {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |duration| duration.as_secs());
-                for record in &history {
-                    if !write_line(writer, &render_history(record, now))? {
-                        break;
-                    }
-                }
-            }
+            render_history_reply(&history, writer)?;
         }
         _ => return Err(ClientError::UnexpectedResponse),
+    }
+    Ok(())
+}
+
+/// Render the pending entries returned by `list`.
+fn render_list_reply<W: Write>(
+    entries: Vec<comenq_lib::protocol::PendingEntry>,
+    writer: &mut W,
+) -> Result<(), ClientError> {
+    if entries.is_empty() {
+        let _ = write_line(writer, "No comments queued.")?;
+    } else {
+        for entry in entries {
+            if !write_line(writer, &render_entry(&entry))? {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Render the posting attempts returned by `hist`.
+fn render_history_reply<W: Write>(
+    history: &[comenq_lib::protocol::HistoryEntry],
+    writer: &mut W,
+) -> Result<(), ClientError> {
+    if history.is_empty() {
+        let _ = write_line(writer, "No posting history recorded.")?;
+    } else {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+        for record in history {
+            if !write_line(writer, &render_history_line(record, now))? {
+                break;
+            }
+        }
     }
     Ok(())
 }

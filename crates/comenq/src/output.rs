@@ -180,7 +180,9 @@ pub(crate) fn render_entry(entry: &PendingEntry) -> String {
 #[cfg(test)]
 mod tests {
     //! Unit tests for ETA, age, and summary rendering.
-    use super::{format_age, format_eta, one_line_summary, render_entry, render_history, render_put};
+    use super::{
+        format_age, format_eta, one_line_summary, render_entry, render_history, render_put,
+    };
     use comenq_lib::protocol::{HistoryEntry, PendingEntry};
     use rstest::rstest;
 

@@ -45,8 +45,8 @@ fn history_skips_malformed_lines() {
         .append_history(&HistoryRecord::success(&entry, 1_600))
         .expect("append success");
     let log = dir.path().join("history.jsonl");
-    let mut text = fs::read_to_string(&log).expect("read log");
-    text.push_str("not json\ninvalid\xFFjson\n");
+    let mut text = fs::read(&log).expect("read log");
+    text.extend_from_slice(b"not json\ninvalid\xFFjson\n");
     fs::write(&log, text).expect("corrupt log");
     store
         .append_history(&HistoryRecord::failure(&entry, 2_200, "timeout"))

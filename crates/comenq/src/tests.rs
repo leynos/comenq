@@ -65,10 +65,7 @@ fn parses_queue_management_subcommands(#[case] argv: &[&str]) {
 #[case::short(&["comenq", "hist", "-n", "5"], Some(5))]
 fn parses_hist_subcommand(#[case] argv: &[&str], #[case] expected: Option<usize>) {
     let args = Args::try_parse_from(argv).expect("valid arguments should parse");
-    assert_eq!(
-        args.command.to_request(),
-        Request::Hist { limit: expected }
-    );
+    assert_eq!(args.command.to_request(), Request::Hist { limit: expected });
     let Command::Hist { limit } = args.command else {
         panic!("expected hist command");
     };

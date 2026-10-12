@@ -89,7 +89,12 @@ fn renders_non_empty_list_output_exactly() {
     second.id = "deadbeef".into();
     second.eta_seconds = 90;
     second.body = "Later".into();
-    let output = render_to_string(&Command::List, None, Some(vec![sample_entry(), second]), None);
+    let output = render_to_string(
+        &Command::List,
+        None,
+        Some(vec![sample_entry(), second]),
+        None,
+    );
     assert_eq!(
         output,
         concat!(
@@ -107,12 +112,7 @@ fn renders_empty_list_output_exactly() {
 
 #[test]
 fn renders_empty_history_output_exactly() {
-    let output = render_to_string(
-        &Command::Hist { limit: None },
-        None,
-        None,
-        Some(vec![]),
-    );
+    let output = render_to_string(&Command::Hist { limit: None }, None, None, Some(vec![]));
     assert_eq!(output, "No posting history recorded.\n");
 }
 
