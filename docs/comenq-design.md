@@ -809,19 +809,20 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | github_api_timeout_secs  | u64            | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
 | restart_min_delay_ms     | u64            | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
-Configuration is loaded using the `ortho_config` crate. The daemon calls
-`Config::load()` which merges values from `/etc/comenqd/config.toml`,
-`COMENQD_*` environment variables, and any supplied CLI arguments. CLI
-arguments have the highest precedence, followed by environment variables, and
-finally the configuration file. Missing optional fields are replaced with
-defaults. Configuration fails unless it can resolve either a non-empty
-`github_token_files` pool or a usable single token. A non-empty
-`github_token_files` pool takes precedence over the single-token settings;
-every listed file is checked at startup. Otherwise, `github_token_file` is read
-at startup and its trimmed contents take precedence over the configured token
-unless `--github-token` is supplied. The resolved pool is carried to client
-construction rather than read a second time. Invalid TOML also results in a
-configuration error.
+Configuration is loaded using the `ortho_config` crate. The daemon binary calls
+`Config::load_with_tokens()`, which merges values from
+`/etc/comenqd/config.toml`, `COMENQD_*` environment variables, and any supplied
+CLI arguments. CLI arguments have the highest precedence, followed by
+environment variables, and finally the configuration file. Missing optional
+fields are replaced with defaults. Configuration fails unless it can resolve
+either a non-empty `github_token_files` pool or a usable single token. A
+non-empty `github_token_files` pool takes precedence over the single-token
+settings; every listed file is checked at startup. Otherwise,
+`github_token_file` is read at startup and its trimmed contents take precedence
+over the configured token unless `--github-token` is supplied. Invalid TOML
+also results in a configuration error. The daemon binary passes the owned,
+resolved token pool to `daemon::run_with_tokens()` for client construction, so
+it does not read the token files again during startup.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background
@@ -1258,11 +1259,12 @@ sequenceDiagram
             Worker->>Worker: sleep(wait_seconds)
         else Head due now
             Worker->>WorkerHooks: (optional) enqueued.notify_one()
-            Worker->>Worker: post to GitHub
+            Worker->>Worker: select token client and post to GitHub
             alt Success
-                Worker->>Queue: complete(id)
+                Worker->>Queue: complete(claimed_entry, selected_token_hash)
                 Worker->>WorkerHooks: (optional) idle.notify_one()
             else Failure
+                Worker->>Queue: record_failure(claimed_entry, selected_token_hash, error)
                 Worker->>WorkerHooks: (optional) idle.notify_one()
                 Worker->>WatchChannel: shutdown.changed() (watch signal)
                 Worker->>Queue: queue.changed() (Notify signal)

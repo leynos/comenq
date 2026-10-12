@@ -72,25 +72,27 @@ retry deadline. `bump` and `bust` may reorder a claimed entry without changing
 its claim, while `del` removes it. Completion checks the claim token so a
 successful post cannot delete a replacement entry.
 
-`SharedQueue::complete()` records the successful attempt and posting timestamp
-before removing the entry. Its durable recovery record contains the history
-payload and log offset as well as the entry identifier, claim token and posting
-time; reconciliation idempotently appends the history record, finishes the
-deletion and `last_post` update, then clears that record. Startup performs this
-recovery before reclaiming claims left by an interrupted worker. Failed
-attempts are recorded in `last_attempt`, and scheduling uses the later of the
-successful-post and failed-attempt timestamps as its cooldown anchor. Failure
-history writes are logged but do not interrupt claim release or retry pacing.
-Other queue-store failures become daemon error responses.
+`SharedQueue::complete(entry, token_hash)` records the successful attempt,
+selected token hash, and posting timestamp before removing the claimed entry.
+Its durable recovery record contains the history payload and log offset as well
+as the entry identifier, claim token and posting time; reconciliation
+idempotently appends the history record, finishes the deletion and `last_post`
+update, then clears that record. Startup performs this recovery before
+reclaiming claims left by an interrupted worker. Failed attempts are recorded
+with `SharedQueue::record_failure(entry, token_hash, error)`; scheduling uses
+the later of the successful-post and failed-attempt timestamps as its cooldown
+anchor. Failure history writes are logged but do not interrupt claim release or
+retry pacing. Other queue-store failures become daemon error responses.
 
 The worker receives an ordered pool of `TokenClient` values. Before each post,
 it reads the latest history record's `token_hash` and selects the next matching
 pool entry, wrapping at the end. Empty, unreadable, or unrecognized history
-selects the first client. `TokenClient` keeps the token's file name for logs,
-its SHA-256 hash for history, and the authenticated `Octocrab` client together;
-the worker never reads credential paths or environment variables. The public
-`token_hash()` helper uses lowercase hexadecimal SHA-256 so rotation state
-survives token-file renames without writing credentials to history.
+selects the first client. `run_worker` requires a non-empty `Vec<TokenClient>`.
+`TokenClient` keeps the token's file name for logs, its SHA-256 hash for
+history, and the authenticated `Octocrab` client together; the worker never
+reads credential paths or environment variables. The public `token_hash()`
+helper uses lowercase hexadecimal SHA-256 so rotation state survives token-file
+renames without writing credentials to history.
 
 The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
@@ -105,15 +107,22 @@ document.
 
 ### Configuration API
 
-`comenqd::config::Config` is the public runtime configuration model. The
-`Config::load()` entry point reads the daemon's `--config` file, merges
-`COMENQD_*` environment variables, applies supported CLI overrides, and
-validates the effective credential source. The daemon binary uses
-`Config::load_with_tokens()` to resolve the ordered token values once, then
-passes them to `daemon::run_with_tokens()` for client construction. This keeps
-the files validated during loading identical to the credentials used by the
-worker. `Config::load()` and `daemon::run()` remain available for callers that
-compose those steps themselves.
+`comenqd::config::Config` is the public runtime configuration model. The daemon
+binary uses `Config::load_with_tokens()` to read the daemon's `--config` file,
+merge `COMENQD_*` environment variables, apply supported CLI overrides, and
+return both the `Config` and its resolved ordered token pool. Production
+startup passes that owned pool to `daemon::run_with_tokens()` for client
+construction, keeping the files validated during loading identical to the
+credentials used by the worker. `Config::load()` and `daemon::run()` remain
+compatibility entry points for callers that compose those steps themselves;
+`Config::load()` returns only the configuration, and `daemon::run()` resolves
+its tokens when called.
+
+`Config::github_tokens()` is a fallible resolver, not an accessor for a cached
+pool. Each call reads and validates the configured token files again. The
+`NamedToken` values returned by the resolver own both the token string and its
+non-secret name: the token file's name, or `default` for a single inline token.
+Filesystem and environment reads remain within the configuration adapter.
 
 `github_token_files` is an ordered list of file paths, and takes precedence over
 `github_token_file` and `github_token`. Each file is expanded for a leading
