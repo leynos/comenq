@@ -15,6 +15,7 @@ use comenq_lib::protocol::{HistoryEntry, PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
     SharedQueue, TokenClient, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+    token_hash,
 };
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
@@ -286,8 +287,17 @@ async fn history_records_failure(world: &mut WorkerWorld) -> anyhow::Result<()> 
         !history.is_empty(),
         "a failed attempt should be recorded in the history"
     );
+    let expected_token = world
+        .tokens
+        .first()
+        .map_or("t", |(_, token)| token.as_str());
+    let expected_hash = token_hash(expected_token);
     for record in &history {
         assert!(!record.success, "every record should mark a failure");
+        assert_eq!(
+            record.token_hash, expected_hash,
+            "the failed attempt should record the selected token hash"
+        );
         let error = record
             .error
             .as_deref()

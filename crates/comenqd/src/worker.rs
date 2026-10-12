@@ -303,7 +303,10 @@ pub async fn run_worker(
                 None
             }
         };
-        let index = next_token_index(&clients, last_hash.as_deref());
+        let index = next_token_index(
+            clients.iter().map(|client| client.hash.as_str()),
+            last_hash.as_deref(),
+        );
         let client = clients.get(index).context("token index in range")?;
         match post_comment_with_metrics(&client.octocrab, &entry.request, &config).await {
             Ok(()) => {

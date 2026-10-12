@@ -64,8 +64,15 @@ impl TokenClient {
 ///
 /// Empty history and hashes that no longer match the configured pool start
 /// with the first token.
-pub(super) fn next_token_index(clients: &[TokenClient], last_hash: Option<&str>) -> usize {
+pub(super) fn next_token_index<'a>(
+    mut token_hashes: impl ExactSizeIterator<Item = &'a str>,
+    last_hash: Option<&str>,
+) -> usize {
+    let pool_size = token_hashes.len();
+    if pool_size == 0 {
+        return 0;
+    }
     last_hash
-        .and_then(|hash| clients.iter().position(|client| client.hash == hash))
-        .map_or(0, |index| index.saturating_add(1) % clients.len().max(1))
+        .and_then(|hash| token_hashes.position(|token_hash| token_hash == hash))
+        .map_or(0, |index| (index + 1) % pool_size)
 }

@@ -3,7 +3,7 @@
 //! Coordinates the listener and worker tasks, applying exponential backoff on
 //! failure and handling graceful shutdown.
 
-use crate::config::Config;
+use crate::config::{Config, NamedToken};
 use backon::{ExponentialBackoff, ExponentialBuilder};
 use std::path::Path;
 use std::sync::Arc;
@@ -158,10 +158,34 @@ async fn supervise_task<F>(
 
 /// Start the daemon with the provided configuration.
 pub async fn run(config: Config) -> Result<()> {
+    let tokens = config.github_tokens()?;
+    run_with_tokens(config, tokens).await
+}
+
+/// Start the daemon with its already-resolved GitHub token pool.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use comenqd::{config::Config, daemon};
+///
+/// # async fn start() -> Result<(), Box<dyn std::error::Error>> {
+/// let (config, tokens) = Config::load_with_tokens()?;
+/// daemon::run_with_tokens(config, tokens).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn run_with_tokens(config: Config, tokens: Vec<NamedToken>) -> Result<()> {
+    if tokens.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "GitHub token pool is empty",
+        )
+        .into());
+    }
     ensure_queue_dir(&config.queue_path).await?;
     tracing::info!(queue = %config.queue_path.display(), "Queue directory prepared");
-    let clients = config
-        .github_tokens()?
+    let clients = tokens
         .into_iter()
         .map(|named| {
             let octocrab = Arc::new(build_octocrab(&named.token)?);

@@ -10,6 +10,8 @@ pub use crate::supervisor::SupervisorError as DaemonError;
 pub use crate::supervisor::ensure_queue_dir;
 /// Run the daemon orchestration loop.
 pub use crate::supervisor::run;
+/// Run the daemon using a token pool resolved during configuration loading.
+pub use crate::supervisor::run_with_tokens;
 
 /// Shared queue state used by the listener and worker.
 pub use crate::queue::SharedQueue;

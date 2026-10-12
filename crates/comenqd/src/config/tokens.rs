@@ -3,11 +3,12 @@
 //! Reads the configured token files into named tokens; the worker rotates
 //! through the pool round-robin when posting comments.
 
-use std::io::{self, Read as _};
-use std::path::{Path, PathBuf};
-
-/// Keep token-file reads bounded, matching the single-token credential path.
-const MAX_TOKEN_FILE_BYTES: usize = 64 * 1024;
+use super::single_token::{
+    MAX_GITHUB_TOKEN_FILE_BYTES, TokenFileReadError, TokenPathError, expand_token_path,
+    read_token_file,
+};
+use std::io;
+use std::path::PathBuf;
 
 /// A GitHub token paired with the name of the file it was read from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,8 +34,9 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
     files
         .iter()
         .map(|configured_path| {
-            let file = expand_env_prefix(configured_path)?;
-            let token = read_token_file(&file)?;
+            let file = expand_token_path(configured_path).map_err(token_path_io_error)?;
+            let token =
+                read_token_file(&file).map_err(|error| token_file_io_error(&file, error))?;
             let token = token.trim();
             if token.is_empty() {
                 return Err(io::Error::new(
@@ -55,50 +57,31 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
         .collect()
 }
 
-fn read_token_file(path: &Path) -> io::Result<String> {
-    let mut contents = String::with_capacity(MAX_TOKEN_FILE_BYTES);
-    std::fs::File::open(path)
-        .and_then(|file| {
-            file.take((MAX_TOKEN_FILE_BYTES + 1) as u64)
-                .read_to_string(&mut contents)
-                .map(|_| ())
-        })
-        .map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("token file {}: {error}", path.display()),
-            )
-        })?;
-    if contents.len() > MAX_TOKEN_FILE_BYTES {
-        return Err(io::Error::new(
+fn token_file_io_error(path: &std::path::Path, error: TokenFileReadError) -> io::Error {
+    match error {
+        TokenFileReadError::Io(error) => io::Error::new(
+            error.kind(),
+            format!("token file {}: {error}", path.display()),
+        ),
+        TokenFileReadError::TooLarge => io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "token file {} exceeds {MAX_TOKEN_FILE_BYTES} bytes",
+                "token file {} exceeds {MAX_GITHUB_TOKEN_FILE_BYTES} bytes",
                 path.display()
             ),
-        ));
+        ),
     }
-    Ok(contents)
 }
 
-fn expand_env_prefix(path: &Path) -> io::Result<PathBuf> {
-    let Some(text) = path.to_str() else {
-        return Ok(path.to_path_buf());
-    };
-    let Some(rest) = text.strip_prefix("${") else {
-        return Ok(path.to_path_buf());
-    };
-    let Some((variable, tail)) = rest.split_once('}') else {
-        return Err(io::Error::new(
+fn token_path_io_error(error: TokenPathError) -> io::Error {
+    match error {
+        TokenPathError::Malformed(text) => io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("unterminated environment placeholder in '{text}'"),
-        ));
-    };
-    let value = std::env::var(variable).map_err(|_| {
-        io::Error::new(
+        ),
+        TokenPathError::Unset(variable) => io::Error::new(
             io::ErrorKind::NotFound,
             format!("environment variable '{variable}' is not set"),
-        )
-    })?;
-    Ok(PathBuf::from(format!("{value}{tail}")))
+        ),
+    }
 }

@@ -233,6 +233,12 @@ mod tests {
                 std::time::Duration::from_millis(47),
             );
             record_queue_store_duration(
+                "latest_history_token",
+                "success",
+                None,
+                std::time::Duration::from_millis(48),
+            );
+            record_queue_store_duration(
                 "raw-store-operation",
                 "unexpected-outcome",
                 Some("/private/path"),
@@ -302,6 +308,15 @@ mod tests {
                 ("operation", "append_history"),
                 ("outcome", "failure"),
                 ("error_kind", "io_error"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "latest_history_token"),
+                ("outcome", "success"),
+                ("error_kind", "none"),
             ],
         );
         assert_histogram_labels(

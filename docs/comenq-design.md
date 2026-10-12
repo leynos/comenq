@@ -627,7 +627,10 @@ tokens, the worker reads the most recent history record and uses the successor
 of its token hash in configured order, wrapping to the first token after the
 last. Empty history or an unrecognized hash starts with the first token. With a
 single token from `github_token`, `github_token_file`, or a one-element
-`github_token_files`, the same selection rule always chooses that token.
+`github_token_files`, the same selection rule always chooses that token. The
+selection function accepts only token hashes, not API clients, so the rotation
+policy remains independent of Octocrab. If history cannot be read, the worker
+logs the failure and attempts the first configured token.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -700,8 +703,11 @@ ensuring that comments are processed one by one with the required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
-The `octocrab` client will be initialized once at daemon startup, using a
-Personal Access Token (PAT) securely loaded from the configuration file.
+The daemon builds one `octocrab` client for each token in the configured pool.
+It resolves and validates the pool during configuration loading, then carries
+the owned token values through startup so client construction does not reopen
+the files. A single inline or file-based Personal Access Token (PAT) remains a
+one-client pool.
 
 A critical detail for a successful implementation is using the correct GitHub
 API endpoint. While one might intuitively look for a "create comment" method
@@ -803,13 +809,14 @@ Configuration is loaded using the `ortho_config` crate. The daemon calls
 `COMENQD_*` environment variables, and any supplied CLI arguments. CLI
 arguments have the highest precedence, followed by environment variables, and
 finally the configuration file. Missing optional fields are replaced with
-defaults. Configuration fails if neither a non-empty `github_token` nor a
-readable, non-empty token file is available. A non-empty `github_token_files`
-pool takes precedence over the single-token settings; every listed file is
-checked at startup. Otherwise, `github_token_file` is read at startup and its
-trimmed contents take precedence over the configured token unless
-`--github-token` is supplied. Invalid TOML also results in a configuration
-error.
+defaults. Configuration fails unless it can resolve either a non-empty
+`github_token_files` pool or a usable single token. A non-empty
+`github_token_files` pool takes precedence over the single-token settings;
+every listed file is checked at startup. Otherwise, `github_token_file` is read
+at startup and its trimmed contents take precedence over the configured token
+unless `--github-token` is supplied. The resolved pool is carried to client
+construction rather than read a second time. Invalid TOML also results in a
+configuration error.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background

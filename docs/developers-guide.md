@@ -83,6 +83,15 @@ successful-post and failed-attempt timestamps as its cooldown anchor. Failure
 history writes are logged but do not interrupt claim release or retry pacing.
 Other queue-store failures become daemon error responses.
 
+The worker receives an ordered pool of `TokenClient` values. Before each post,
+it reads the latest history record's `token_hash` and selects the next matching
+pool entry, wrapping at the end. Empty, unreadable, or unrecognized history
+selects the first client. `TokenClient` keeps the token's file name for logs,
+its SHA-256 hash for history, and the authenticated `Octocrab` client together;
+the worker never reads credential paths or environment variables. The public
+`token_hash()` helper uses lowercase hexadecimal SHA-256 so rotation state
+survives token-file renames without writing credentials to history.
+
 The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
 queue rejects `put` before persisting a new entry.
@@ -99,9 +108,19 @@ document.
 `comenqd::config::Config` is the public runtime configuration model. The
 `Config::load()` entry point reads the daemon's `--config` file, merges
 `COMENQD_*` environment variables, applies supported CLI overrides, and
-resolves the effective GitHub credential. Its public fields cover the token
-sources, socket and queue paths, cooldown and flutter, restart delay, and
-GitHub API timeout.
+validates the effective credential source. The daemon binary uses
+`Config::load_with_tokens()` to resolve the ordered token values once, then
+passes them to `daemon::run_with_tokens()` for client construction. This keeps
+the files validated during loading identical to the credentials used by the
+worker. `Config::load()` and `daemon::run()` remain available for callers that
+compose those steps themselves.
+
+`github_token_files` is an ordered list of file paths, and takes precedence over
+`github_token_file` and `github_token`. Each file is expanded for a leading
+`${VAR}`, read as UTF-8 with a 64 KiB limit, trimmed, and rejected if empty. An
+explicit CLI `--github-token` overrides every source; otherwise
+`--github-token-file` clears the configured pool and selects one file. The
+single-token settings resolve to a one-element pool when no list is configured.
 
 Tests and integrations built with the `test-support` feature can use
 `Config::from_file(path)` to load a particular file while retaining the
@@ -116,7 +135,9 @@ The post span contains only `task="worker"` and an `outcome` of `success`,
 `api_error`, or `timeout`; spans exclude credentials, payloads, repository
 names, paths, request identifiers, and raw errors. Operators and developers can
 select the emitted detail through `RUST_LOG`. The credential reader rejects
-files larger than 64 KiB before trimming their contents.
+files larger than 64 KiB before trimming their contents. History rendering
+shows the first eight token-hash characters; legacy records without a hash use
+the `--------` marker.
 
 The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`.
 The stable metric vocabulary is:
@@ -133,10 +154,10 @@ The stable metric vocabulary is:
   `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
-  `del`, `hist`, `history`, `append_history`, `next_due`, `claim`, `complete`,
-  `release`, `recover`, `metrics`, and `unknown`; `outcome` is `success`,
-  `failure`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `del`, `hist`, `history`, `append_history`, `latest_history_token`,
+  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
+  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
+  fixed classifications and is `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.

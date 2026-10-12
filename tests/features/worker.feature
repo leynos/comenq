@@ -23,6 +23,15 @@ Feature: Worker task
     Then the comment is posted
     And the newest history record uses the first token
 
+  Scenario: rotation selects the successor of the recorded first token
+    Given a queued comment request
+    And two GitHub tokens are configured
+    And the history already records a post with the first token
+    And GitHub returns success
+    When the worker runs briefly
+    Then the comment is posted
+    And the newest history record uses the second token
+
   Scenario: API failure requeues job
     Given a queued comment request
     And GitHub returns an error

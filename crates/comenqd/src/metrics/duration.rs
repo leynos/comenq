@@ -64,8 +64,17 @@ fn protocol_operation_label(operation: Option<&'static str>) -> &'static str {
 /// example, `claim_next_due` is recorded as `claim`.
 fn queue_store_operation_label(operation: &'static str) -> &'static str {
     match operation {
-        "put" | "list" | "bump" | "bust" | "del" | "hist" | "history" | "append_history"
-        | "next_due" | "complete" => operation,
+        "put"
+        | "list"
+        | "bump"
+        | "bust"
+        | "del"
+        | "hist"
+        | "history"
+        | "append_history"
+        | "latest_history_token"
+        | "next_due"
+        | "complete" => operation,
         "claim_next_due" => "claim",
         "release_claim" => "release",
         "recover_worker_state" => "recover",

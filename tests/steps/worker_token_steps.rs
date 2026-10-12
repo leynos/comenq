@@ -27,15 +27,26 @@ fn two_tokens_configured(world: &mut WorkerWorld) {
 
 #[given("the history already records a post with the second token")]
 fn history_seeded_with_second_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    seed_history_with_token(world, 1)
+}
+
+#[given("the history already records a post with the first token")]
+fn history_seeded_with_first_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    seed_history_with_token(world, 0)
+}
+
+fn seed_history_with_token(world: &WorkerWorld, token_index: usize) -> anyhow::Result<()> {
     let queue = world.queue.as_ref().context("queue initialized")?;
-    let (_, second_value) = ROTATION_TOKENS.get(1).context("second rotation token")?;
+    let (_, token_value) = ROTATION_TOKENS
+        .get(token_index)
+        .context("rotation token index")?;
     let record = serde_json::json!({
         "attempt_id": "seeded-attempt",
         "id": "deadbeef",
         "posted_at": 1,
         "success": true,
         "error": null,
-        "token_hash": token_hash(second_value),
+        "token_hash": token_hash(token_value),
         "request": {
             "owner": "o",
             "repo": "r",
@@ -106,6 +117,41 @@ async fn newest_record_uses_first_token(world: &mut WorkerWorld) -> anyhow::Resu
         newest.token_hash,
         token_hash(first_value),
         "rotation should wrap from the second token back to the first"
+    );
+    Ok(())
+}
+
+#[then("the newest history record uses the second token")]
+async fn newest_record_uses_second_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    let newest = history.last().context("history should hold records")?;
+    let (_, second_value) = ROTATION_TOKENS.get(1).context("second rotation token")?;
+    assert_eq!(
+        newest.token_hash,
+        token_hash(second_value),
+        "rotation should select the successor of the first token"
+    );
+    let server = world
+        .server
+        .as_ref()
+        .context("server should be initialized")?;
+    let requests = server
+        .received_requests()
+        .await
+        .context("inbound requests should be recorded")?;
+    assert_eq!(requests.len(), 1, "one post should reach GitHub");
+    let authorization = requests
+        .first()
+        .context("GitHub request should be recorded")?
+        .headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .context("GitHub request should carry Authorization")?;
+    assert_eq!(
+        authorization,
+        format!("Bearer {second_value}"),
+        "the request should use the token selected from history"
     );
     Ok(())
 }
