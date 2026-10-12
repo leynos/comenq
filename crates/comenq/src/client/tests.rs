@@ -131,9 +131,9 @@ fn renders_success_and_failure_history_lines() {
     );
     let lines: Vec<&str> = output.lines().collect();
     assert_eq!(lines.len(), 2);
-    assert!(lines[0].contains("ok    octocat/hello-world#1  Hi"));
+    assert!(lines[0].contains("ok    01234567  octocat/hello-world#1  Hi"));
     assert!(lines[0].contains("1m 40s ago"));
-    assert!(lines[1].contains("FAIL  octocat/hello-world#1  Hi"));
+    assert!(lines[1].contains("FAIL  01234567  octocat/hello-world#1  Hi"));
     assert!(lines[1].ends_with("— timeout after 10s"));
 }
 

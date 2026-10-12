@@ -80,8 +80,8 @@ of the unit file and process environment.
 
 ### Rotating multiple GitHub tokens
 
-To rotate posts across several personal access tokens, set
-`github_token_files` instead of `github_token` or `github_token_file`:
+To rotate posts across several personal access tokens, set `github_token_files`
+instead of `github_token` or `github_token_file`:
 
 ```toml
 github_token_files = ["/home/user/pandalump-token", "/home/user/buzzybee-token"]

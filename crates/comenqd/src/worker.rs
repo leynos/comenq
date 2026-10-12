@@ -8,7 +8,7 @@
 use crate::config::Config;
 use crate::metrics;
 use crate::queue::SharedQueue;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
 use std::sync::Arc;
@@ -16,6 +16,11 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
+
+mod tokens;
+pub(crate) use tokens::build_octocrab;
+use tokens::next_token_index;
+pub use tokens::{TokenClient, token_hash};
 
 const RETRY_OVERFLOW_FALLBACK: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
 
@@ -28,71 +33,6 @@ enum PostCommentError {
     /// The request timed out.
     #[error("timeout")]
     Timeout,
-}
-
-/// Constructs an authenticated Octocrab GitHub client using a personal access token.
-#[expect(clippy::result_large_err, reason = "propagate Octocrab errors")]
-pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
-    Octocrab::builder()
-        .personal_token(token.to_string())
-        .build()
-}
-
-/// Hex-encoded SHA-256 hash of a token value.
-///
-/// History records identify tokens by this hash rather than by name or
-/// value, so rotation state survives token files being renamed and the log
-/// never holds a secret.
-///
-/// # Examples
-///
-/// ```rust
-/// let hash = comenqd::daemon::token_hash("s3cret");
-/// assert_eq!(hash.len(), 64);
-/// assert_eq!(hash, comenqd::daemon::token_hash("s3cret"));
-/// ```
-#[must_use]
-pub fn token_hash(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
-}
-
-/// A GitHub client paired with its token's name and hash.
-#[derive(Clone)]
-pub struct TokenClient {
-    /// Token file name, used only for logging.
-    pub name: String,
-    /// Hex SHA-256 of the token value, recorded in the history.
-    pub hash: String,
-    /// Client authenticated with the token.
-    pub octocrab: Arc<Octocrab>,
-}
-
-impl TokenClient {
-    /// Pair `octocrab` (authenticated with `token`) with the token's
-    /// identifying name and hash.
-    #[must_use]
-    pub fn new(name: impl Into<String>, token: &str, octocrab: Arc<Octocrab>) -> Self {
-        Self {
-            name: name.into(),
-            hash: token_hash(token),
-            octocrab,
-        }
-    }
-}
-
-/// Index of the next token after the one represented by `last_hash`.
-///
-/// Empty history and hashes that no longer match the configured pool start
-/// with the first token.
-fn next_token_index(clients: &[TokenClient], last_hash: Option<&str>) -> usize {
-    last_hash
-        .and_then(|hash| clients.iter().position(|client| client.hash == hash))
-        .map_or(0, |index| index.saturating_add(1) % clients.len().max(1))
 }
 
 /// Submit a comment to GitHub with the configured API deadline.
@@ -329,7 +269,10 @@ pub async fn run_worker(
     clients: Arc<Vec<TokenClient>>,
     mut control: WorkerControl,
 ) -> Result<()> {
-    anyhow::ensure!(!clients.is_empty(), "the worker needs at least one GitHub token");
+    anyhow::ensure!(
+        !clients.is_empty(),
+        "the worker needs at least one GitHub token"
+    );
     queue.recover_worker_state().await?;
     let config = queue.config().clone();
     loop {
@@ -350,7 +293,16 @@ pub async fn run_worker(
             continue;
         }
         control.notify_enqueued();
-        let last_hash = queue.last_token_hash().await?;
+        let last_hash = match queue.last_token_hash().await {
+            Ok(last_hash) => last_hash,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Unable to read posting history; selecting the first configured GitHub token",
+                );
+                None
+            }
+        };
         let index = next_token_index(&clients, last_hash.as_deref());
         let client = clients.get(index).context("token index in range")?;
         match post_comment_with_metrics(&client.octocrab, &entry.request, &config).await {

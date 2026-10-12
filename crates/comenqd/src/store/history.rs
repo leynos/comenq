@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 use super::{Result, StoredEntry};
 
+mod logging;
 mod recent;
+use logging::{log_malformed, log_oversized};
 
 /// Bound error text so one failed attempt always fits within a history page.
 const MAX_HISTORY_ERROR_BYTES: usize = 64 * 1024;
@@ -378,23 +380,6 @@ fn contains_attempt(path: &Path, attempt_id: &str, search_from: u64) -> Result<b
         }
     }
     Ok(false)
-}
-
-fn log_malformed(path: &Path, offset: u64, error: &serde_json::Error) {
-    tracing::error!(
-        path = %path.display(),
-        offset,
-        error = %error,
-        "Skipping unreadable history record"
-    );
-}
-
-fn log_oversized(path: &Path, offset: u64) {
-    tracing::error!(
-        path = %path.display(),
-        offset,
-        "Skipping oversized history record"
-    );
 }
 
 fn invalid_position() -> io::Error {

@@ -318,7 +318,11 @@ mod worker_tests {
                 waiting: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), single_client(ctx.octo), control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(DRAINED_NOTIFICATION, "worker idle notification", || {
             let idle = idle.clone();
@@ -379,7 +383,11 @@ mod worker_tests {
                 waiting: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), single_client(ctx.octo), control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || {
             let enqueued = enqueued.clone();

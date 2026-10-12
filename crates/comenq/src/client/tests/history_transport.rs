@@ -55,7 +55,7 @@ async fn run_sends_hist_request_and_renders_its_reply() {
         }
     );
     let output = String::from_utf8(output).expect("UTF-8 output");
-    assert!(output.contains("ok    octocat/hello-world#1  Hi"));
+    assert!(output.contains("ok    01234567  octocat/hello-world#1  Hi"));
 }
 
 #[tokio::test]

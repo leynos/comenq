@@ -21,15 +21,15 @@ fn token_hash_is_sha256_hex() {
     );
 }
 
-#[test]
-fn empty_or_unrecognized_history_starts_at_the_first_token() {
+#[tokio::test]
+async fn empty_or_unrecognized_history_starts_at_the_first_token() {
     let clients = clients();
     assert_eq!(next_token_index(&clients, None), 0);
     assert_eq!(next_token_index(&clients, Some("not-a-hash")), 0);
 }
 
-#[test]
-fn rotation_advances_and_wraps_after_the_last_matching_token() {
+#[tokio::test]
+async fn rotation_advances_and_wraps_after_the_last_matching_token() {
     let clients = clients();
     let first_hash = token_hash("alpha-token");
     let second_hash = token_hash("bravo-token");

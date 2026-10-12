@@ -296,16 +296,20 @@ mod tests {
     }
 
     #[test]
-    fn history_entries_without_token_hash_remain_readable() {
-        let mut value = serde_json::to_value(sample_history()).expect("serialize history");
+    fn history_entries_without_token_hash_remain_readable() -> Result<(), String> {
+        let mut value =
+            serde_json::to_value(sample_history()).map_err(|error| error.to_string())?;
         value
             .as_object_mut()
-            .expect("history object")
-            .remove("token_hash");
+            .ok_or_else(|| "serialized history must be an object".to_owned())?
+            .remove("token_hash")
+            .ok_or_else(|| "sample history must contain a token hash".to_owned())?;
 
-        let entry: HistoryEntry = serde_json::from_value(value).expect("read legacy history");
+        let entry: HistoryEntry =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
 
         assert!(entry.token_hash.is_empty());
+        Ok(())
     }
 
     #[test]
