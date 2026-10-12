@@ -1,9 +1,9 @@
 //! Client argument parsing, protocol requests, and safe human-readable output.
 //!
-//! [`Args`] and [`Command`] describe the `put`, `list`, `bump`, `bust`, and
-//! `del` operations. [`run`] sends each command to the daemon as one tagged
-//! request and returns [`ClientError`] for transport, timeout, protocol, or
-//! daemon failures.
+//! [`Args`] and [`Command`] describe the `put`, `list`, `bump`, `bust`, `del`,
+//! and `hist` operations. [`run`] sends tagged requests to the daemon and
+//! returns [`ClientError`] for transport, timeout, protocol, or daemon
+//! failures. History requests may follow several paged replies.
 
 use clap::{Parser, Subcommand, builder::ValueHint};
 use std::{fmt, path::PathBuf, str::FromStr};
@@ -13,7 +13,7 @@ mod client;
 mod output;
 
 pub use client::{ClientError, run};
-pub use output::{format_eta, one_line_summary};
+pub use output::{format_age, format_eta, one_line_summary};
 
 /// A GitHub repository slug in `owner/repo` format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -161,6 +161,12 @@ pub enum Command {
         /// Identifier printed by `put` and `list`.
         id: String,
     },
+    /// Show past posting attempts, oldest first.
+    Hist {
+        /// Show only the most recent LIMIT records.
+        #[arg(long, short = 'n', value_name = "LIMIT")]
+        limit: Option<usize>,
+    },
 }
 
 impl Command {
@@ -187,6 +193,10 @@ impl Command {
             Self::Bump { id } => Request::Bump { id: id.clone() },
             Self::Bust { id } => Request::Bust { id: id.clone() },
             Self::Del { id } => Request::Del { id: id.clone() },
+            Self::Hist { limit } => Request::Hist {
+                limit: *limit,
+                cursor: None,
+            },
         }
     }
 }

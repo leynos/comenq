@@ -219,10 +219,48 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("claim entry for completion")
         .expect("queue has a due entry");
     queue
-        .complete(&claimed.id, claimed.claim_token.clone())
+        .complete(&claimed)
         .await
         .expect("complete posted entry");
     assert_queue_gauges(&dir.path().join("queue"), 1).await;
+    let (failed_entry, _) = queue
+        .next_due()
+        .await
+        .expect("get entry to record a failed attempt")
+        .expect("queue still contains the failed entry");
+    assert_eq!(failed_entry.id, second_entry.id);
+    queue
+        .record_failure(&failed_entry, "timeout")
+        .await
+        .expect("record failed attempt");
+    let (mut history_client, history_server) =
+        UnixStream::pair().expect("create history-request stream pair");
+    history_client
+        .write_all(
+            &serde_json::to_vec(&comenq_lib::protocol::Request::Hist {
+                limit: None,
+                cursor: None,
+            })
+            .expect("serialize history request"),
+        )
+        .await
+        .expect("write history request");
+    history_client
+        .shutdown()
+        .await
+        .expect("close history request");
+    handle_client(history_server, Arc::clone(&queue))
+        .await
+        .expect("reply to history request");
+    let mut history_reply = Vec::new();
+    history_client
+        .read_to_end(&mut history_reply)
+        .await
+        .expect("read history reply");
+    assert!(matches!(
+        serde_json::from_slice::<comenq_lib::protocol::Response>(&history_reply),
+        Ok(comenq_lib::protocol::Response::Ok { .. })
+    ));
     assert!(matches!(
         dispatch_request(
             &queue,
@@ -301,6 +339,16 @@ async fn exporter_serves_listener_request_metrics() {
         &response,
         "comenqd_protocol_transaction_duration_seconds",
         &[
+            ("operation", "hist"),
+            ("outcome", "accepted"),
+            ("error_kind", "none"),
+        ],
+        1,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_protocol_transaction_duration_seconds",
+        &[
             ("operation", "unknown"),
             ("outcome", "failed"),
             ("error_kind", "invalid_json"),
@@ -326,6 +374,26 @@ async fn exporter_serves_listener_request_metrics() {
             ("error_kind", "none"),
         ],
         2,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_queue_store_operation_duration_seconds",
+        &[
+            ("operation", "history"),
+            ("outcome", "success"),
+            ("error_kind", "none"),
+        ],
+        1,
+    ));
+    assert!(has_histogram_count(
+        &response,
+        "comenqd_queue_store_operation_duration_seconds",
+        &[
+            ("operation", "append_history"),
+            ("outcome", "success"),
+            ("error_kind", "none"),
+        ],
+        1,
     ));
     assert!(has_histogram_count(
         &response,

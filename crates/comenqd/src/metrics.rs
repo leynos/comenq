@@ -197,6 +197,12 @@ mod tests {
                 std::time::Duration::from_millis(10),
             );
             record_protocol_duration(
+                Some("hist"),
+                "accepted",
+                None,
+                std::time::Duration::from_millis(15),
+            );
+            record_protocol_duration(
                 None,
                 "failed",
                 Some("invalid_json"),
@@ -215,6 +221,18 @@ mod tests {
                 std::time::Duration::from_millis(40),
             );
             record_queue_store_duration(
+                "history",
+                "success",
+                None,
+                std::time::Duration::from_millis(45),
+            );
+            record_queue_store_duration(
+                "append_history",
+                "failure",
+                Some("io_error"),
+                std::time::Duration::from_millis(47),
+            );
+            record_queue_store_duration(
                 "raw-store-operation",
                 "unexpected-outcome",
                 Some("/private/path"),
@@ -228,6 +246,15 @@ mod tests {
             "comenqd_protocol_transaction_duration_seconds",
             &[
                 ("operation", "put"),
+                ("outcome", "accepted"),
+                ("error_kind", "none"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_protocol_transaction_duration_seconds",
+            &[
+                ("operation", "hist"),
                 ("outcome", "accepted"),
                 ("error_kind", "none"),
             ],
@@ -257,6 +284,24 @@ mod tests {
                 ("operation", "del"),
                 ("outcome", "failure"),
                 ("error_kind", "unknown_identifier"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "history"),
+                ("outcome", "success"),
+                ("error_kind", "none"),
+            ],
+        );
+        assert_histogram_labels(
+            &metrics,
+            "comenqd_queue_store_operation_duration_seconds",
+            &[
+                ("operation", "append_history"),
+                ("outcome", "failure"),
+                ("error_kind", "io_error"),
             ],
         );
         assert_histogram_labels(

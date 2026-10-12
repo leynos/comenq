@@ -146,6 +146,8 @@ async fn run_rejects_surplus_response_payloads() {
             Response::Ok {
                 entry: Some(sample_entry()),
                 entries: Some(vec![]),
+                history: None,
+                next_cursor: None,
             },
         ),
         (
@@ -153,6 +155,8 @@ async fn run_rejects_surplus_response_payloads() {
             Response::Ok {
                 entry: Some(sample_entry()),
                 entries: Some(vec![]),
+                history: None,
+                next_cursor: None,
             },
         ),
         (

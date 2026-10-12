@@ -49,6 +49,13 @@ as the queue allows. The queue can be inspected and reordered by identifier:
 ./target/debug/comenq del 1a2b3c4d  # remove from the queue
 ```
 
+The daemon also keeps a posting-history log, recording every successful and
+failed posting attempt. `hist` prints it, oldest first:
+
+```bash
+comenq hist -n 20    # the twenty most recent posting attempts
+```
+
 ## Running as a user service
 
 The daemon also runs unprivileged under `systemd --user`. Install the binaries

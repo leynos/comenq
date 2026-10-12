@@ -288,6 +288,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Bump { .. } => "bump",
         Request::Bust { .. } => "bust",
         Request::Del { .. } => "del",
+        Request::Hist { .. } => "hist",
     }
 }
 

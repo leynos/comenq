@@ -1,6 +1,6 @@
 //! Durable recovery for successful GitHub posts.
 
-use super::{QueueStore, Result, StoreError};
+use super::{HistoryRecord, QueueStore, Result, StoreError, StoredEntry};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -12,23 +12,35 @@ struct CompletionRecord {
     posted_at: u64,
     #[serde(default)]
     claim_token: Option<String>,
+    #[serde(default)]
+    history: Option<HistoryRecord>,
+    #[serde(default)]
+    history_offset: Option<u64>,
 }
 
 impl QueueStore {
     /// Persist post completion before removing its entry and updating the marker.
     pub fn complete(&self, id: &str, now: u64) -> Result<()> {
-        self.complete_claim(id, None, now)
+        let entry = self.find(id)?;
+        self.complete_claim(&entry, now)
     }
 
     /// Complete a claimed post without deleting a replacement entry.
-    pub fn complete_claim(&self, id: &str, claim_token: Option<&str>, now: u64) -> Result<()> {
-        if claim_token.is_none() {
-            self.find(id)?;
+    pub fn complete_claim(&self, entry: &StoredEntry, now: u64) -> Result<()> {
+        if entry.claim_token.is_none() {
+            self.find(&entry.id)?;
         }
+        let history_offset = match fs::metadata(&self.history_path) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        };
         let record = serde_json::to_vec(&CompletionRecord {
-            id: id.to_owned(),
+            id: entry.id.clone(),
             posted_at: now,
-            claim_token: claim_token.map(str::to_owned),
+            claim_token: entry.claim_token.clone(),
+            history: Some(HistoryRecord::success(entry, now)),
+            history_offset: Some(history_offset),
         })?;
         self.write_atomic(&self.completion_path, &record)?;
         self.reconcile_completion()
@@ -43,6 +55,9 @@ impl QueueStore {
         };
         let record: CompletionRecord = serde_json::from_str(&text)?;
         let entry_path = self.entry_path(&record.id)?;
+        if let Some(history) = &record.history {
+            self.append_completion_history(history, record.history_offset.unwrap_or(0))?;
+        }
         let remove_entry = match self.find(&record.id) {
             Ok(entry) => record
                 .claim_token

@@ -119,7 +119,7 @@ project requirements.
 | Asynchronous Runtime | tokio | The de-facto standard for asynchronous programming in Rust. It provides a high-performance, multithreaded scheduler and a comprehensive suite of utilities for I/O, networking, and timers, including the essential UnixListener, UnixStream, and time::sleep components.[^2] Its maturity and extensive ecosystem make it the definitive choice for the daemon's core. | async-std |
 | CLI Argument Parsing | clap | The most popular and feature-rich CLI argument parsing library for Rust.[^3] The | derive feature offers an exceptionally ergonomic and declarative way to define the CLI's structure, automatically generating argument parsing, validation, and help text from a simple struct definition.[^3] | argh, pico-args 4 |
 | GitHub API Client | octocrab | A modern, actively maintained, and extensible GitHub API client.[^5] It provides strongly typed models for API responses and a builder pattern for requests, simplifying interaction with the GitHub REST API. Its static API and support for custom middleware are valuable for building robust clients.[^3] | roctokit 12, manual | reqwest 13 |
-| Persistent Queue | bespoke `QueueStore` (`comenqd::store`) | A disk-backed store using one JSON file per pending entry plus `last_post` and `last_attempt` markers, with atomic write-then-rename updates. Unlike an append-only queue, it supports reordering (`bump`, `bust`) and removal (`del`) of arbitrary entries, and only deletes an entry after a confirmed post, giving an "at-least-once" delivery guarantee. | yaque (rejected: append-only, cannot reorder or delete arbitrary entries) |
+| Persistent Queue | bespoke `QueueStore` (`comenqd::store`) | A disk-backed store using one JSON file per pending entry, `last_post` and `last_attempt` markers, and an append-only `history.jsonl` posting log. Entry updates use atomic write-then-rename. Unlike an append-only queue, it supports reordering (`bump`, `bust`) and removal (`del`) of arbitrary entries, and only deletes an entry after a confirmed post, giving an "at-least-once" delivery guarantee. | yaque (rejected: append-only, cannot reorder or delete arbitrary entries) |
 | IPC Serialization | serde / serde_json | serde is the universal framework for serialization and deserialization in Rust. serde_json provides a straightforward implementation for the JSON data format, which is chosen for its human-readability (aiding in debugging) and widespread support. | bincode, prost |
 | Systemd Integration | systemd (crate) | Provides native Rust bindings for interacting with the systemd journal and daemon notification APIs.[^8] While the primary deployment mechanism is a | .service file, this crate can be used for more advanced integration, such as sending readiness notifications. | systemctl (crate) 20 |
 | Logging | tracing / tracing-subscriber | A modern, structured, and asynchronous-aware logging and diagnostics framework. It is the standard choice for tokio-based applications, providing contextual information that is superior to traditional line-based logging. | log / env_logger 22 |
@@ -143,10 +143,11 @@ providing clarity and maintainability compared to the more verbose builder
 pattern.[^3]
 
 The CLI has a global optional `--socket` override (also available through
-`COMENQ_SOCKET`) and five subcommands: `put`, `list`, `bump`, `bust`, and `del`.
-`put` accepts `<owner/repo> <pr_number> <comment_body>` and an optional
+`COMENQ_SOCKET`) and six subcommands: `put`, `list`, `bump`, `bust`, `del`, and
+`hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>` and an optional
 `--now`; the other commands accept no positional arguments (`list`) or an
-eight-character entry identifier (`bump`, `bust`, and `del`).
+eight-character entry identifier (`bump`, `bust`, and `del`). `hist` accepts an
+optional `-n` or `--limit` count.
 
 The following code shows the shape of the shipped `Args` parser and its
 subcommands. The implementation delegates protocol and socket work to the
@@ -185,6 +186,10 @@ pub enum Command {
     Bump { id: String },
     Bust { id: String },
     Del { id: String },
+    Hist {
+        #[arg(short = 'n', long, value_name = "LIMIT")]
+        limit: Option<usize>,
+    },
 }
 ```
 
@@ -210,10 +215,13 @@ wire message.
 snake_case. `put` contains a `request` object with `owner`, `repo`,
 `pr_number`, and `body`; its optional `immediate` field defaults to `false`.
 `list` has no additional fields. `bump`, `bust`, and `del` each contain an `id`
-string. A successful response is tagged with `"outcome":"ok"` and may contain an
-`entry` (for `put`) or `entries` (for `list`). A failed response is tagged with
-`"outcome":"error"` and contains a human-readable `message`. Absent `entry` and
-`entries` fields are omitted.
+string. `hist` accepts an optional `limit` and continuation cursor, and returns
+`history` records in chronological pages over a fixed log snapshot. A
+successful response is tagged with `"outcome":"ok"` and may contain an `entry`
+(for `put`), `entries` (for `list`), or `history` (for `hist`). A history
+response includes `next_cursor` when more records remain. A failed response is
+tagged with `"outcome":"error"` and contains a human-readable `message`. Absent
+payload fields are omitted.
 
 The JSON is sent over a `tokio::net::UnixStream`. A Unix Domain Socket (UDS) is
 used for local IPC:
@@ -348,8 +356,8 @@ handling, so `run` operates on validated data without rechecking it.
 ### 2.4. Client Subcommands and ETA Semantics
 
 The historical blueprint above shows a client that only enqueues a comment. The
-shipped client instead exposes five subcommands, one per protocol operation,
-all sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
+shipped client instead exposes six subcommands, one per protocol operation, all
+sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
 environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
@@ -371,9 +379,20 @@ environment variable):
 
 - `comenq del <id>`: removes the identified comment from the queue.
 
+- `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
+  first, one line per record: the identifier, the age of the attempt (e.g.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
+  `owner/repo#pr`, and the comment body collapsed to a single line of at most
+  60 characters. Failed attempts append a one-line, em-dash-separated
+  description of the error. Records are always shown in chronological order
+  (oldest first); `--limit` restricts the output to the most recent `N` records
+  without changing that ordering. If no attempts have been recorded, the client
+  prints `No posting history recorded.` instead of a table.
+
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
-for the store and §5 for the wire protocol) and prints a short confirmation, or
-the daemon's error message, once the single reply is received.
+for the store and §5 for the wire protocol). The client follows history cursors
+until the snapshot is complete, then renders the records; other commands print
+their confirmation or the daemon's error message after one reply.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -464,7 +483,7 @@ sequenceDiagram
 
   par Normal flow
     L->>A: dispatch_request(Request)
-    A->>Q: typed operation (put, list, bump, bust, or del)
+    A->>Q: typed operation (put, list, bump, bust, del, or hist)
     Q-->>A: typed queue result
     A-->>L: Response
     Q-->>W: notify_one() on mutation
@@ -498,10 +517,12 @@ arbitrary entry, only to dequeue from the head. The daemon therefore uses a
 bespoke store, `comenqd::store::QueueStore`, built directly on plain files.
 
 `QueueStore` keeps one JSON file per pending comment under
-`<queue_path>/entries`, plus `<queue_path>/last_post` and
-`<queue_path>/last_attempt` files recording the most recent successful post and
-failed post attempt. The latter keeps retry ETAs paced across daemon restarts.
-Each entry (a `StoredEntry`) carries:
+`<queue_path>/entries`, plus a `<queue_path>/last_post` file recording the Unix
+time of the most recent successful post and a `<queue_path>/history.jsonl` file
+recording every posting attempt, successful or failed (see "The posting history
+log" below). A `<queue_path>/last_attempt` file records the most recent failed
+attempt and keeps retry ETAs paced across daemon restarts. Each entry (a
+`StoredEntry`) carries:
 
 - **A deterministic eight-character identifier.** This is the first eight hex
   digits of a 64-bit FNV-1a hash computed over the request's owner, repo, PR
@@ -535,13 +556,14 @@ Each entry (a `StoredEntry`) carries:
 Entries are written to a temporary sibling file and then renamed into place, so
 a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
 or remove a single entry file the same way. `complete` first writes a durable
-`completion` recovery record containing the entry identifier, claim token, and
-posting time. It then removes the matching claimed entry, atomically rewrites
-`last_post`, and clears the recovery record. `QueueStore::open` reconciles a
-record left by an interrupted completion and clears abandoned claims before the
-worker schedules entries. A completion for an entry deleted or replaced during
-the external post still records the successful post time, but cannot delete a
-replacement with a different claim.
+`completion` recovery record containing the entry identifier, claim token,
+posting time, history record and history-log offset. It then idempotently
+appends the successful attempt, removes the matching claimed entry, atomically
+rewrites `last_post`, and clears the recovery record. `QueueStore::open`
+reconciles a record left by an interrupted completion and clears abandoned
+claims before the worker schedules entries. A completion for an entry deleted
+or replaced during the external post still records the successful post time,
+but cannot delete a replacement with a different claim.
 
 The store admits at most 1,024 pending entries and caps total accounted queue
 data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
@@ -575,6 +597,26 @@ motivated the original choice of `yaque`, without its append-only limitation.
 The queue is initialized at a configurable path (e.g., `/var/lib/comenq/queue`)
 and stores the `CommentRequest` struct defined in the shared library as part of
 each entry.
+
+**The posting history log.** Alongside `entries` and `last_post`, the store
+appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
+Lines: append-only, one record per line). Each `HistoryRecord` carries the
+entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
+`success`, an `error` description (present only when `success` is false), and
+the `request` that was posted or attempted. Each record also has an attempt ID
+used to make successful completion recovery idempotent. A successful post is
+recorded before `complete` removes the entry from the queue and updates
+`last_post`. A failed post is recorded on every retry attempt, since the entry
+stays queued and is retried after a cooldown rather than being removed; each
+attempt therefore contributes its own failure record. Writing the history
+record on the failure path can itself fail (e.g. a full disk); the worker logs
+that error but never lets it interrupt the retry loop, so a history-logging
+fault cannot stall comment posting. Appending repairs a missing final line
+delimiter before the next record. When the log is read back (to serve the
+`hist` protocol operation), malformed and oversized lines are skipped with an
+error log. Reads return bounded pages and use a fixed end offset so concurrent
+appends cannot change the records covered by an in-progress CLI request. The
+listener limits each encoded page to the 2 MiB protocol response cap.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -634,7 +676,7 @@ sequenceDiagram
   Client->>H: write JSON Request
   H->>H: read & deserialize
   H->>A: dispatch_request(Request)
-  A->>Q: typed operation (put, list, bump, bust, or del)
+  A->>Q: typed operation (put, list, bump, bust, del, or hist)
   Q-->>A: typed queue result
   A-->>H: Response
   H-->>Client: write JSON Response, close
@@ -738,7 +780,7 @@ at `/etc/comenqd/config.toml` is the conventional choice.
 | github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
 | github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
 | socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, and the `completion` recovery record, managed by `QueueStore`).                                                                     | /var/lib/comenq/queue                                                                                          |
+| queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
 | cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
 | cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
 | github_api_timeout_secs  | u64     | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
@@ -1072,16 +1114,18 @@ request operation:
 {"op":"bump","id":"1a2b3c4d"}
 {"op":"bust","id":"1a2b3c4d"}
 {"op":"del","id":"1a2b3c4d"}
+{"op":"hist","limit":20}
 ```
 
 Replies use one tagged `Response` per connection. `put` replies include an
-`entry`, `list` replies include `entries`, other successful operations return
+`entry`, `list` replies include `entries`, and `hist` replies include `history`
+and a `next_cursor` when more records remain. Other successful operations return
 `{"outcome":"ok"}`, and failures return `{"outcome":"error","message":"..."}`.
 
 ### 5.4. Historical Source for `comenq` (Client)
 
 The following is historical pseudocode for the original single-purpose client;
-it is not the shipped implementation. The current client uses the five
+it is not the shipped implementation. The current client uses the six
 subcommands described in Section 2.4 and sends tagged `Request` values, then
 reads and handles a `Response` from the daemon.
 

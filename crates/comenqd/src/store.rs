@@ -3,7 +3,8 @@
 //! Pending comments use one JSON file beneath `<queue_path>/entries`, with an
 //! ordering key for `bump`, `bust`, and `del`. `<queue_path>/last_post` and
 //! `<queue_path>/last_attempt` preserve successful-post and failed-post timing
-//! across daemon restarts.
+//! across daemon restarts. `<queue_path>/history.jsonl` records each posting
+//! attempt for the `hist` operation.
 //!
 //! The store holds no in-memory state; callers serialize mutations. It writes
 //! temporary siblings and renames them so entries are never half-written.
@@ -22,6 +23,8 @@ pub(crate) const MAX_QUEUE_ENTRIES: usize = 1024;
 const LAST_POST_FILE: &str = "last_post";
 /// File recording the Unix time of the most recent failed post attempt.
 const LAST_ATTEMPT_FILE: &str = "last_attempt";
+/// Append-only JSON Lines log of posting attempts.
+const HISTORY_FILE: &str = "history.jsonl";
 /// Recovery record for a GitHub post that succeeded before its queue cleanup.
 const COMPLETION_FILE: &str = "completion";
 /// A queued comment with its scheduling metadata.
@@ -158,6 +161,7 @@ pub struct QueueStore {
     last_post_path: PathBuf,
     last_attempt_path: PathBuf,
     completion_path: PathBuf,
+    history_path: PathBuf,
 }
 
 /// Compute the deterministic eight-character identifier for an entry.
@@ -205,6 +209,7 @@ impl QueueStore {
             last_post_path: queue_path.join(LAST_POST_FILE),
             last_attempt_path: queue_path.join(LAST_ATTEMPT_FILE),
             completion_path: queue_path.join(COMPLETION_FILE),
+            history_path: queue_path.join(HISTORY_FILE),
         };
         store.reconcile_completion()?;
         store.validate_existing_limits()?;
@@ -261,6 +266,26 @@ impl QueueStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Append a posting attempt to the history log.
+    pub(crate) fn append_history(&self, record: &HistoryRecord) -> Result<()> {
+        history::append(&self.history_path, record)
+    }
+
+    /// Append a recovered completion unless it is already durable in history.
+    fn append_completion_history(&self, record: &HistoryRecord, search_from: u64) -> Result<()> {
+        history::append_once(&self.history_path, record, search_from)
+    }
+
+    /// Read one bounded posting-history page.
+    pub(crate) fn history_page(
+        &self,
+        position: Option<history::HistoryPosition>,
+        recent_limit: Option<usize>,
+        page_size: usize,
+    ) -> Result<history::HistoryPage> {
+        history::read_page(&self.history_path, position, recent_limit, page_size)
     }
 
     /// Resolve a validated identifier to its persisted entry path.
@@ -346,7 +371,12 @@ fn is_valid_id(id: &str) -> bool {
 
 mod bounds;
 mod completion;
+mod history;
 mod scheduling;
+
+#[cfg(test)]
+pub(crate) use history::HistoryRecordAt;
+pub(crate) use history::{HistoryPage, HistoryPosition, HistoryRecord};
 
 #[cfg(test)]
 mod tests;

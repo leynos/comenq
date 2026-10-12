@@ -1,6 +1,7 @@
 //! Claim, completion, and recovery tests for the persistent queue.
 
 use super::{ids, immediate, open_store, request};
+use crate::store::HistoryRecord;
 use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;
@@ -14,6 +15,13 @@ fn complete_records_last_post_and_removes_entry() {
     store.complete(&a.id, 4242).expect("complete a");
     assert_eq!(store.last_post().expect("read last post"), Some(4242));
     assert!(ids(&store).is_empty());
+    let history = store
+        .history_page(None, None, 4)
+        .expect("read completed history")
+        .records;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].record.posted_at, 4242);
+    assert_eq!(history[0].record.request.body, "a");
 }
 
 #[rstest]
@@ -32,6 +40,75 @@ fn reopen_reconciles_a_persisted_completion_before_scheduling() {
     assert!(ids(&reopened).is_empty());
     assert_eq!(reopened.last_post().expect("read last post"), Some(4242));
     assert!(!dir.path().join("completion").exists());
+}
+
+#[rstest]
+fn completion_recovery_records_success_history_before_clearing_its_marker() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
+    let history = HistoryRecord::success(&entry, 4242);
+    let marker = serde_json::json!({
+        "id": entry.id,
+        "posted_at": 4242,
+        "claim_token": null,
+        "history": history.clone(),
+        "history_offset": 0,
+    });
+    fs::write(
+        dir.path().join("completion"),
+        serde_json::to_vec(&marker).expect("serialize completion"),
+    )
+    .expect("persist completion record");
+    drop(store);
+
+    let reopened = open_store(&dir);
+
+    assert!(ids(&reopened).is_empty());
+    assert_eq!(
+        reopened
+            .history_page(None, None, 4)
+            .expect("read recovered history")
+            .records
+            .len(),
+        1
+    );
+    assert!(!dir.path().join("completion").exists());
+}
+
+#[rstest]
+fn completion_recovery_does_not_duplicate_history_written_before_a_crash() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store.put(request("a"), &immediate(0), 1000).expect("put a");
+    let history = HistoryRecord::success(&entry, 4242);
+    let marker = serde_json::json!({
+        "id": entry.id,
+        "posted_at": 4242,
+        "claim_token": null,
+        "history": history.clone(),
+        "history_offset": 0,
+    });
+    fs::write(
+        dir.path().join("completion"),
+        serde_json::to_vec(&marker).expect("serialize completion"),
+    )
+    .expect("persist completion record");
+    store
+        .append_history(&history)
+        .expect("append success history");
+    drop(store);
+
+    let reopened = open_store(&dir);
+
+    assert_eq!(
+        reopened
+            .history_page(None, None, 4)
+            .expect("read recovered history")
+            .records
+            .len(),
+        1
+    );
 }
 
 #[rstest]
@@ -123,13 +200,12 @@ fn completion_is_idempotent_after_delete_and_records_the_post_without_removing_a
         .claim_next_due(600, 1000)
         .expect("claim")
         .expect("due entry");
-    let token = claimed.claim_token.clone().expect("claim token");
     store.del(&entry.id).expect("delete in-flight entry");
     let replacement = store
         .put(request("claim"), &immediate(0), 1000)
         .expect("replace");
     store
-        .complete_claim(&entry.id, Some(&token), 4242)
+        .complete_claim(&claimed, 4242)
         .expect("stale completion is harmless");
     assert_eq!(ids(&store), vec![replacement.id]);
     assert_eq!(store.last_post().expect("last post"), Some(4242));
@@ -149,12 +225,10 @@ fn bump_and_bust_preserve_an_in_flight_claim() {
         .claim_next_due(600, 1000)
         .expect("claim")
         .expect("due entry");
-    let token = claimed.claim_token.clone().expect("claim token");
-
     store.bust(&entry.id).expect("bust in-flight entry");
     store.bump(&entry.id).expect("bump in-flight entry");
     store
-        .complete_claim(&entry.id, Some(&token), 4242)
+        .complete_claim(&claimed, 4242)
         .expect("complete in-flight entry");
     assert_eq!(ids(&store), vec![other.id]);
 }
