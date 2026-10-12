@@ -480,7 +480,8 @@ sequenceDiagram
   Sup->>Sup: ensure_queue_dir()
   Sup->>Q: SharedQueue::open(config)
   Sup->>L: spawn run_listener(queue, shutdown)
-  Sup->>W: spawn run_worker(queue, octocrab, control)
+  Note over Sup,W: run_with_tokens receives the resolved pool and builds one client per token
+  Sup->>W: spawn run_worker(queue, client_pool, control)
 
   par Normal flow
     L->>A: dispatch_request(Request)
@@ -489,8 +490,11 @@ sequenceDiagram
     A-->>L: Response
     Q-->>W: notify_one() on mutation
     W->>Q: claim_next_due()
+    W->>Q: read latest posting-history token hash
+    Q-->>W: latest token hash (or none)
+    W->>W: select successor client in configured pool
     W->>W: post to GitHub
-    W->>Q: complete(id)
+    W->>Q: complete(entry, selected token hash)
   and Error/backoff
     L--x Sup: accept error
     Sup->>L: restart after backoff
@@ -749,11 +753,12 @@ The worker task's loop consists of the following steps:
 
 4. **Handle Result:**
 
-   - **On API Success:** The task calls `queue.complete()` with the entry ID
-     and claim token. A durable completion record is written before the
-     matching entry is removed and `last_post` is updated. If a concurrent
-     `del` already removed the entry, or the ID now belongs to a replacement,
-     completion records the successful post without deleting that replacement.
+   - **On API Success:** The task calls `queue.complete()` with the claimed
+     entry and selected token's hash. A durable completion record stores that
+     hash before the matching entry is removed and `last_post` is updated. If a
+     concurrent `del` already removed the entry, or the ID now belongs to a
+     replacement, completion records the successful post without deleting the
+     replacement.
      It then logs the successful post.
 
    - **On API Failure:** The task logs the error from the GitHub API. The
