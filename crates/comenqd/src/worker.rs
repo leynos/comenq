@@ -264,6 +264,41 @@ impl WorkerControl {
 /// queue mutations (put, bump, bust, del) interrupt empty-queue and scheduled
 /// entry waits. A failed-post retry still waits for the full cooldown after a
 /// queue change to avoid retrying the same failed request early.
+///
+/// At least one token client is required; an empty pool returns an error
+/// before the worker recovers or claims queue entries. Graceful shutdown
+/// returns `Ok(())` after the worker stops.
+///
+/// # Examples
+///
+/// Start the worker with one authenticated client, then signal shutdown and
+/// observe its successful completion:
+///
+/// ```rust,no_run
+/// use comenqd::daemon::{TokenClient, WorkerControl, run_worker};
+/// use comenqd::queue::SharedQueue;
+/// use octocrab::Octocrab;
+/// use std::sync::Arc;
+/// use tokio::sync::watch;
+///
+/// async fn stop_worker(queue: Arc<SharedQueue>, token: &str) -> anyhow::Result<()> {
+///     let octocrab = Arc::new(
+///         Octocrab::builder()
+///             .personal_token(token.to_owned())
+///             .build()?,
+///     );
+///     let client = TokenClient::new("primary", token, octocrab);
+///     let (shutdown_tx, shutdown_rx) = watch::channel(());
+///     let worker = tokio::spawn(run_worker(
+///         queue,
+///         Arc::new(vec![client]),
+///         WorkerControl::without_hooks(shutdown_rx),
+///     ));
+///     shutdown_tx.send(()).expect("worker is subscribed");
+///     worker.await??;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_worker(
     queue: Arc<SharedQueue>,
     clients: Arc<Vec<TokenClient>>,

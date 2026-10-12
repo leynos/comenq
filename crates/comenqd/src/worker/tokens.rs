@@ -50,6 +50,31 @@ pub struct TokenClient {
 impl TokenClient {
     /// Pair `octocrab` (authenticated with `token`) with the token's
     /// identifying name and hash.
+    ///
+    /// # Examples
+    ///
+    /// The client keeps the configured name and records a stable hash of its
+    /// credential for posting history:
+    ///
+    /// ```rust
+    /// use comenqd::daemon::{TokenClient, token_hash};
+    /// use octocrab::Octocrab;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::test]
+    /// async fn token_client_keeps_name_and_hash() {
+    ///     let token = "personal-access-token";
+    ///     let octocrab = Arc::new(
+    ///         Octocrab::builder()
+    ///             .personal_token(token.to_owned())
+    ///             .build()
+    ///             .expect("valid client configuration"),
+    ///     );
+    ///     let client = TokenClient::new("github-token.txt", token, octocrab);
+    ///     assert_eq!(client.name, "github-token.txt");
+    ///     assert_eq!(client.hash, token_hash(token));
+    /// }
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<String>, token: &str, octocrab: Arc<Octocrab>) -> Self {
         Self {

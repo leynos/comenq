@@ -57,6 +57,24 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
         .collect()
 }
 
+/// Add token-file path context while preserving read error kinds.
+///
+/// Oversized files become `InvalidData`; ordinary filesystem errors retain
+/// their original kind and include the path in the message.
+///
+/// # Examples
+///
+/// A permission failure keeps its kind and identifies the affected file:
+///
+/// ```rust,ignore
+/// let path = std::path::Path::new("/run/secrets/github-token");
+/// let error = token_file_io_error(
+///     path,
+///     TokenFileReadError::Io(io::Error::from(io::ErrorKind::PermissionDenied)),
+/// );
+/// assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+/// assert!(error.to_string().contains("/run/secrets/github-token"));
+/// ```
 fn token_file_io_error(path: &std::path::Path, error: TokenFileReadError) -> io::Error {
     match error {
         TokenFileReadError::Io(error) => io::Error::new(
@@ -73,6 +91,20 @@ fn token_file_io_error(path: &std::path::Path, error: TokenFileReadError) -> io:
     }
 }
 
+/// Map token-file path expansion failures to useful I/O errors.
+///
+/// An unset environment variable becomes `NotFound`, while a malformed
+/// placeholder becomes `InvalidInput`; both messages retain the useful name.
+///
+/// # Examples
+///
+/// An unset path variable is reported as a missing configuration value:
+///
+/// ```rust,ignore
+/// let error = token_path_io_error(TokenPathError::Unset("SECRETS_DIR".into()));
+/// assert_eq!(error.kind(), io::ErrorKind::NotFound);
+/// assert!(error.to_string().contains("SECRETS_DIR"));
+/// ```
 fn token_path_io_error(error: TokenPathError) -> io::Error {
     match error {
         TokenPathError::Malformed(text) => io::Error::new(
