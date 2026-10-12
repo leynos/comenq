@@ -40,27 +40,31 @@ identifiers.
 ### Client and daemon API
 
 The `comenq::Args` parser exposes a global `--socket` option and the `put`,
-`list`, `bump`, `bust`, and `del` [`Command`](../crates/comenq/src/lib.rs)
-subcommands. `Command::to_request()` maps each command to the shared
-`comenq_lib::protocol::Request` enum. `comenq::ClientError` distinguishes
-connection, serialization, I/O, daemon-reported, and unexpected-response
-failures; `comenq::run()` renders successful replies for users.
+`list`, `bump`, `bust`, `del`, and `hist`
+[`Command`](../crates/comenq/src/lib.rs) subcommands. `hist` accepts `-n` or
+`--limit` to select recent attempts. `Command::to_request()` maps each command
+to the shared `comenq_lib::protocol::Request` enum. `comenq::ClientError`
+distinguishes connection, serialization, I/O, daemon-reported, and
+unexpected-response failures; `comenq::run()` renders successful replies for
+users.
 
-The Unix socket carries exactly one tagged JSON `Request` per connection. The
-daemon returns exactly one tagged JSON `Response`: `Response::Ok` contains an
-`entry` for `put`, an `entries` list for `list`, or neither field for `bump`,
-`bust`, and `del`; `Response::Error` contains the daemon's human-readable
-failure message. `PendingEntry` carries the deterministic eight-character ID,
-ETA in seconds, repository target, pull request number, and full comment body.
-Clients must treat response fields as untrusted and reject a successful reply
-whose payload shape does not match the request.
+The Unix socket carries one tagged JSON `Request` per connection. The daemon
+returns a tagged JSON `Response`: `Response::Ok` contains an `entry` for `put`,
+an `entries` list for `list`, a `history` page and optional cursor for `hist`,
+or neither payload for `bump`, `bust`, and `del`; `Response::Error` contains
+the daemon's human-readable failure message. `PendingEntry` carries the
+deterministic eight-character ID, ETA in seconds, repository target, pull
+request number, and full comment body. History requests follow cursors over a
+fixed file snapshot so the CLI can render every record without exceeding the 2
+MiB response limit. Clients must treat response fields as untrusted and reject
+a successful reply whose payload shape does not match the request.
 
 The listener's `listener::protocol::dispatch_request` adapter maps each valid
-request to a typed `SharedQueue` operation: `put`, `list`, `bump`, `bust`, or
-`del`. It converts the operation result to a protocol `Response`; queue
-mutations notify the worker after success. The queue performs scheduling and
-persistence through `QueueStore`. `SharedQueue::claim_next_due()` selects the
-due head and durably claims it while holding the store lock; the lock is
+request to a typed `SharedQueue` operation: `put`, `list`, `bump`, `bust`,
+`del`, or `hist`. It converts the operation result to a protocol `Response`;
+queue mutations notify the worker after success. The queue performs scheduling
+and persistence through `QueueStore`. `SharedQueue::claim_next_due()` selects
+the due head and durably claims it while holding the store lock; the lock is
 released before the worker calls GitHub. A failed post records its timestamp
 before releasing its claim, so the cooldown remains in the persisted schedule
 after a daemon restart. Queue changes cannot shorten the worker's in-process
@@ -68,14 +72,16 @@ retry deadline. `bump` and `bust` may reorder a claimed entry without changing
 its claim, while `del` removes it. Completion checks the claim token so a
 successful post cannot delete a replacement entry.
 
-`SharedQueue::complete()` records the successful posting timestamp and removes
-the entry. Completion first writes a durable recovery record containing the
-entry identifier, claim token, and posting time; startup reconciliation
-finishes the deletion and `last_post` update before clearing that record, then
-reclaims claims left by an interrupted worker. Failed attempts are recorded in
-`last_attempt`, and scheduling uses the later of the successful-post and failed
-attempt timestamps as its cooldown anchor. Queue-store failures become daemon
-error responses.
+`SharedQueue::complete()` records the successful attempt and posting timestamp
+before removing the entry. Its durable recovery record contains the history
+payload and log offset as well as the entry identifier, claim token and posting
+time; reconciliation idempotently appends the history record, finishes the
+deletion and `last_post` update, then clears that record. Startup performs this
+recovery before reclaiming claims left by an interrupted worker. Failed
+attempts are recorded in `last_attempt`, and scheduling uses the later of the
+successful-post and failed-attempt timestamps as its cooldown anchor. Failure
+history writes are logged but do not interrupt claim release or retry pacing.
+Other queue-store failures become daemon error responses.
 
 The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
@@ -118,18 +124,19 @@ The stable metric vocabulary is:
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
-  `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
+  `bump`, `bust`, `del`, `hist`) and `outcome` labels (`accepted`, `failed`,
   `rejected`); requests without a parsed operation omit the `operation` label.
 - `comenqd_protocol_transaction_duration_seconds` measures complete listener
   transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
-  `bust`, `del`, and `unknown`; `outcome` is `accepted`, `failed`, `rejected`,
-  or `unknown`. `error_kind` uses fixed classifications and is `none` on
-  success.
+  `bust`, `del`, `hist`, and `unknown`; `outcome` is `accepted`, `failed`,
+  `rejected`, or `unknown`. `error_kind` uses fixed classifications and is
+  `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
-  `del`, `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
-  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
-  fixed classifications and is `none` on success.
+  `del`, `hist`, `history`, `append_history`, `next_due`, `claim`, `complete`,
+  `release`, `recover`, `metrics`, and `unknown`; `outcome` is `success`,
+  `failure`, or `unknown`. `error_kind` uses fixed classifications and is
+  `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.

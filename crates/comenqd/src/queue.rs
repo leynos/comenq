@@ -162,14 +162,12 @@ impl SharedQueue {
         Ok(())
     }
 
-    /// Remove the posted entry and record the posting time.
-    pub async fn complete(&self, id: &str, claim_token: Option<String>) -> StoreResult<()> {
-        let id = id.to_owned();
+    /// Durably record a successful post before removing its queue entry.
+    pub async fn complete(&self, entry: &StoredEntry) -> StoreResult<()> {
+        let entry = entry.clone();
         let now = self.clock.unix_now();
         let result = self
-            .with_store("complete", move |store| {
-                store.complete_claim(&id, claim_token.as_deref(), now)
-            })
+            .with_store("complete", move |store| store.complete_claim(&entry, now))
             .await;
         if result.is_ok() {
             self.update_queue_gauges().await;

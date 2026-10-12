@@ -273,9 +273,19 @@ impl QueueStore {
         history::append(&self.history_path, record)
     }
 
-    /// Read posting attempts in chronological order, skipping malformed lines.
-    pub(crate) fn history(&self) -> Result<Vec<HistoryRecord>> {
-        history::read(&self.history_path)
+    /// Append a recovered completion unless it is already durable in history.
+    fn append_completion_history(&self, record: &HistoryRecord, search_from: u64) -> Result<()> {
+        history::append_once(&self.history_path, record, search_from)
+    }
+
+    /// Read one bounded posting-history page.
+    pub(crate) fn history_page(
+        &self,
+        position: Option<history::HistoryPosition>,
+        recent_limit: Option<usize>,
+        page_size: usize,
+    ) -> Result<history::HistoryPage> {
+        history::read_page(&self.history_path, position, recent_limit, page_size)
     }
 
     /// Resolve a validated identifier to its persisted entry path.
@@ -364,7 +374,9 @@ mod completion;
 mod history;
 mod scheduling;
 
-pub(crate) use history::HistoryRecord;
+#[cfg(test)]
+pub(crate) use history::HistoryRecordAt;
+pub(crate) use history::{HistoryPage, HistoryPosition, HistoryRecord};
 
 #[cfg(test)]
 mod tests;

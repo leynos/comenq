@@ -79,29 +79,6 @@ async fn run_sends_put_request_and_accepts_reply() {
 }
 
 #[tokio::test]
-async fn run_sends_hist_request_and_accepts_reply() {
-    let dir = tempdir().expect("temp dir");
-    let socket = dir.path().join("sock");
-    let listener = UnixListener::bind(&socket).expect("bind socket");
-    let reply = Response::history(vec![comenq_lib::protocol::HistoryEntry {
-        id: "1a2b3c4d".into(),
-        posted_at: 1_000,
-        success: true,
-        error: None,
-        owner: "octocat".into(),
-        repo: "hello-world".into(),
-        pr_number: 1,
-        body: "Hi".into(),
-    }]);
-    let accept = spawn_daemon(listener, reply);
-
-    let command = Command::Hist { limit: Some(2) };
-    run(args(socket, command)).await.expect("run succeeds");
-    let request = accept.await.expect("join");
-    assert_eq!(request, Request::Hist { limit: Some(2) });
-}
-
-#[tokio::test]
 async fn successful_put_ignores_a_broken_output_pipe() {
     let dir = tempdir().expect("temp dir");
     let socket = dir.path().join("sock");
@@ -170,6 +147,7 @@ async fn run_rejects_surplus_response_payloads() {
                 entry: Some(sample_entry()),
                 entries: Some(vec![]),
                 history: None,
+                next_cursor: None,
             },
         ),
         (
@@ -178,6 +156,7 @@ async fn run_rejects_surplus_response_payloads() {
                 entry: Some(sample_entry()),
                 entries: Some(vec![]),
                 history: None,
+                next_cursor: None,
             },
         ),
         (

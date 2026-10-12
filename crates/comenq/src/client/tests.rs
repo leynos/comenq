@@ -1,5 +1,6 @@
 //! Output and user-visible behaviour tests for the client.
 mod connect;
+mod history_transport;
 mod transport;
 
 use super::{ClientError, render_response};
@@ -46,7 +47,7 @@ fn sample_history(success: bool, error: Option<&str>) -> HistoryEntry {
 #[test]
 fn output_failures_are_returned_to_the_caller() {
     let mut output = FailingWriter;
-    let err = render_response(&Command::List, None, Some(vec![]), None, &mut output)
+    let err = render_response(&Command::List, None, Some(vec![]), None, 1_100, &mut output)
         .expect_err("non-broken output failure must surface");
     assert!(
         matches!(err, ClientError::Output(error) if error.kind() == io::ErrorKind::PermissionDenied)
@@ -60,7 +61,7 @@ fn render_to_string(
     history: Option<Vec<comenq_lib::protocol::HistoryEntry>>,
 ) -> String {
     let mut output = Vec::new();
-    render_response(command, entry, entries, history, &mut output).expect("render response");
+    render_response(command, entry, entries, history, 1_100, &mut output).expect("render response");
     String::from_utf8(output).expect("rendered output is UTF-8")
 }
 
@@ -130,6 +131,7 @@ fn renders_success_and_failure_history_lines() {
     let lines: Vec<&str> = output.lines().collect();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].contains("ok    octocat/hello-world#1  Hi"));
+    assert!(lines[0].contains("1m 40s ago"));
     assert!(lines[1].contains("FAIL  octocat/hello-world#1  Hi"));
     assert!(lines[1].ends_with("— timeout after 10s"));
 }

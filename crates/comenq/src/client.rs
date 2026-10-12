@@ -1,11 +1,13 @@
 //! Client-side communication with the `comenqd` daemon.
 //!
-//! This module serializes a protocol request, sends it to the daemon over
-//! its Unix Domain Socket, and renders the reply. It is separated from
+//! This module serializes protocol requests, sends them to the daemon over
+//! its Unix Domain Socket, and renders the replies. It is separated from
 //! `lib.rs` so that argument parsing remains focused and the network logic
 //! is easily testable.
 
-use comenq_lib::protocol::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Request, Response};
+use comenq_lib::protocol::{
+    HistoryEntry, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Request, Response,
+};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -158,9 +160,17 @@ async fn transact_with_timeout(
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    let response = transact(&args.socket_candidates(), &args.command.to_request()).await?;
+    let candidates = args.socket_candidates();
+    if let Command::Hist { limit } = &args.command {
+        return run_history_pages(&candidates, *limit, |history, now| {
+            let stdout = std::io::stdout();
+            render_history_reply(history, now, &mut stdout.lock())
+        })
+        .await;
+    }
+    let response = transact(&candidates, &args.command.to_request()).await?;
     let stdout = std::io::stdout();
-    render_reply(&args.command, response, &mut stdout.lock())
+    render_reply(&args.command, response, unix_now(), &mut stdout.lock())
 }
 
 /// Execute the parsed command and render its result through `writer`.
@@ -169,15 +179,67 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 /// in pipelines whose downstream consumer exits early.
 #[cfg(test)]
 async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
+    let candidates = args.socket_candidates();
+    if let Command::Hist { limit } = &args.command {
+        return run_history_pages(&candidates, *limit, |history, now| {
+            render_history_reply(history, now, writer)
+        })
+        .await;
+    }
     let request = args.command.to_request();
-    let response = transact(&args.socket_candidates(), &request).await?;
-    render_reply(&args.command, response, writer)
+    let response = transact(&candidates, &request).await?;
+    render_reply(&args.command, response, unix_now(), writer)
+}
+
+async fn run_history_pages(
+    candidates: &[PathBuf],
+    limit: Option<usize>,
+    mut render_page: impl FnMut(&[HistoryEntry], u64) -> Result<bool, ClientError>,
+) -> Result<(), ClientError> {
+    let now = unix_now();
+    let mut cursor = None;
+    let mut found_records = false;
+    loop {
+        let request = Request::Hist {
+            limit: cursor.is_none().then_some(limit).flatten(),
+            cursor,
+        };
+        let response = transact(candidates, &request).await?;
+        let (history, next_cursor) = match response {
+            Response::Error { message } => return Err(ClientError::Daemon(message)),
+            Response::Ok {
+                entry: None,
+                entries: None,
+                history: Some(history),
+                next_cursor,
+            } => (history, next_cursor),
+            _ => return Err(ClientError::UnexpectedResponse),
+        };
+        if !history.is_empty() {
+            found_records = true;
+            if !render_page(&history, now)? {
+                return Ok(());
+            }
+        }
+        if cursor.is_some() && next_cursor == cursor {
+            return Err(ClientError::UnexpectedResponse);
+        }
+        cursor = next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    if !found_records {
+        let _ = render_page(&[], now)?;
+    }
+    Ok(())
 }
 
 /// Check the daemon result and render it without holding a writer across I/O.
 fn render_reply<W: Write>(
     command: &Command,
     response: Response,
+    now: u64,
     writer: &mut W,
 ) -> Result<(), ClientError> {
     let (entry, entries, history) = match response {
@@ -186,9 +248,10 @@ fn render_reply<W: Write>(
             entry,
             entries,
             history,
+            ..
         } => (entry, entries, history),
     };
-    render_response(command, entry, entries, history, writer)
+    render_response(command, entry, entries, history, now, writer)
 }
 
 /// Render a response whose shape has already been checked against `command`.
@@ -196,7 +259,8 @@ fn render_response<W: Write>(
     command: &Command,
     entry: Option<comenq_lib::protocol::PendingEntry>,
     entries: Option<Vec<comenq_lib::protocol::PendingEntry>>,
-    history: Option<Vec<comenq_lib::protocol::HistoryEntry>>,
+    history: Option<Vec<HistoryEntry>>,
+    now: u64,
     writer: &mut W,
 ) -> Result<(), ClientError> {
     match (command, entry, entries, history) {
@@ -216,7 +280,7 @@ fn render_response<W: Write>(
             let _ = write_line(writer, &format!("Removed {id} from the queue."))?;
         }
         (Command::Hist { .. }, None, None, Some(history)) => {
-            render_history_reply(&history, writer)?;
+            render_history_reply(&history, now, writer)?;
         }
         _ => return Err(ClientError::UnexpectedResponse),
     }
@@ -242,22 +306,33 @@ fn render_list_reply<W: Write>(
 
 /// Render the posting attempts returned by `hist`.
 fn render_history_reply<W: Write>(
-    history: &[comenq_lib::protocol::HistoryEntry],
+    history: &[HistoryEntry],
+    now: u64,
     writer: &mut W,
-) -> Result<(), ClientError> {
+) -> Result<bool, ClientError> {
     if history.is_empty() {
-        let _ = write_line(writer, "No posting history recorded.")?;
-    } else {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs());
-        for record in history {
-            if !write_line(writer, &render_history_line(record, now))? {
-                break;
-            }
+        return write_line(writer, "No posting history recorded.");
+    }
+    render_history_entries(history, now, writer)
+}
+
+fn render_history_entries<W: Write>(
+    history: &[HistoryEntry],
+    now: u64,
+    writer: &mut W,
+) -> Result<bool, ClientError> {
+    for record in history {
+        if !write_line(writer, &render_history_line(record, now))? {
+            return Ok(false);
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 /// Write one line, treating a closed output pipe as successful completion.

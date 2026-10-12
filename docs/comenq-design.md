@@ -187,7 +187,7 @@ pub enum Command {
     Bust { id: String },
     Del { id: String },
     Hist {
-        #[arg(short, long)]
+        #[arg(short = 'n', long, value_name = "LIMIT")]
         limit: Option<usize>,
     },
 }
@@ -215,11 +215,13 @@ wire message.
 snake_case. `put` contains a `request` object with `owner`, `repo`,
 `pr_number`, and `body`; its optional `immediate` field defaults to `false`.
 `list` has no additional fields. `bump`, `bust`, and `del` each contain an `id`
-string. `hist` accepts an optional `limit` and returns `history` records in
-chronological order. A successful response is tagged with `"outcome":"ok"` and
-may contain an `entry` (for `put`), `entries` (for `list`), or `history` (for
-`hist`). A failed response is tagged with `"outcome":"error"` and contains a
-human-readable `message`. Absent payload fields are omitted.
+string. `hist` accepts an optional `limit` and continuation cursor, and returns
+`history` records in chronological pages over a fixed log snapshot. A
+successful response is tagged with `"outcome":"ok"` and may contain an `entry`
+(for `put`), `entries` (for `list`), or `history` (for `hist`). A history
+response includes `next_cursor` when more records remain. A failed response is
+tagged with `"outcome":"error"` and contains a human-readable `message`. Absent
+payload fields are omitted.
 
 The JSON is sent over a `tokio::net::UnixStream`. A Unix Domain Socket (UDS) is
 used for local IPC:
@@ -388,8 +390,9 @@ environment variable):
   prints `No posting history recorded.` instead of a table.
 
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
-for the store and §5 for the wire protocol) and prints a short confirmation, or
-the daemon's error message, once the single reply is received.
+for the store and §5 for the wire protocol). The client follows history cursors
+until the snapshot is complete, then renders the records; other commands print
+their confirmation or the daemon's error message after one reply.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -553,13 +556,14 @@ attempt and keeps retry ETAs paced across daemon restarts. Each entry (a
 Entries are written to a temporary sibling file and then renamed into place, so
 a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
 or remove a single entry file the same way. `complete` first writes a durable
-`completion` recovery record containing the entry identifier, claim token, and
-posting time. It then removes the matching claimed entry, atomically rewrites
-`last_post`, and clears the recovery record. `QueueStore::open` reconciles a
-record left by an interrupted completion and clears abandoned claims before the
-worker schedules entries. A completion for an entry deleted or replaced during
-the external post still records the successful post time, but cannot delete a
-replacement with a different claim.
+`completion` recovery record containing the entry identifier, claim token,
+posting time, history record and history-log offset. It then idempotently
+appends the successful attempt, removes the matching claimed entry, atomically
+rewrites `last_post`, and clears the recovery record. `QueueStore::open`
+reconciles a record left by an interrupted completion and clears abandoned
+claims before the worker schedules entries. A completion for an entry deleted
+or replaced during the external post still records the successful post time,
+but cannot delete a replacement with a different claim.
 
 The store admits at most 1,024 pending entries and caps total accounted queue
 data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
@@ -599,17 +603,20 @@ appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
 Lines: append-only, one record per line). Each `HistoryRecord` carries the
 entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
 `success`, an `error` description (present only when `success` is false), and
-the `request` that was posted or attempted. A successful post is recorded once,
-when `complete` removes the entry from the queue and updates `last_post`. A
-failed post is recorded on every retry attempt, since the entry stays queued
-and is retried after a cooldown rather than being removed; each attempt
-therefore contributes its own failure record. Writing the history record on the
-failure path can itself fail (e.g. a full disk); the worker logs that error but
-never lets it interrupt the retry loop, so a history-logging fault cannot stall
-comment posting. When the log is read back (to serve the `hist` protocol
-operation), a line that fails to deserialize is skipped with an error log
-rather than aborting the read, so one corrupt record cannot hide the rest of
-the history.
+the `request` that was posted or attempted. Each record also has an attempt ID
+used to make successful completion recovery idempotent. A successful post is
+recorded before `complete` removes the entry from the queue and updates
+`last_post`. A failed post is recorded on every retry attempt, since the entry
+stays queued and is retried after a cooldown rather than being removed; each
+attempt therefore contributes its own failure record. Writing the history
+record on the failure path can itself fail (e.g. a full disk); the worker logs
+that error but never lets it interrupt the retry loop, so a history-logging
+fault cannot stall comment posting. Appending repairs a missing final line
+delimiter before the next record. When the log is read back (to serve the
+`hist` protocol operation), malformed and oversized lines are skipped with an
+error log. Reads return bounded pages and use a fixed end offset so concurrent
+appends cannot change the records covered by an in-progress CLI request. The
+listener limits each encoded page to the 2 MiB protocol response cap.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -1111,9 +1118,9 @@ request operation:
 ```
 
 Replies use one tagged `Response` per connection. `put` replies include an
-`entry`, `list` replies include `entries`, and `hist` replies include
-`history`. Other successful operations return `{"outcome":"ok"}`, and failures
-return `{"outcome":"error","message":"..."}`.
+`entry`, `list` replies include `entries`, and `hist` replies include `history`
+and a `next_cursor` when more records remain. Other successful operations return
+`{"outcome":"ok"}`, and failures return `{"outcome":"error","message":"..."}`.
 
 ### 5.4. Historical Source for `comenq` (Client)
 

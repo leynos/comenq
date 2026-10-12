@@ -294,14 +294,7 @@ pub async fn run_worker(
         control.notify_enqueued();
         match post_comment_with_metrics(&octocrab, &entry.request, &config).await {
             Ok(()) => {
-                queue.complete(&entry.id, entry.claim_token.clone()).await?;
-                if let Err(error) = queue.record_success(&entry).await {
-                    tracing::error!(
-                        error = %error,
-                        id = %entry.id,
-                        "Failed to record the successful post in the history log",
-                    );
-                }
+                queue.complete(&entry).await?;
             }
             Err(e) => {
                 tracing::error!(

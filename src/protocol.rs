@@ -50,7 +50,19 @@ pub enum Request {
         /// Most recent records to return; `None` returns them all.
         #[serde(default)]
         limit: Option<usize>,
+        /// Position from which to continue a paged history response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<HistoryCursor>,
     },
+}
+
+/// Snapshot position for continuing a paged history response.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryCursor {
+    /// Byte offset of the next JSON line in the history log.
+    pub offset: u64,
+    /// End of the log snapshot selected by the first request.
+    pub end_offset: u64,
 }
 
 /// A pending queue entry as reported by the daemon.
@@ -107,6 +119,9 @@ pub enum Response {
         /// Past posting attempts, returned by `hist`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         history: Option<Vec<HistoryEntry>>,
+        /// Cursor for a following `hist` page, when more records remain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<HistoryCursor>,
     },
     /// The request failed; `message` explains why.
     Error {
@@ -123,6 +138,7 @@ impl Response {
             entry: None,
             entries: None,
             history: None,
+            next_cursor: None,
         }
     }
 
@@ -133,6 +149,7 @@ impl Response {
             entry: Some(entry),
             entries: None,
             history: None,
+            next_cursor: None,
         }
     }
 
@@ -143,16 +160,18 @@ impl Response {
             entry: None,
             entries: Some(entries),
             history: None,
+            next_cursor: None,
         }
     }
 
     /// Successful reply for `hist`.
     #[must_use]
-    pub fn history(history: Vec<HistoryEntry>) -> Self {
+    pub fn history(history: Vec<HistoryEntry>, next_cursor: Option<HistoryCursor>) -> Self {
         Self::Ok {
             entry: None,
             entries: None,
             history: Some(history),
+            next_cursor,
         }
     }
 
@@ -168,7 +187,7 @@ impl Response {
 #[cfg(test)]
 mod tests {
     //! Serialization round-trip tests for the client-daemon protocol.
-    use super::{HistoryEntry, PendingEntry, Request, Response};
+    use super::{HistoryCursor, HistoryEntry, PendingEntry, Request, Response};
     use crate::CommentRequest;
 
     fn sample_entry() -> PendingEntry {
@@ -226,8 +245,21 @@ mod tests {
             Request::Del {
                 id: "0011aabb".into(),
             },
-            Request::Hist { limit: None },
-            Request::Hist { limit: Some(20) },
+            Request::Hist {
+                limit: None,
+                cursor: None,
+            },
+            Request::Hist {
+                limit: Some(20),
+                cursor: None,
+            },
+            Request::Hist {
+                limit: None,
+                cursor: Some(HistoryCursor {
+                    offset: 10,
+                    end_offset: 20,
+                }),
+            },
         ] {
             let json = serde_json::to_string(&req).unwrap_or_else(|e| panic!("serialize: {e}"));
             let back: Request =
@@ -242,7 +274,14 @@ mod tests {
             Response::ok(),
             Response::entry(sample_entry()),
             Response::entries(vec![sample_entry()]),
-            Response::history(vec![sample_history()]),
+            Response::history(vec![sample_history()], None),
+            Response::history(
+                vec![sample_history()],
+                Some(HistoryCursor {
+                    offset: 10,
+                    end_offset: 20,
+                }),
+            ),
             Response::error("nope"),
         ] {
             let json = serde_json::to_string(&resp).unwrap_or_else(|e| panic!("serialize: {e}"));
@@ -272,7 +311,13 @@ mod tests {
     fn hist_defaults_to_no_limit() {
         let req: Request =
             serde_json::from_str(r#"{"op":"hist"}"#).unwrap_or_else(|e| panic!("parse: {e}"));
-        assert_eq!(req, Request::Hist { limit: None });
+        assert_eq!(
+            req,
+            Request::Hist {
+                limit: None,
+                cursor: None,
+            }
+        );
     }
 
     #[test]

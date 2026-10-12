@@ -1,9 +1,9 @@
 //! Client argument parsing, protocol requests, and safe human-readable output.
 //!
 //! [`Args`] and [`Command`] describe the `put`, `list`, `bump`, `bust`, `del`,
-//! and `hist` operations. [`run`] sends each command to the daemon as one
-//! tagged request and returns [`ClientError`] for transport, timeout,
-//! protocol, or daemon failures.
+//! and `hist` operations. [`run`] sends tagged requests to the daemon and
+//! returns [`ClientError`] for transport, timeout, protocol, or daemon
+//! failures. History requests may follow several paged replies.
 
 use clap::{Parser, Subcommand, builder::ValueHint};
 use std::{fmt, path::PathBuf, str::FromStr};
@@ -193,7 +193,10 @@ impl Command {
             Self::Bump { id } => Request::Bump { id: id.clone() },
             Self::Bust { id } => Request::Bust { id: id.clone() },
             Self::Del { id } => Request::Del { id: id.clone() },
-            Self::Hist { limit } => Request::Hist { limit: *limit },
+            Self::Hist { limit } => Request::Hist {
+                limit: *limit,
+                cursor: None,
+            },
         }
     }
 }

@@ -84,7 +84,15 @@ async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingE
 
 /// Posting history as reported through the protocol.
 async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
-    match dispatch_request(queue, Request::Hist { limit: None }).await {
+    match dispatch_request(
+        queue,
+        Request::Hist {
+            limit: None,
+            cursor: None,
+        },
+    )
+    .await
+    {
         Response::Ok {
             history: Some(history),
             ..

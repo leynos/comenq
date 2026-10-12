@@ -82,6 +82,7 @@ comenq list
 comenq bump 1a2b3c4d
 comenq bust 1a2b3c4d
 comenq del 1a2b3c4d
+comenq hist --limit 20
 ```
 
 `put` prints a deterministic eight-character identifier and an approximate ETA.
@@ -94,6 +95,14 @@ delay for a fresh `put`; it does not bypass an earlier queued entry's schedule.
 line breaks, become spaces; longer summaries end with an ellipsis. If a GitHub
 post fails, its entry remains queued and the worker retries it after a full
 configured cooldown. A successful retry removes the entry from the queue.
+
+`hist` shows posting attempts oldest first, including failed attempts that will
+be retried. Each row includes the entry identifier, attempt age, outcome,
+repository target and a one-line body summary; failures also show the error
+description. Pass `-n` or `--limit` to show only the most recent attempts while
+keeping chronological order. The daemon stores attempts as JSON Lines in
+`<queue_path>/history.jsonl`. A history write failure is logged and does not
+stop retries; unreadable lines are skipped when the history is read.
 
 The queue accepts at most 1,024 entries and 32 MiB of accounted data.
 Accounting includes each regular entry file's bytes plus its remaining mutation
@@ -127,18 +136,19 @@ The stable metric names and labels are:
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
-  `bump`, `bust`, `del`) and `outcome` labels (`accepted`, `failed`,
+  `bump`, `bust`, `del`, `hist`) and `outcome` labels (`accepted`, `failed`,
   `rejected`); requests without a parsed operation omit the `operation` label.
 - `comenqd_protocol_transaction_duration_seconds` measures complete listener
   transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
-  `bust`, `del`, and `unknown`; `outcome` is `accepted`, `failed`, `rejected`,
-  or `unknown`. `error_kind` uses fixed classifications and is `none` on
-  success.
+  `bust`, `del`, `hist`, and `unknown`; `outcome` is `accepted`, `failed`,
+  `rejected`, or `unknown`. `error_kind` uses fixed classifications and is
+  `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
-  `del`, `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
-  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
-  fixed classifications and is `none` on success.
+  `del`, `hist`, `history`, `append_history`, `next_due`, `claim`, `complete`,
+  `release`, `recover`, `metrics`, and `unknown`; `outcome` is `success`,
+  `failure`, or `unknown`. `error_kind` uses fixed classifications and is
+  `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.

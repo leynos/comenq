@@ -64,7 +64,14 @@ impl HistoryWorld {
     }
 
     async fn request_history(&mut self, limit: Option<usize>) -> anyhow::Result<()> {
-        let response = dispatch_request(self.queue()?, Request::Hist { limit }).await;
+        let response = dispatch_request(
+            self.queue()?,
+            Request::Hist {
+                limit,
+                cursor: None,
+            },
+        )
+        .await;
         match response {
             Response::Ok {
                 history: Some(history),
@@ -123,16 +130,7 @@ async fn three_comments_queued(
 #[when("the head comment is posted successfully")]
 async fn head_posted(world: &mut HistoryWorld) -> anyhow::Result<()> {
     let entry = world.head().await?;
-    world
-        .queue()?
-        .complete(&entry.id, entry.claim_token.clone())
-        .await
-        .context("complete")?;
-    world
-        .queue()?
-        .record_success(&entry)
-        .await
-        .context("record success")?;
+    world.queue()?.complete(&entry).await.context("complete")?;
     world.recorded.push(entry.id);
     Ok(())
 }
