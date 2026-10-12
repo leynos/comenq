@@ -14,7 +14,8 @@ requests. The architecture and crate choices are described in
 
 Use the provided `make` targets to manage the project:
 
-- `make build` &ndash; compile debug binaries in `target/debug/`
+- `make build` &ndash; compile a debug binary in `target/debug/` (`APP` defaults
+  to `comenq`; set `APP=comenqd` to build the daemon)
 - `make release` &ndash; produce optimized release binaries
 - `make test` &ndash; execute the full test suite
 - `make test-cov` &ndash; run workspace-wide tests with coverage and print a
@@ -29,12 +30,24 @@ Use the provided `make` targets to manage the project:
 After building, launch the daemon and queue comments with the client:
 
 ```bash
+make build APP=comenqd
 make build
 ./target/debug/comenqd &
-./target/debug/comenq owner/repo 123 "Comment body"
+./target/debug/comenq put owner/repo 123 "Comment body"
 ```
 
 Queued requests persist on disk and are posted sequentially by the daemon.
+`put` prints the comment's deterministic eight-character identifier and an
+approximate ETA. By default, a fresh comment waits one full cooldown (plus its
+flutter) from enqueue even when the queue is idle; pass `--now` to post as soon
+as the queue allows. The queue can be inspected and reordered by identifier:
+
+```bash
+./target/debug/comenq list          # schedule of pending comments with IDs and ETAs
+./target/debug/comenq bump 1a2b3c4d # move to the head of the queue
+./target/debug/comenq bust 1a2b3c4d # move to the tail of the queue
+./target/debug/comenq del 1a2b3c4d  # remove from the queue
+```
 
 ## Running as a user service
 

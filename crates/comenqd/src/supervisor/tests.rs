@@ -1,16 +1,35 @@
 //! Tests for task supervision and failure logging.
 
-use super::{log_task_failure, supervise_task};
-use ::metrics::set_default_local_recorder;
+use super::observability::log_task_restart;
+use super::{STABLE_TASK_RUN, backoff, log_task_failure, reset_backoff_after_stable_run};
+use crate::config::Config;
 use anyhow::anyhow;
-use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use rstest::rstest;
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
 use tokio::task::JoinError;
+
+/// Convert a test configuration into the runtime configuration in all builds.
+#[cfg(feature = "test-support")]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config::from(cfg)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
+    Config {
+        github_token: cfg.github_token,
+        github_token_file: None,
+        socket_path: cfg.socket_path,
+        queue_path: cfg.queue_path,
+        cooldown_period_seconds: cfg.cooldown_period_seconds,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: cfg.restart_min_delay_ms,
+        github_api_timeout_secs: cfg.github_api_timeout_secs,
+    }
+}
 
 /// In-memory writer used to capture JSON-formatted tracing events.
 #[derive(Clone, Default)]
@@ -83,106 +102,97 @@ fn logs_failures(
     }
 }
 
-/// Consecutive failures must advance the same backoff iterator.
-#[tokio::test(flavor = "current_thread")]
-async fn consecutive_failures_use_increasing_restart_delays() {
-    struct RecordingBackoff {
-        delays: Vec<Duration>,
-        observed: Arc<Mutex<Vec<Duration>>>,
-    }
+/// Verify restart events expose bounded timing and backoff decision fields.
+#[rstest]
+#[case::transient_failure(1, 250, 3_000)]
+#[case::stable_run_reset(2, 100, 60_000)]
+fn logs_restart_decisions(
+    #[case] attempt: u64,
+    #[case] selected_delay_ms: u64,
+    #[case] stable_run_duration_ms: u64,
+) {
+    use tracing_subscriber::prelude::*;
 
-    impl Iterator for RecordingBackoff {
-        type Item = Duration;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            let delay = self.delays.pop()?;
-            self.observed.lock().expect("record delay").push(delay);
-            Some(delay)
-        }
-    }
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let spawned_twice = Arc::new(Notify::new());
-    let respawn_shutdown = shutdown_rx.clone();
-    let respawn_signal = Arc::clone(&spawned_twice);
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
-    let _recorder_guard = set_default_local_recorder(&recorder);
-    let supervisor = tokio::spawn(supervise_task(
-        "worker",
-        tokio::spawn(async { Err(anyhow!("first failure")) }),
-        RecordingBackoff {
-            delays: vec![Duration::from_millis(2), Duration::from_millis(1)],
-            observed: Arc::clone(&observed),
-        },
-        move |attempt| {
-            let mut shutdown = respawn_shutdown.clone();
-            let signal = Arc::clone(&respawn_signal);
-            tokio::spawn(async move {
-                if attempt == 1 {
-                    Err(anyhow!("second failure"))
-                } else {
-                    signal.notify_one();
-                    let _ = shutdown.changed().await;
-                    Ok(())
-                }
-            })
-        },
-        shutdown_rx,
-    ));
-
-    tokio::time::timeout(Duration::from_secs(1), spawned_twice.notified())
-        .await
-        .expect("task should restart twice");
-    shutdown_tx.send(()).expect("signal shutdown");
-    supervisor.await.expect("join supervisor");
-
-    let delays = observed.lock().expect("read delays");
-    assert_eq!(
-        delays.as_slice(),
-        &[Duration::from_millis(1), Duration::from_millis(2)]
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(move || writer.clone())
+            .with_filter(tracing_subscriber::filter::LevelFilter::WARN),
     );
-    let metrics = snapshotter.snapshot().into_vec();
-    assert!(metrics.iter().any(|(key, _, _, value)| {
-        key.key().name() == "comenqd_task_restarts_total"
-            && key
-                .key()
-                .labels()
-                .any(|label| label.key() == "task" && label.value() == "worker")
-            && matches!(value, DebugValue::Counter(2))
-    }));
+    let stable_run_duration = Duration::from_millis(stable_run_duration_ms);
+    let mut restart_backoff = backoff(Duration::from_millis(100));
+    let backoff_reset = reset_backoff_after_stable_run(
+        &mut restart_backoff,
+        Duration::from_millis(100),
+        stable_run_duration,
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        log_task_restart(
+            "worker",
+            attempt,
+            Duration::from_millis(selected_delay_ms),
+            stable_run_duration,
+            backoff_reset,
+        );
+    });
+
+    let output = String::from_utf8(buffer.0.lock().expect("read buffer").clone())
+        .expect("log output is UTF-8");
+    let event: Value = serde_json::from_str(output.lines().next().expect("restart event"))
+        .expect("decode structured restart event");
+    let fields = &event["fields"];
+    assert_eq!(fields["task"], "worker");
+    assert_eq!(fields["restart_attempt"].as_u64(), Some(attempt));
+    assert_eq!(
+        fields["selected_delay_ms"].as_u64(),
+        Some(selected_delay_ms)
+    );
+    assert_eq!(
+        fields["stable_run_duration_ms"].as_u64(),
+        Some(stable_run_duration_ms)
+    );
+    assert_eq!(fields["backoff_reset"].as_bool(), Some(backoff_reset));
+    assert_eq!(fields["message"], "Restarting task after failure");
 }
 
-/// The worker must start while the queue writer holds the sender.
-///
-/// Regression test for the daemon's startup topology: the writer owns the
-/// queue's `yaque::Sender` and the worker must open only the `Receiver`.
-/// Opening a full `channel()` on both sides contends for yaque's per-side
-/// lock files and left the worker in a permanent restart loop.
+/// Reset the delay sequence exactly when a task reaches the stable-run floor.
+#[rstest]
+#[case::transient(59, false)]
+#[case::stable(STABLE_TASK_RUN.as_secs(), true)]
+fn stable_run_controls_backoff_reset(#[case] seconds: u64, #[case] expected_reset: bool) {
+    let mut restart_backoff = backoff(Duration::from_secs(1));
+    let was_reset = reset_backoff_after_stable_run(
+        &mut restart_backoff,
+        Duration::from_secs(1),
+        Duration::from_secs(seconds),
+    );
+
+    assert_eq!(was_reset, expected_reset);
+}
+
+/// The worker starts against the shared queue and shuts down cleanly.
 #[rstest]
 #[tokio::test]
-async fn worker_starts_while_writer_holds_the_sender() {
+async fn worker_starts_and_stops_cleanly() {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let cfg: std::sync::Arc<crate::config::Config> =
-        std::sync::Arc::new(test_support::temp_config(&dir).into());
+    let cfg = std::sync::Arc::new(cfg_from(test_support::temp_config(&dir)));
     super::ensure_queue_dir(&cfg.queue_path)
         .await
         .expect("create queue dir");
-    let _sender = yaque::Sender::open(&cfg.queue_path).expect("open queue sender");
-
+    let queue = crate::queue::SharedQueue::open(cfg).expect("open shared queue");
     let octocrab =
         std::sync::Arc::new(crate::worker::build_octocrab("token").expect("build octocrab"));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    let handle = super::spawn_worker(cfg, octocrab, shutdown_rx, 0);
+    let handle = super::spawn_worker(queue, octocrab, shutdown_rx);
     shutdown_tx.send(()).expect("signal shutdown");
 
     let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
         .await
         .expect("worker should exit promptly")
         .expect("worker task should not panic");
-    assert!(
-        res.is_ok(),
-        "worker must open the queue receiver while the sender is held: {res:?}"
-    );
+    assert!(res.is_ok(), "worker must exit cleanly on shutdown: {res:?}");
 }
+
+mod restart;

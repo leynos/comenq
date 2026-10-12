@@ -25,3 +25,24 @@ where
         ),
     }
 }
+
+/// Record the retry selected after a failed supervised task.
+///
+/// `restart_attempt` is one-based and counts failure-driven restart decisions;
+/// it is not reset when a stable run resets the delay backoff.
+pub(super) fn log_task_restart(
+    task: &str,
+    restart_attempt: u64,
+    selected_delay: std::time::Duration,
+    stable_run_duration: std::time::Duration,
+    backoff_reset: bool,
+) {
+    tracing::warn!(
+        task,
+        restart_attempt,
+        selected_delay_ms = u64::try_from(selected_delay.as_millis()).unwrap_or(u64::MAX),
+        stable_run_duration_ms = u64::try_from(stable_run_duration.as_millis()).unwrap_or(u64::MAX),
+        backoff_reset,
+        "Restarting task after failure",
+    );
+}

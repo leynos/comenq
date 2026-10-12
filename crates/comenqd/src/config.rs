@@ -22,8 +22,6 @@ const DEFAULT_COOLDOWN_FLUTTER: u64 = 0;
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 /// Default timeout in seconds for GitHub API calls.
 const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
-/// Default capacity for the listener channel buffering client requests.
-const DEFAULT_CLIENT_CHANNEL_CAPACITY: usize = 1024;
 /// Largest credential file accepted at daemon startup, in bytes.
 const MAX_GITHUB_TOKEN_FILE_BYTES: usize = 64 * 1024;
 
@@ -63,9 +61,9 @@ pub struct Config {
     pub cooldown_period_seconds: u64,
     /// Maximum random flutter added to each cooldown, in seconds.
     ///
-    /// After every post the worker waits the full cooldown plus a fresh
-    /// uniformly random duration between zero and this value. Flutter only
-    /// ever lengthens the wait; zero (the default) disables it.
+    /// The daemon samples flutter once when it enqueues an entry and stores
+    /// the value with that entry. It only lengthens the cooldown-derived ETA;
+    /// zero (the default) disables flutter.
     #[serde(default = "default_cooldown_flutter")]
     pub cooldown_flutter_seconds: u64,
     /// Minimum delay in milliseconds applied between task restarts.
@@ -74,9 +72,6 @@ pub struct Config {
     /// Timeout applied to GitHub API requests in seconds.
     #[serde(default = "default_github_api_timeout_secs")]
     pub github_api_timeout_secs: u64,
-    /// Capacity of the channel buffering client requests.
-    #[serde(default = "default_client_channel_capacity")]
-    pub client_channel_capacity: usize,
 }
 
 /// Convert a [`test_support::daemon::TestConfig`] into a [`Config`].
@@ -104,7 +99,6 @@ impl From<test_support::daemon::TestConfig> for Config {
             cooldown_period_seconds,
             restart_min_delay_ms,
             github_api_timeout_secs,
-            client_channel_capacity,
         } = value;
         Self {
             github_token,
@@ -115,7 +109,6 @@ impl From<test_support::daemon::TestConfig> for Config {
             cooldown_flutter_seconds: DEFAULT_COOLDOWN_FLUTTER,
             restart_min_delay_ms,
             github_api_timeout_secs,
-            client_channel_capacity,
         }
     }
 }
@@ -155,7 +148,6 @@ impl From<&test_support::daemon::TestConfig> for Config {
             cooldown_flutter_seconds: DEFAULT_COOLDOWN_FLUTTER,
             restart_min_delay_ms: value.restart_min_delay_ms,
             github_api_timeout_secs: value.github_api_timeout_secs,
-            client_channel_capacity: value.client_channel_capacity,
         }
     }
 }
@@ -209,11 +201,6 @@ fn default_restart_min_delay_ms() -> u64 {
 fn default_github_api_timeout_secs() -> u64 {
     DEFAULT_GITHUB_API_TIMEOUT_SECS
 }
-
-fn default_client_channel_capacity() -> usize {
-    DEFAULT_CLIENT_CHANNEL_CAPACITY
-}
-
 impl Config {
     /// Default location of the daemon configuration file.
     pub const DEFAULT_PATH: &'static str = "/etc/comenqd/config.toml";
