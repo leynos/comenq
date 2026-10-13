@@ -25,8 +25,8 @@ fn history_records_round_trip_in_order_across_pages() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
-    let success = HistoryRecord::success(&entry, 1_600);
-    let failure = HistoryRecord::failure(&entry, 2_200, "timeout");
+    let success = HistoryRecord::success(&entry, "", 1_600);
+    let failure = HistoryRecord::failure(&entry, "", 2_200, "timeout");
     store.append_history(&success).expect("append success");
     store.append_history(&failure).expect("append failure");
 
@@ -42,18 +42,41 @@ fn history_records_round_trip_in_order_across_pages() {
 }
 
 #[rstest]
+fn history_records_without_token_hash_remain_readable() {
+    let mut legacy = serde_json::to_value(HistoryRecord {
+        attempt_id: "legacy-attempt".into(),
+        id: "0011aabb".into(),
+        posted_at: 1_600,
+        success: true,
+        error: None,
+        token_hash: "old-hash".into(),
+        request: request("legacy"),
+    })
+    .expect("serialize history record");
+    legacy
+        .as_object_mut()
+        .expect("history record object")
+        .remove("token_hash");
+
+    let record: HistoryRecord = serde_json::from_value(legacy).expect("read legacy record");
+
+    assert_eq!(record.attempt_id, "legacy-attempt");
+    assert!(record.token_hash.is_empty());
+}
+
+#[rstest]
 fn history_skips_malformed_lines() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
     store
-        .append_history(&HistoryRecord::success(&entry, 1_600))
+        .append_history(&HistoryRecord::success(&entry, "", 1_600))
         .expect("append success");
     let log = dir.path().join("history.jsonl");
     let mut text = fs::read(&log).expect("read log");
     text.extend_from_slice(b"not json\ninvalid\xFFjson\n");
     fs::write(&log, text).expect("corrupt log");
-    let failure = HistoryRecord::failure(&entry, 2_200, "timeout");
+    let failure = HistoryRecord::failure(&entry, "", 2_200, "timeout");
     store.append_history(&failure).expect("append failure");
 
     let records = read_all(&store, None, 1);
@@ -69,7 +92,7 @@ fn appending_after_an_unterminated_partial_record_preserves_the_new_record() {
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
     fs::write(dir.path().join("history.jsonl"), b"{partial record").expect("write partial tail");
-    let expected = HistoryRecord::failure(&entry, 2_200, "timeout");
+    let expected = HistoryRecord::failure(&entry, "", 2_200, "timeout");
 
     store
         .append_history(&expected)
@@ -87,7 +110,7 @@ fn skipping_an_oversized_line_does_not_hide_the_following_record() {
     let mut text = vec![b'x'; 2 * 1024 * 1024 + 1];
     text.push(b'\n');
     fs::write(&log, text).expect("write oversized line");
-    let expected = HistoryRecord::failure(&entry, 2_200, "timeout");
+    let expected = HistoryRecord::failure(&entry, "", 2_200, "timeout");
 
     store
         .append_history(&expected)
@@ -101,9 +124,9 @@ fn history_cursor_keeps_the_initial_snapshot_when_new_records_are_appended() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
-    let first = HistoryRecord::success(&entry, 1_600);
-    let second = HistoryRecord::success(&entry, 2_200);
-    let later = HistoryRecord::success(&entry, 2_800);
+    let first = HistoryRecord::success(&entry, "", 1_600);
+    let second = HistoryRecord::success(&entry, "", 2_200);
+    let later = HistoryRecord::success(&entry, "", 2_800);
     store.append_history(&first).expect("append first");
     store.append_history(&second).expect("append second");
 
@@ -133,7 +156,7 @@ fn recent_history_limit_is_applied_before_paginated_reads() {
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
     let expected: Vec<_> = (0..6)
-        .map(|attempt| HistoryRecord::success(&entry, 1_600 + attempt))
+        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt))
         .collect();
     for record in &expected {
         store.append_history(record).expect("append record");
@@ -151,7 +174,7 @@ fn recent_history_scan_crosses_chunk_boundaries() {
         .put(request(&body), &immediate(0), 1_000)
         .expect("put");
     let expected: Vec<_> = (0..12)
-        .map(|attempt| HistoryRecord::success(&entry, 1_600 + attempt))
+        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt))
         .collect();
     for record in &expected {
         store.append_history(record).expect("append record");
@@ -173,7 +196,7 @@ proptest! {
         let store = open_store(&dir);
         let entry = store.put(request("generated"), &immediate(0), 1_000).expect("put");
         let expected: Vec<_> = (0..record_count)
-            .map(|attempt| HistoryRecord::success(&entry, 2_000 + attempt as u64))
+            .map(|attempt| HistoryRecord::success(&entry, "", 2_000 + attempt as u64))
             .collect();
         for record in &expected {
             store.append_history(record).expect("append record");

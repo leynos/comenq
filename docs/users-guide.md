@@ -44,14 +44,30 @@ configuration selects through `github_token_file`. This keeps the PAT out of
 the unit and process environment.
 
 Credential values follow the daemon's configuration precedence. An explicit
-`--github-token` value wins over every other source. If that option is absent,
-`--github-token-file` overrides the `github_token_file` path supplied by
-`COMENQD_GITHUB_TOKEN_FILE` or the configuration file; the selected file's
-trimmed contents then override `github_token`. If no file is selected, the
-inline token from the CLI, environment, or configuration file is used. Startup
-fails when no token source is configured, when the selected token file cannot
-be read, or when its trimmed contents are empty (including a whitespace-only
-file). Token files larger than 64 KiB are also rejected.
+`--github-token` value wins over every other source. Without it,
+`--github-token-file` selects one file and clears any configured rotation pool.
+Otherwise, a non-empty `github_token_files` list takes precedence over
+`github_token_file` and `github_token`; the daemon reads those files in list
+order and rotates posts through them. If the list is empty, `github_token_file`
+overrides the inline token. A selected pool or file must be readable and
+contain non-empty trimmed contents. Every token file is limited to 64 KiB.
+Leading `${VAR}` placeholders in file paths expand from the daemon environment,
+including paths under systemd's `CREDENTIALS_DIRECTORY`.
+
+To rotate posts across multiple identities, store one PAT in each restricted
+file and list the files in the order the daemon must use them:
+
+```toml
+github_token_files = [
+  "/home/user/pandalump-token",
+  "/home/user/buzzybee-token",
+]
+```
+
+The latest posting-history record determines the next token, including after a
+restart. An empty or unreadable history, or a hash that no longer matches the
+configured pool, starts with the first token. Existing single-token settings
+continue to act as a pool of one.
 
 To select a token file explicitly, use the `--github-token-file FILE` form:
 
@@ -60,8 +76,8 @@ comenqd --config /etc/comenqd/config.toml \
   --github-token-file /run/credentials/comenqd/token
 ```
 
-The file path overrides any configured token-file path; `--github-token` still
-wins if both options are supplied.
+The file path overrides configured single-token paths and a token pool;
+`--github-token` still wins if both CLI options are supplied.
 
 ## Connect the client
 
@@ -97,12 +113,14 @@ post fails, its entry remains queued and the worker retries it after a full
 configured cooldown. A successful retry removes the entry from the queue.
 
 `hist` shows posting attempts oldest first, including failed attempts that will
-be retried. Each row includes the entry identifier, attempt age, outcome,
-repository target and a one-line body summary; failures also show the error
-description. Pass `-n` or `--limit` to show only the most recent attempts while
-keeping chronological order. The daemon stores attempts as JSON Lines in
-`<queue_path>/history.jsonl`. A history write failure is logged and does not
-stop retries; unreadable lines are skipped when the history is read.
+be retried. Each row includes the entry identifier, attempt age, outcome, the
+first eight characters of the posting token's SHA-256 hash, repository target
+and a one-line body summary; failures also show the error description. Older
+records without a token hash display `--------`. Pass `-n` or `--limit` to show
+only the most recent attempts while keeping chronological order. The daemon
+stores attempts as JSON Lines in `<queue_path>/history.jsonl`. A history write
+failure is logged and does not stop retries; unreadable lines are skipped when
+the history is read.
 
 The queue accepts at most 1,024 entries and 32 MiB of accounted data.
 Accounting includes each regular entry file's bytes plus its remaining mutation
@@ -145,10 +163,10 @@ The stable metric names and labels are:
   `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
-  `del`, `hist`, `history`, `append_history`, `next_due`, `claim`, `complete`,
-  `release`, `recover`, `metrics`, and `unknown`; `outcome` is `success`,
-  `failure`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `del`, `hist`, `history`, `append_history`, `latest_history_token`,
+  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
+  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
+  fixed classifications and is `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
@@ -173,4 +191,5 @@ the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
 [Comenq design](comenq-design.md). For an existing deployment, see
-[Migrate to 0.1.0](migration-0.1.0.md).
+[Migrate to 0.1.0](migration-0.1.0.md) and
+[Migrate to 0.2.0](migration-0.2.0.md).

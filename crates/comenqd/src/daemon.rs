@@ -10,10 +10,14 @@ pub use crate::supervisor::SupervisorError as DaemonError;
 pub use crate::supervisor::ensure_queue_dir;
 /// Run the daemon orchestration loop.
 pub use crate::supervisor::run;
+/// Run the daemon using a token pool resolved during configuration loading.
+pub use crate::supervisor::run_with_tokens;
 
 /// Shared queue state used by the listener and worker.
 pub use crate::queue::SharedQueue;
 
+/// GitHub client metadata used by the worker's token rotation pool.
+pub use crate::worker::TokenClient;
 /// Control handle for the worker task.
 pub use crate::worker::WorkerControl;
 /// Lifecycle hooks exposed to test and test-support builds.
@@ -21,6 +25,8 @@ pub use crate::worker::WorkerControl;
 pub use crate::worker::WorkerHooks;
 /// Run the worker that drains the queue and talks to the GitHub API.
 pub use crate::worker::run_worker;
+/// Hex-encoded SHA-256 token identifier used in posting history.
+pub use crate::worker::token_hash;
 
 pub mod listener {
     //! Listener utilities for accepting client connections.

@@ -16,7 +16,7 @@ async fn main() -> color_eyre::Result<()> {
     if let Err(error) = comenqd::metrics::install_prometheus() {
         warn!(error = %error, "Prometheus metrics exporter unavailable");
     }
-    let cfg = tokio::task::spawn_blocking(Config::load)
+    let (cfg, tokens) = tokio::task::spawn_blocking(Config::load_with_tokens)
         .await
         .context("configuration loading task failed")??;
     info!(
@@ -24,7 +24,7 @@ async fn main() -> color_eyre::Result<()> {
         queue = ?cfg.queue_path,
         "Comenqd daemon started"
     );
-    daemon::run(cfg)
+    daemon::run_with_tokens(cfg, tokens)
         .await
         .context("daemon exited unexpectedly")?;
     Ok(())

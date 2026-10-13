@@ -31,6 +31,7 @@ fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
     Config {
         github_token: cfg.github_token,
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: cfg.socket_path,
         queue_path: cfg.queue_path,
         cooldown_period_seconds: cfg.cooldown_period_seconds,

@@ -1,0 +1,181 @@
+//! Behavioural test steps for round-robin token rotation.
+//!
+//! Extends the worker scenarios with a two-token pool, asserting that
+//! posts alternate tokens and that rotation resumes from the hash the
+//! latest history record carries.
+
+use anyhow::Context as _;
+use comenqd::daemon::token_hash;
+use cucumber::{given, then};
+use std::fs;
+
+use super::worker_steps::{WorkerWorld, listed_history};
+
+/// Rotation pool used by the token scenarios, in configured order.
+pub(crate) const ROTATION_TOKENS: [(&str, &str); 2] = [
+    ("pandalump-token", "alpha-token"),
+    ("buzzybee-token", "bravo-token"),
+];
+
+#[given("two GitHub tokens are configured")]
+fn two_tokens_configured(world: &mut WorkerWorld) {
+    world.tokens = ROTATION_TOKENS
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+}
+
+#[given("the history already records a post with the second token")]
+fn history_seeded_with_second_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    seed_history_with_token(world, 1)
+}
+
+#[given("the history already records a post with the first token")]
+fn history_seeded_with_first_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    seed_history_with_token(world, 0)
+}
+
+fn seed_history_with_token(world: &WorkerWorld, token_index: usize) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?;
+    let (_, token_value) = ROTATION_TOKENS
+        .get(token_index)
+        .context("rotation token index")?;
+    let record = serde_json::json!({
+        "attempt_id": "seeded-attempt",
+        "id": "deadbeef",
+        "posted_at": 1,
+        "success": true,
+        "error": null,
+        "token_hash": token_hash(token_value),
+        "request": {
+            "owner": "o",
+            "repo": "r",
+            "pr_number": 1,
+            "body": "earlier"
+        }
+    });
+    fs::write(
+        queue.config().queue_path.join("history.jsonl"),
+        format!("{record}\n"),
+    )
+    .context("seed history")?;
+    Ok(())
+}
+
+#[then("the posting history alternates between the two tokens")]
+async fn history_alternates(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    let hashes: Vec<&str> = history
+        .iter()
+        .map(|record| record.token_hash.as_str())
+        .collect();
+    let expected: Vec<String> = ROTATION_TOKENS
+        .iter()
+        .map(|(_, value)| token_hash(value))
+        .collect();
+    assert_eq!(
+        hashes,
+        expected.iter().map(String::as_str).collect::<Vec<_>>(),
+        "the first post should use the first token, the second the next"
+    );
+    let server = world
+        .server
+        .as_ref()
+        .context("server should be initialized")?;
+    let auth_headers: Vec<String> = server
+        .received_requests()
+        .await
+        .context("inbound requests should be recorded")?
+        .iter()
+        .map(|request| {
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(auth_headers.len(), 2, "both posts should reach GitHub");
+    let expected_headers: Vec<String> = ROTATION_TOKENS
+        .iter()
+        .map(|(_, value)| format!("Bearer {value}"))
+        .collect();
+    assert_eq!(
+        auth_headers, expected_headers,
+        "posts should use the configured tokens in order"
+    );
+    world.shutdown_and_join().await;
+    Ok(())
+}
+
+#[then("the newest history record uses the first token")]
+async fn newest_record_uses_first_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    let newest = history.last().context("history should hold records")?;
+    let (_, first_value) = ROTATION_TOKENS.first().context("first rotation token")?;
+    assert_eq!(
+        newest.token_hash,
+        token_hash(first_value),
+        "rotation should wrap from the second token back to the first"
+    );
+    let server = world
+        .server
+        .as_ref()
+        .context("server should be initialized")?;
+    let requests = server
+        .received_requests()
+        .await
+        .context("inbound requests should be recorded")?;
+    assert_eq!(requests.len(), 1, "one post should reach GitHub");
+    let authorization = requests
+        .first()
+        .context("GitHub request should be recorded")?
+        .headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .context("GitHub request should carry Authorization")?;
+    assert_eq!(
+        authorization,
+        format!("Bearer {first_value}"),
+        "the request should wrap to the first configured token"
+    );
+    Ok(())
+}
+
+#[then("the newest history record uses the second token")]
+async fn newest_record_uses_second_token(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    let queue = world.queue.as_ref().context("queue initialized")?.clone();
+    let history = listed_history(&queue).await?;
+    let newest = history.last().context("history should hold records")?;
+    let (_, second_value) = ROTATION_TOKENS.get(1).context("second rotation token")?;
+    assert_eq!(
+        newest.token_hash,
+        token_hash(second_value),
+        "rotation should select the successor of the first token"
+    );
+    let server = world
+        .server
+        .as_ref()
+        .context("server should be initialized")?;
+    let requests = server
+        .received_requests()
+        .await
+        .context("inbound requests should be recorded")?;
+    assert_eq!(requests.len(), 1, "one post should reach GitHub");
+    let authorization = requests
+        .first()
+        .context("GitHub request should be recorded")?
+        .headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .context("GitHub request should carry Authorization")?;
+    assert_eq!(
+        authorization,
+        format!("Bearer {second_value}"),
+        "the request should use the token selected from history"
+    );
+    Ok(())
+}

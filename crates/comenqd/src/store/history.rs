@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 use super::{Result, StoredEntry};
 
+mod logging;
 mod recent;
+use logging::{log_malformed, log_oversized};
 
 /// Bound error text so one failed attempt always fits within a history page.
 const MAX_HISTORY_ERROR_BYTES: usize = 64 * 1024;
@@ -34,33 +36,45 @@ pub(crate) struct HistoryRecord {
     /// Failure description when `success` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Hex SHA-256 of the token that made the attempt.
+    ///
+    /// Missing values identify records written before token rotation existed.
+    #[serde(default)]
+    pub token_hash: String,
     /// The comment that was posted (or attempted).
     pub request: CommentRequest,
 }
 
 impl HistoryRecord {
-    /// Record a successful post of `entry` at `posted_at`.
+    /// Record a successful post of `entry` using `token_hash`.
     #[must_use]
-    pub(crate) fn success(entry: &StoredEntry, posted_at: u64) -> Self {
+    pub(crate) fn success(entry: &StoredEntry, token_hash: &str, posted_at: u64) -> Self {
         Self {
             attempt_id: Uuid::new_v4().to_string(),
             id: entry.id.clone(),
             posted_at,
             success: true,
             error: None,
+            token_hash: token_hash.to_owned(),
             request: entry.request.clone(),
         }
     }
 
-    /// Record a failed posting attempt of `entry` at `posted_at`.
+    /// Record a failed posting attempt of `entry` using `token_hash`.
     #[must_use]
-    pub(crate) fn failure(entry: &StoredEntry, posted_at: u64, error: impl Into<String>) -> Self {
+    pub(crate) fn failure(
+        entry: &StoredEntry,
+        token_hash: &str,
+        posted_at: u64,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             attempt_id: Uuid::new_v4().to_string(),
             id: entry.id.clone(),
             posted_at,
             success: false,
             error: Some(bounded_error(error.into())),
+            token_hash: token_hash.to_owned(),
             request: entry.request.clone(),
         }
     }
@@ -366,23 +380,6 @@ fn contains_attempt(path: &Path, attempt_id: &str, search_from: u64) -> Result<b
         }
     }
     Ok(false)
-}
-
-fn log_malformed(path: &Path, offset: u64, error: &serde_json::Error) {
-    tracing::error!(
-        path = %path.display(),
-        offset,
-        error = %error,
-        "Skipping unreadable history record"
-    );
-}
-
-fn log_oversized(path: &Path, offset: u64) {
-    tracing::error!(
-        path = %path.display(),
-        offset,
-        "Skipping oversized history record"
-    );
 }
 
 fn invalid_position() -> io::Error {

@@ -120,11 +120,18 @@ pub fn format_age(seconds: u64) -> String {
 pub(crate) fn render_history(entry: &HistoryEntry, now: u64) -> String {
     let age = format_age(now.saturating_sub(entry.posted_at));
     let status = if entry.success { "ok" } else { "FAIL" };
+    let token_hash: String = entry.token_hash.chars().take(8).collect();
+    let token_hash = if token_hash.is_empty() {
+        "--------".to_owned()
+    } else {
+        terminal_safe(&token_hash)
+    };
     let mut line = format!(
-        "{}  {:>11}  {:<4}  {}/{}#{}  {}",
+        "{}  {:>11}  {:<4}  {}  {}/{}#{}  {}",
         terminal_safe(&entry.id),
         age,
         status,
+        token_hash,
         terminal_safe(&entry.owner),
         terminal_safe(&entry.repo),
         entry.pr_number,
@@ -203,6 +210,7 @@ mod tests {
             posted_at: 1_000,
             success,
             error: error.map(str::to_owned),
+            token_hash: "0123456789abcdef".repeat(4),
             owner: "octocat".into(),
             repo: "hello-world".into(),
             pr_number: 7,
@@ -237,7 +245,18 @@ mod tests {
     fn renders_successful_history_line() {
         assert_eq!(
             render_history(&history(true, None), 1_150),
-            "1a2b3c4d   2m 30s ago  ok    octocat/hello-world#7  Hi there"
+            "1a2b3c4d   2m 30s ago  ok    01234567  octocat/hello-world#7  Hi there"
+        );
+    }
+
+    #[rstest]
+    fn renders_legacy_history_line_without_token_hash() {
+        let mut entry = history(true, None);
+        entry.token_hash.clear();
+
+        assert_eq!(
+            render_history(&entry, 1_150),
+            "1a2b3c4d   2m 30s ago  ok    --------  octocat/hello-world#7  Hi there"
         );
     }
 
@@ -245,7 +264,7 @@ mod tests {
     fn renders_failed_history_line_with_error() {
         assert_eq!(
             render_history(&history(false, Some("timeout\nafter 10s")), 1_045),
-            "1a2b3c4d      45s ago  FAIL  octocat/hello-world#7  Hi there — timeout after 10s"
+            "1a2b3c4d      45s ago  FAIL  01234567  octocat/hello-world#7  Hi there — timeout after 10s"
         );
     }
 

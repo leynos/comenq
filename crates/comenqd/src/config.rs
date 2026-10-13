@@ -6,8 +6,16 @@
 use clap::Parser;
 use figment::providers::Env;
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
+
+mod single_token;
+mod token_resolution;
+mod tokens;
+pub use tokens::NamedToken;
+
+#[cfg(test)]
+use single_token::MAX_GITHUB_TOKEN_FILE_BYTES;
 
 /// Default queue directory when none is provided.
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/comenq/queue";
@@ -22,9 +30,6 @@ const DEFAULT_COOLDOWN_FLUTTER: u64 = 0;
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 /// Default timeout in seconds for GitHub API calls.
 const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
-/// Largest credential file accepted at daemon startup, in bytes.
-const MAX_GITHUB_TOKEN_FILE_BYTES: usize = 64 * 1024;
-
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 pub struct Config {
@@ -46,6 +51,13 @@ pub struct Config {
     /// `github_token_file = "${CREDENTIALS_DIRECTORY}/token"`.
     #[serde(default)]
     pub github_token_file: Option<PathBuf>,
+    /// Ordered paths to files containing the GitHub token rotation pool.
+    ///
+    /// When non-empty, each file must contain one non-empty token and the
+    /// worker rotates through them in this order. This setting takes
+    /// precedence over the single-token settings.
+    #[serde(default)]
+    pub github_token_files: Vec<PathBuf>,
     /// Path to the Unix Domain Socket.
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
@@ -103,6 +115,7 @@ impl From<test_support::daemon::TestConfig> for Config {
         Self {
             github_token,
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path,
             queue_path,
             cooldown_period_seconds,
@@ -142,6 +155,7 @@ impl From<&test_support::daemon::TestConfig> for Config {
         Self {
             github_token: value.github_token.clone(),
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path: value.socket_path.clone(),
             queue_path: value.queue_path.clone(),
             cooldown_period_seconds: value.cooldown_period_seconds,
@@ -221,6 +235,25 @@ impl Config {
         Self::from_file_with_cli(&args.config, &args)
     }
 
+    /// Load runtime configuration and resolve its GitHub token pool once.
+    ///
+    /// The daemon entry point passes the returned tokens to the supervisor so
+    /// startup validation and client construction use the same file contents.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use comenqd::config::Config;
+    /// let (config, tokens) = Config::load_with_tokens().expect("load daemon config");
+    /// assert!(!tokens.is_empty());
+    /// println!("{}", config.socket_path.display());
+    /// ```
+    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
+    pub fn load_with_tokens() -> Result<(Self, Vec<NamedToken>), ortho_config::OrthoError> {
+        let args = CliArgs::parse();
+        Self::from_file_with_cli_and_tokens(&args.config, &args)
+    }
+
     /// Test-only helper that loads the configuration from the specified path,
     /// merging `COMENQD_*` environment variables and CLI arguments over file
     /// values.
@@ -247,6 +280,14 @@ impl Config {
 
     #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     fn from_file_with_cli(path: &Path, cli: &CliArgs) -> Result<Self, ortho_config::OrthoError> {
+        Self::from_file_with_cli_and_tokens(path, cli).map(|(config, _)| config)
+    }
+
+    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
+    fn from_file_with_cli_and_tokens(
+        path: &Path,
+        cli: &CliArgs,
+    ) -> Result<(Self, Vec<NamedToken>), ortho_config::OrthoError> {
         let mut fig = ortho_config::load_config_file(path)?.ok_or_else(|| {
             ortho_config::OrthoError::File {
                 path: path.to_path_buf(),
@@ -261,8 +302,8 @@ impl Config {
         let mut cfg: Self = fig.extract().map_err(ortho_config::OrthoError::from)?;
 
         Self::apply_cli_overrides(&mut cfg, cli);
-        cfg.resolve_github_token(cli.github_token.is_some())?;
-        Ok(cfg)
+        let tokens = cfg.resolve_github_token(cli.github_token.is_some())?;
+        Ok((cfg, tokens))
     }
 
     /// Apply command-line values that explicitly override loaded configuration.
@@ -272,6 +313,7 @@ impl Config {
         }
         if let Some(file) = &cli.github_token_file {
             cfg.github_token_file = Some(file.clone());
+            cfg.github_token_files.clear();
         }
         if let Some(socket) = &cli.socket_path {
             cfg.socket_path = socket.clone();
@@ -286,99 +328,6 @@ impl Config {
             cfg.github_api_timeout_secs = secs;
         }
     }
-
-    /// Resolve the effective GitHub token, reading `github_token_file` when
-    /// set and validating that a non-empty token is available.
-    #[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-    #[tracing::instrument(skip(self))]
-    fn resolve_github_token(
-        &mut self,
-        has_cli_token: bool,
-    ) -> Result<(), ortho_config::OrthoError> {
-        if !has_cli_token && let Some(file) = &self.github_token_file {
-            let path = expand_env_prefix(file)?;
-            tracing::debug!(
-                credential_source = "file",
-                path = %path.display(),
-                "Loading GitHub credential",
-            );
-            let token = read_github_token_file(&path)?;
-            let token = token.trim();
-            if token.is_empty() {
-                return Err(ortho_config::OrthoError::Validation {
-                    key: "github_token_file".into(),
-                    message: format!("token file {} is empty", path.display()),
-                });
-            }
-            self.github_token = token.to_owned();
-        } else if has_cli_token {
-            tracing::debug!(credential_source = "cli", "Using GitHub credential");
-        } else {
-            tracing::debug!(
-                credential_source = "configuration",
-                "Using GitHub credential"
-            );
-        }
-        if self.github_token.trim().is_empty() {
-            return Err(ortho_config::OrthoError::Validation {
-                key: "github_token".into(),
-                message: "provide github_token or github_token_file".into(),
-            });
-        }
-        Ok(())
-    }
-}
-
-/// Read a GitHub credential without allowing an unbounded startup allocation.
-#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-fn read_github_token_file(path: &Path) -> Result<String, ortho_config::OrthoError> {
-    let file = std::fs::File::open(path).map_err(|source| ortho_config::OrthoError::File {
-        path: path.to_path_buf(),
-        source: Box::new(source),
-    })?;
-    let mut contents = String::with_capacity(MAX_GITHUB_TOKEN_FILE_BYTES);
-    file.take((MAX_GITHUB_TOKEN_FILE_BYTES + 1) as u64)
-        .read_to_string(&mut contents)
-        .map_err(|source| ortho_config::OrthoError::File {
-            path: path.to_path_buf(),
-            source: Box::new(source),
-        })?;
-    if contents.len() > MAX_GITHUB_TOKEN_FILE_BYTES {
-        return Err(ortho_config::OrthoError::Validation {
-            key: "github_token_file".into(),
-            message: format!(
-                "token file {} exceeds {MAX_GITHUB_TOKEN_FILE_BYTES} bytes",
-                path.display()
-            ),
-        });
-    }
-    Ok(contents)
-}
-
-/// Expand a leading `${VAR}` placeholder in `path` from the environment.
-///
-/// Only a placeholder at the very start of the path is expanded; paths
-/// without one are returned unchanged. An unset variable or a malformed
-/// placeholder is an error so misconfiguration fails loudly at startup.
-#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-fn expand_env_prefix(path: &Path) -> Result<PathBuf, ortho_config::OrthoError> {
-    let Some(text) = path.to_str() else {
-        return Ok(path.to_path_buf());
-    };
-    let Some(rest) = text.strip_prefix("${") else {
-        return Ok(path.to_path_buf());
-    };
-    let Some((var, tail)) = rest.split_once('}') else {
-        return Err(ortho_config::OrthoError::Validation {
-            key: "github_token_file".into(),
-            message: format!("unterminated environment placeholder in '{text}'"),
-        });
-    };
-    let value = std::env::var(var).map_err(|_| ortho_config::OrthoError::Validation {
-        key: "github_token_file".into(),
-        message: format!("environment variable '{var}' is not set"),
-    })?;
-    Ok(PathBuf::from(format!("{value}{tail}")))
 }
 
 #[cfg(test)]

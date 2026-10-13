@@ -2,13 +2,15 @@
 //! shutdown waits.
 
 use super::{
-    Notify, WorkerControl, WorkerHooks, retry_deadline, run_worker, wait_for_retry_deadline,
+    Notify, TokenClient, WorkerControl, WorkerHooks, retry_deadline, run_worker,
+    wait_for_retry_deadline,
 };
 use crate::config::Config;
 use crate::listener::dispatch_request;
 use crate::queue::SharedQueue;
 use comenq_lib::CommentRequest;
 use comenq_lib::protocol::Request;
+use octocrab::Octocrab;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -20,8 +22,14 @@ use tokio::time::Instant;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+mod history_unavailable;
 mod post_span;
 mod scheduling;
+mod token_rotation;
+
+pub(super) fn client_pool(octocrab: Arc<Octocrab>) -> Arc<Vec<TokenClient>> {
+    Arc::new(vec![TokenClient::new("default", "t", octocrab)])
+}
 
 #[test]
 fn overflowing_retry_cooldown_uses_a_far_future_deadline() {
@@ -154,7 +162,7 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {
@@ -182,79 +190,6 @@ async fn restarted_worker_recovers_a_claim_on_the_shared_queue() {
         .await
         .expect("worker task should not panic")
         .expect("worker should exit cleanly");
-}
-
-#[tokio::test]
-async fn failed_post_retries_after_a_full_cooldown_when_history_is_unavailable() {
-    let dir = tempdir().expect("create temporary queue directory");
-    let cooldown = Duration::from_secs(1);
-    let test_config = temp_config(&dir).with_cooldown(cooldown.as_secs());
-    std::fs::create_dir_all(test_config.queue_path.join("history.jsonl"))
-        .expect("make history log path unavailable");
-    let cfg = Arc::new(Config::from(test_config));
-    let queue = SharedQueue::open(cfg).expect("open queue");
-    let response = dispatch_request(
-        &queue,
-        Request::Put {
-            request: CommentRequest {
-                owner: "octocat".into(),
-                repo: "hello-world".into(),
-                pr_number: 7,
-                body: "retry".into(),
-            },
-            immediate: true,
-        },
-    )
-    .await;
-    assert!(matches!(
-        response,
-        comenq_lib::protocol::Response::Ok { .. }
-    ));
-
-    let server = MockServer::start().await;
-    let post_times = Arc::new(Mutex::new(Vec::new()));
-    let recorded_post_times = Arc::clone(&post_times);
-    // Use a client-non-retryable failure so timestamps measure worker retries.
-    Mock::given(method("POST"))
-        .and(path("/repos/octocat/hello-world/issues/7/comments"))
-        .respond_with(move |_: &wiremock::Request| {
-            recorded_post_times
-                .lock()
-                .expect("POST time lock should not be poisoned")
-                .push(Instant::now());
-            ResponseTemplate::new(400)
-        })
-        .expect(2)
-        .mount(&server)
-        .await;
-    let octocrab = octocrab_for(&server).expect("create GitHub client");
-    let idle = Arc::new(Notify::new());
-    let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let worker = tokio::spawn(run_worker(
-        Arc::clone(&queue),
-        octocrab,
-        WorkerControl::new(
-            shutdown_rx,
-            WorkerHooks {
-                enqueued: None,
-                idle: Some(Arc::clone(&idle)),
-                drained: None,
-                waiting: None,
-            },
-        ),
-    ));
-
-    for _ in 0..2 {
-        tokio::time::timeout(Duration::from_secs(5), idle.notified())
-            .await
-            .expect("worker should complete a failed post attempt");
-    }
-    shutdown_tx.send(()).expect("signal shutdown");
-    worker
-        .await
-        .expect("worker task should not panic")
-        .expect("worker should exit cleanly");
-    assert_retry_respects_cooldown(&post_times, cooldown);
 }
 
 fn assert_retry_respects_cooldown(post_times: &Mutex<Vec<Instant>>, cooldown: Duration) {
@@ -310,7 +245,7 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {

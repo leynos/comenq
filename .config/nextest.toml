@@ -1,9 +1,5 @@
 # .config/nextest.toml
 [profile.default]
-# Trybuild compiles an isolated fixture workspace on its first run. Allow that
-# cold build to complete without reducing the compiler-facing API coverage.
-slow-timeout = { period = "5m", terminate-after = 1, grace-period = "5s" }
-
 # Put a hard ceiling on the whole run.
 global-timeout = "10m"
 

@@ -7,7 +7,7 @@ mod util;
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
-    SharedQueue, WorkerControl, WorkerHooks,
+    SharedQueue, TokenClient, WorkerControl, WorkerHooks,
     listener::{dispatch_request, handle_client, prepare_listener, run_listener},
     run, run_worker,
 };
@@ -30,6 +30,10 @@ use util::{TestComplexity, TimeoutConfig, join_err, timeout_with_retries};
 
 const TEST_COOLDOWN_SECONDS: u64 = 1;
 
+fn single_client(octocrab: Arc<octocrab::Octocrab>) -> Arc<Vec<TokenClient>> {
+    Arc::new(vec![TokenClient::new("default", "t", octocrab)])
+}
+
 /// Convert a test configuration into the runtime `Config`.
 ///
 /// The conversion normally relies on the crate's `test-support` feature.
@@ -45,6 +49,7 @@ fn cfg_from(cfg: test_support::daemon::TestConfig) -> Config {
     Config {
         github_token: cfg.github_token,
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: cfg.socket_path,
         queue_path: cfg.queue_path,
         cooldown_period_seconds: cfg.cooldown_period_seconds,
@@ -313,7 +318,11 @@ mod worker_tests {
                 waiting: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(DRAINED_NOTIFICATION, "worker idle notification", || {
             let idle = idle.clone();
@@ -374,7 +383,11 @@ mod worker_tests {
                 waiting: None,
             },
         };
-        let h = tokio::spawn(run_worker(ctx.queue.clone(), ctx.octo, control));
+        let h = tokio::spawn(run_worker(
+            ctx.queue.clone(),
+            single_client(ctx.octo),
+            control,
+        ));
 
         timeout_with_retries(WORKER_SUCCESS, "worker enqueued", || {
             let enqueued = enqueued.clone();
@@ -432,7 +445,7 @@ mod worker_tests {
             hooks: WorkerHooks::default(),
         };
 
-        let h = tokio::spawn(run_worker(queue, octo, control));
+        let h = tokio::spawn(run_worker(queue, single_client(octo), control));
 
         // Give worker time to park on the change signal
         sleep(Duration::from_millis(50)).await;
@@ -498,7 +511,7 @@ mod worker_tests {
             },
         };
 
-        let h = tokio::spawn(run_worker(queue, octo, control));
+        let h = tokio::spawn(run_worker(queue, single_client(octo), control));
 
         // Wait for idle notification (first entry posted; worker now waits a
         // full cooldown before the second).

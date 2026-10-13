@@ -381,13 +381,14 @@ environment variable):
 
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
-  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the target
-  `owner/repo#pr`, and the comment body collapsed to a single line of at most
-  60 characters. Failed attempts append a one-line, em-dash-separated
-  description of the error. Records are always shown in chronological order
-  (oldest first); `--limit` restricts the output to the most recent `N` records
-  without changing that ordering. If no attempts have been recorded, the client
-  prints `No posting history recorded.` instead of a table.
+  `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
+  characters of the posting token's hash, the target `owner/repo#pr`, and the
+  comment body collapsed to a single line of at most 60 characters. Failed
+  attempts append a one-line, em-dash-separated description of the error.
+  Records are always shown in chronological order (oldest first); `--limit`
+  restricts the output to the most recent `N` records without changing that
+  ordering. If no attempts have been recorded, the client prints
+  `No posting history recorded.` instead of a table.
 
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
 for the store and §5 for the wire protocol). The client follows history cursors
@@ -479,7 +480,8 @@ sequenceDiagram
   Sup->>Sup: ensure_queue_dir()
   Sup->>Q: SharedQueue::open(config)
   Sup->>L: spawn run_listener(queue, shutdown)
-  Sup->>W: spawn run_worker(queue, octocrab, control)
+  Note over Sup,W: run_with_tokens receives the resolved pool and builds one client per token
+  Sup->>W: spawn run_worker(queue, client_pool, control)
 
   par Normal flow
     L->>A: dispatch_request(Request)
@@ -488,8 +490,11 @@ sequenceDiagram
     A-->>L: Response
     Q-->>W: notify_one() on mutation
     W->>Q: claim_next_due()
+    W->>Q: read latest posting-history token hash
+    Q-->>W: latest token hash (or none)
+    W->>W: select successor client in configured pool
     W->>W: post to GitHub
-    W->>Q: complete(id)
+    W->>Q: complete(entry, selected token hash)
   and Error/backoff
     L--x Sup: accept error
     Sup->>L: restart after backoff
@@ -602,21 +607,34 @@ each entry.
 appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
 Lines: append-only, one record per line). Each `HistoryRecord` carries the
 entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
-`success`, an `error` description (present only when `success` is false), and
-the `request` that was posted or attempted. Each record also has an attempt ID
-used to make successful completion recovery idempotent. A successful post is
-recorded before `complete` removes the entry from the queue and updates
-`last_post`. A failed post is recorded on every retry attempt, since the entry
-stays queued and is retried after a cooldown rather than being removed; each
-attempt therefore contributes its own failure record. Writing the history
-record on the failure path can itself fail (e.g. a full disk); the worker logs
-that error but never lets it interrupt the retry loop, so a history-logging
-fault cannot stall comment posting. Appending repairs a missing final line
-delimiter before the next record. When the log is read back (to serve the
-`hist` protocol operation), malformed and oversized lines are skipped with an
-error log. Reads return bounded pages and use a fixed end offset so concurrent
-appends cannot change the records covered by an in-progress CLI request. The
-listener limits each encoded page to the 2 MiB protocol response cap.
+`success`, an `error` description (present only when `success` is false),
+`token_hash` (the hex SHA-256 of the token value that made the attempt), and the
+`request` that was posted or attempted. Hashing rather than naming the token
+means rotation state survives token-file renames, and the log never holds a
+secret. Each record also has an attempt ID used to make successful completion
+recovery idempotent. A successful post is recorded before `complete` removes
+the entry from the queue and updates `last_post`. A failed post is recorded on
+every retry attempt, since the entry stays queued and is retried after a
+cooldown rather than being removed; each attempt therefore contributes its own
+failure record. Writing the history record on the failure path can itself fail
+(e.g. a full disk); the worker logs that error but never lets it interrupt the
+retry loop, so a history-logging fault cannot stall comment posting. Appending
+repairs a missing final line delimiter before the next record. When the log is
+read back (to serve the `hist` protocol operation), malformed and oversized
+lines are skipped with an error log. Reads return bounded pages and use a fixed
+end offset so concurrent appends cannot change the records covered by an
+in-progress CLI request. The listener limits each encoded page to the 2 MiB
+protocol response cap.
+
+**Round-robin token selection.** When `github_token_files` configures multiple
+tokens, the worker reads the most recent history record and uses the successor
+of its token hash in configured order, wrapping to the first token after the
+last. Empty history or an unrecognized hash starts with the first token. With a
+single token from `github_token`, `github_token_file`, or a one-element
+`github_token_files`, the same selection rule always chooses that token. The
+selection function accepts only token hashes, not API clients, so the rotation
+policy remains independent of Octocrab. If history cannot be read, the worker
+logs the failure and attempts the first configured token.
 
 ### 3.3. The UDS Listener and Request Ingestion (`run_listener`)
 
@@ -689,8 +707,11 @@ ensuring that comments are processed one by one with the required delay.
 
 #### 3.4.1. `octocrab` Initialization and API Usage
 
-The `octocrab` client will be initialized once at daemon startup, using a
-Personal Access Token (PAT) securely loaded from the configuration file.
+The daemon builds one `octocrab` client for each token in the configured pool.
+It resolves and validates the pool during configuration loading, then carries
+the owned token values through startup so client construction does not reopen
+the files. A single inline or file-based Personal Access Token (PAT) remains a
+one-client pool.
 
 A critical detail for a successful implementation is using the correct GitHub
 API endpoint. While one might intuitively look for a "create comment" method
@@ -732,11 +753,12 @@ The worker task's loop consists of the following steps:
 
 4. **Handle Result:**
 
-   - **On API Success:** The task calls `queue.complete()` with the entry ID
-     and claim token. A durable completion record is written before the
-     matching entry is removed and `last_post` is updated. If a concurrent
-     `del` already removed the entry, or the ID now belongs to a replacement,
-     completion records the successful post without deleting that replacement.
+   - **On API Success:** The task calls `queue.complete()` with the claimed
+     entry and selected token's hash. A durable completion record stores that
+     hash before the matching entry is removed and `last_post` is updated. If a
+     concurrent `del` already removed the entry, or the ID now belongs to a
+     replacement, completion records the successful post without deleting the
+     replacement.
      It then logs the successful post.
 
    - **On API Failure:** The task logs the error from the GitHub API. The
@@ -775,27 +797,32 @@ For operational flexibility and security, the daemon's behaviour must be
 controlled via a configuration file, not hard-coded values. A TOML file located
 at `/etc/comenqd/config.toml` is the conventional choice.
 
-| Parameter                | Type    | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
-| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| github_token             | String  | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` is set.                                                                                                                | (none)                                                                                                         |
-| github_token_file        | PathBuf | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
-| socket_path              | PathBuf | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
-| queue_path               | PathBuf | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
-| cooldown_period_seconds  | u64     | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
-| cooldown_flutter_seconds | u64     | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
-| github_api_timeout_secs  | u64     | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
-| restart_min_delay_ms     | u64     | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
+| Parameter                | Type           | Description                                                                                                                                                                                                                | Default Value                                                                                                  |
+| ------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| github_token             | String         | The GitHub Personal Access Token (PAT) used for authentication. Required unless `github_token_file` or `github_token_files` is set.                                                                                        | (none)                                                                                                         |
+| github_token_file        | PathBuf        | Optional path to a file containing the PAT. Read at startup; its trimmed contents override `github_token`. A leading `${VAR}` placeholder is expanded from the environment, enabling systemd `LoadCredential` integration. | (none)                                                                                                         |
+| github_token_files       | `Vec<PathBuf>` | Optional ordered paths, each containing one PAT. When non-empty, neither single-token setting is required; the worker rotates among these tokens. Each file is read and validated at startup.                              | (empty)                                                                                                        |
+| socket_path              | PathBuf        | The filesystem path for the Unix Domain Socket.                                                                                                                                                                            | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime directory is available, else /run/comenq/comenq.sock |
+| queue_path               | PathBuf        | The directory path for persistent queue data (`entries/`, `last_post`, `last_attempt`, `history.jsonl`, and the `completion` recovery record, managed by `QueueStore`).                                                    | /var/lib/comenq/queue                                                                                          |
+| cooldown_period_seconds  | u64            | The configurable cooling-off period in seconds after each comment post; it also determines the base used for ETA projections shown by `put` and `list`.                                                                    | 960                                                                                                            |
+| cooldown_flutter_seconds | u64            | Maximum random flutter in seconds, sampled when each comment is enqueued and stored with its entry. It only lengthens the cooldown-derived ETA; zero disables flutter.                                                     | 0                                                                                                              |
+| github_api_timeout_secs  | u64            | Maximum duration in seconds for a GitHub API call; configurable with this setting or `--github-api-timeout-secs`.                                                                                                          | 30                                                                                                             |
+| restart_min_delay_ms     | u64            | The minimum delay (milliseconds) applied between supervised task restarts (backoff floor).                                                                                                                                 | 100                                                                                                            |
 
-Configuration is loaded using the `ortho_config` crate. The daemon calls
-`Config::load()` which merges values from `/etc/comenqd/config.toml`,
-`COMENQD_*` environment variables, and any supplied CLI arguments. CLI
-arguments have the highest precedence, followed by environment variables, and
-finally the configuration file. Missing optional fields are replaced with
-defaults. Configuration fails if neither a non-empty `github_token` nor
-`github_token_file` is available. When a token file is selected, it is read at
-startup and its trimmed contents take precedence over the configured token
-unless `--github-token` is supplied; an unreadable or empty selected file is an
-error. Invalid TOML also results in a configuration error.
+Configuration is loaded using the `ortho_config` crate. The daemon binary calls
+`Config::load_with_tokens()`, which merges values from
+`/etc/comenqd/config.toml`, `COMENQD_*` environment variables, and any supplied
+CLI arguments. CLI arguments have the highest precedence, followed by
+environment variables, and finally the configuration file. Missing optional
+fields are replaced with defaults. Configuration fails unless it can resolve
+either a non-empty `github_token_files` pool or a usable single token. A
+non-empty `github_token_files` pool takes precedence over the single-token
+settings; every listed file is checked at startup. Otherwise,
+`github_token_file` is read at startup and its trimmed contents take precedence
+over the configured token unless `--github-token` is supplied. Invalid TOML
+also results in a configuration error. The daemon binary passes the owned,
+resolved token pool to `daemon::run_with_tokens()` for client construction, so
+it does not read the token files again during startup.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background
@@ -1232,11 +1259,12 @@ sequenceDiagram
             Worker->>Worker: sleep(wait_seconds)
         else Head due now
             Worker->>WorkerHooks: (optional) enqueued.notify_one()
-            Worker->>Worker: post to GitHub
+            Worker->>Worker: select token client and post to GitHub
             alt Success
-                Worker->>Queue: complete(id)
+                Worker->>Queue: complete(claimed_entry, selected_token_hash)
                 Worker->>WorkerHooks: (optional) idle.notify_one()
             else Failure
+                Worker->>Queue: record_failure(claimed_entry, selected_token_hash, error)
                 Worker->>WorkerHooks: (optional) idle.notify_one()
                 Worker->>WatchChannel: shutdown.changed() (watch signal)
                 Worker->>Queue: queue.changed() (Notify signal)

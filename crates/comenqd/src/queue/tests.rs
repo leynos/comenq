@@ -38,6 +38,7 @@ fn open_queue_with_bodies(body_sizes: &[usize]) -> (tempfile::TempDir, Arc<Share
     let queue = SharedQueue::open(Arc::new(Config {
         github_token: "token".into(),
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: dir.path().join("comenq.sock"),
         queue_path: dir.path().join("queue"),
         cooldown_period_seconds: 0,
@@ -100,6 +101,7 @@ async fn put_uses_the_injected_flutter_sample() {
         Arc::new(Config {
             github_token: "token".into(),
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path: dir.path().join("comenq.sock"),
             queue_path: dir.path().join("queue"),
             cooldown_period_seconds: 600,
@@ -142,6 +144,7 @@ async fn fixed_clock_controls_deferred_put_eta() {
         Arc::new(Config {
             github_token: "token".into(),
             github_token_file: None,
+            github_token_files: Vec::new(),
             socket_path: dir.path().join("comenq.sock"),
             queue_path: dir.path().join("queue"),
             cooldown_period_seconds: 600,
@@ -181,6 +184,7 @@ async fn put_rejects_unsafe_repository_components() {
     let queue = SharedQueue::open(Arc::new(Config {
         github_token: "token".into(),
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: dir.path().join("comenq.sock"),
         queue_path: dir.path().join("queue"),
         cooldown_period_seconds: 600,
@@ -224,6 +228,7 @@ async fn put_does_not_persist_when_eta_projection_fails() {
     let queue = SharedQueue::open(Arc::new(Config {
         github_token: "token".into(),
         github_token_file: None,
+        github_token_files: Vec::new(),
         socket_path: dir.path().join("comenq.sock"),
         queue_path: queue_path.clone(),
         cooldown_period_seconds: 600,

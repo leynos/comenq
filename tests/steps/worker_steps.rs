@@ -14,11 +14,12 @@ use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{HistoryEntry, PendingEntry, Request, Response};
 use comenqd::config::Config;
 use comenqd::daemon::{
-    SharedQueue, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+    SharedQueue, TokenClient, WorkerControl, WorkerHooks, listener::dispatch_request, run_worker,
+    token_hash,
 };
 use cucumber::{World, given, then, when};
 use tempfile::TempDir;
-use test_support::{octocrab_for, temp_config};
+use test_support::{octocrab_with_token, temp_config};
 use tokio::sync::{Notify, watch};
 use tokio::time::timeout;
 use wiremock::matchers::{method, path};
@@ -36,11 +37,12 @@ fn coverage_timeout_multiplier() -> u32 {
 
 #[derive(World, Default)]
 pub struct WorkerWorld {
-    dir: Option<TempDir>,
-    queue: Option<Arc<SharedQueue>>,
-    server: Option<MockServer>,
-    shutdown: Option<watch::Sender<()>>,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) dir: Option<TempDir>,
+    pub(crate) queue: Option<Arc<SharedQueue>>,
+    pub(crate) server: Option<MockServer>,
+    pub(crate) shutdown: Option<watch::Sender<()>>,
+    pub(crate) handle: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) tokens: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for WorkerWorld {
@@ -61,7 +63,7 @@ impl Drop for WorkerWorld {
 }
 
 impl WorkerWorld {
-    async fn shutdown_and_join(&mut self) {
+    pub(crate) async fn shutdown_and_join(&mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
@@ -83,7 +85,7 @@ async fn listed_entries(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<PendingE
 }
 
 /// Posting history as reported through the protocol.
-async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
+pub(crate) async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryEntry>> {
     match dispatch_request(
         queue,
         Request::Hist {
@@ -103,26 +105,37 @@ async fn listed_history(queue: &Arc<SharedQueue>) -> anyhow::Result<Vec<HistoryE
 
 #[given("a queued comment request")]
 async fn queued_request(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    queue_requests(world, &["b"]).await
+}
+
+#[given("two queued comment requests")]
+async fn two_queued_requests(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    queue_requests(world, &["first", "second"]).await
+}
+
+async fn queue_requests(world: &mut WorkerWorld, bodies: &[&str]) -> anyhow::Result<()> {
     let dir = TempDir::new().context("tempdir")?;
     let cfg = Arc::new(Config::from(temp_config(&dir).with_cooldown(0)));
     let queue = SharedQueue::open(cfg).context("open queue")?;
-    let response = dispatch_request(
-        &queue,
-        Request::Put {
-            request: CommentRequest {
-                owner: "o".into(),
-                repo: "r".into(),
-                pr_number: 1,
-                body: "b".into(),
+    for body in bodies {
+        let response = dispatch_request(
+            &queue,
+            Request::Put {
+                request: CommentRequest {
+                    owner: "o".into(),
+                    repo: "r".into(),
+                    pr_number: 1,
+                    body: (*body).to_owned(),
+                },
+                immediate: true,
             },
-            immediate: true,
-        },
-    )
-    .await;
-    anyhow::ensure!(
-        matches!(response, Response::Ok { .. }),
-        "put should succeed, got {response:?}"
-    );
+        )
+        .await;
+        anyhow::ensure!(
+            matches!(response, Response::Ok { .. }),
+            "put should succeed, got {response:?}"
+        );
+    }
     world.dir = Some(dir);
     world.queue = Some(queue);
     Ok(())
@@ -159,6 +172,20 @@ async fn github_error(world: &mut WorkerWorld) {
 
 #[when("the worker runs briefly")]
 async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    start_worker(world, WaitFor::Idle).await
+}
+
+#[when("the worker drains the queue")]
+async fn worker_drains(world: &mut WorkerWorld) -> anyhow::Result<()> {
+    start_worker(world, WaitFor::Drained).await
+}
+
+enum WaitFor {
+    Idle,
+    Drained,
+}
+
+async fn start_worker(world: &mut WorkerWorld, wait_for: WaitFor) -> anyhow::Result<()> {
     let queue = world
         .queue
         .as_ref()
@@ -168,30 +195,47 @@ async fn worker_runs(world: &mut WorkerWorld) -> anyhow::Result<()> {
         .server
         .as_ref()
         .context("server should be initialized")?;
-    let octocrab =
-        octocrab_for(server).context("octocrab client should build for the mock server")?;
+    let tokens = if world.tokens.is_empty() {
+        vec![("default".to_owned(), "t".to_owned())]
+    } else {
+        world.tokens.clone()
+    };
+    let clients = tokens
+        .into_iter()
+        .map(|(name, token)| {
+            let octocrab = octocrab_with_token(server, &token)
+                .context("octocrab client should build for the mock server")?;
+            Ok(TokenClient::new(name, &token, octocrab))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let (shutdown_tx, shutdown_rx) = watch::channel(());
-    let idle = Arc::new(Notify::new());
-    let idle_for_wait = Arc::clone(&idle);
-    let idle_notified = idle_for_wait.notified();
-    let control = WorkerControl::new(
-        shutdown_rx,
-        WorkerHooks {
+    let milestone = Arc::new(Notify::new());
+    let milestone_for_wait = Arc::clone(&milestone);
+    let milestone_notified = milestone_for_wait.notified();
+    let hooks = match wait_for {
+        WaitFor::Idle => WorkerHooks {
             enqueued: None,
-            idle: Some(idle),
+            idle: Some(milestone),
             drained: None,
             waiting: None,
         },
-    );
+        WaitFor::Drained => WorkerHooks {
+            enqueued: None,
+            idle: None,
+            drained: Some(milestone),
+            waiting: None,
+        },
+    };
+    let control = WorkerControl::new(shutdown_rx, hooks);
     let handle = tokio::spawn(async move {
-        let _ = run_worker(queue, octocrab, control).await;
+        let _ = run_worker(queue, Arc::new(clients), control).await;
     });
     timeout(
         Duration::from_secs(30 * u64::from(coverage_timeout_multiplier())),
-        idle_notified,
+        milestone_notified,
     )
     .await
-    .context("worker reached idle state within timeout")?;
+    .context("worker reached the requested state within timeout")?;
 
     // Store handles in world for proper cleanup
     world.shutdown = Some(shutdown_tx);
@@ -243,8 +287,17 @@ async fn history_records_failure(world: &mut WorkerWorld) -> anyhow::Result<()> 
         !history.is_empty(),
         "a failed attempt should be recorded in the history"
     );
+    let expected_token = world
+        .tokens
+        .first()
+        .map_or("t", |(_, token)| token.as_str());
+    let expected_hash = token_hash(expected_token);
     for record in &history {
         assert!(!record.success, "every record should mark a failure");
+        assert_eq!(
+            record.token_hash, expected_hash,
+            "the failed attempt should record the selected token hash"
+        );
         let error = record
             .error
             .as_deref()

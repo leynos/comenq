@@ -1,6 +1,6 @@
 //! Paused-time worker scheduling and queue-mutation tests.
 
-use super::{WorkerControl, WorkerHooks, run_worker};
+use super::{WorkerControl, WorkerHooks, client_pool, run_worker};
 use crate::config::Config;
 use crate::listener::dispatch_request;
 use crate::queue::{FlutterSampler, SharedQueue, UnixClock};
@@ -140,7 +140,7 @@ async fn worker_with_successful_posts(
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         queue,
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {
@@ -279,7 +279,7 @@ async fn deleting_an_in_flight_entry_makes_completion_idempotent() {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let worker = tokio::spawn(run_worker(
         Arc::clone(&queue),
-        octocrab,
+        client_pool(octocrab),
         WorkerControl::new(
             shutdown_rx,
             WorkerHooks {

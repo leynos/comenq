@@ -72,16 +72,27 @@ retry deadline. `bump` and `bust` may reorder a claimed entry without changing
 its claim, while `del` removes it. Completion checks the claim token so a
 successful post cannot delete a replacement entry.
 
-`SharedQueue::complete()` records the successful attempt and posting timestamp
-before removing the entry. Its durable recovery record contains the history
-payload and log offset as well as the entry identifier, claim token and posting
-time; reconciliation idempotently appends the history record, finishes the
-deletion and `last_post` update, then clears that record. Startup performs this
-recovery before reclaiming claims left by an interrupted worker. Failed
-attempts are recorded in `last_attempt`, and scheduling uses the later of the
-successful-post and failed-attempt timestamps as its cooldown anchor. Failure
-history writes are logged but do not interrupt claim release or retry pacing.
-Other queue-store failures become daemon error responses.
+`SharedQueue::complete(entry, token_hash)` records the successful attempt,
+selected token hash, and posting timestamp before removing the claimed entry.
+Its durable recovery record contains the history payload and log offset as well
+as the entry identifier, claim token and posting time; reconciliation
+idempotently appends the history record, finishes the deletion and `last_post`
+update, then clears that record. Startup performs this recovery before
+reclaiming claims left by an interrupted worker. Failed attempts are recorded
+with `SharedQueue::record_failure(entry, token_hash, error)`; scheduling uses
+the later of the successful-post and failed-attempt timestamps as its cooldown
+anchor. Failure history writes are logged but do not interrupt claim release or
+retry pacing. Other queue-store failures become daemon error responses.
+
+The worker receives an ordered pool of `TokenClient` values. Before each post,
+it reads the latest history record's `token_hash` and selects the next matching
+pool entry, wrapping at the end. Empty, unreadable, or unrecognized history
+selects the first client. `run_worker` requires a non-empty `Vec<TokenClient>`.
+`TokenClient` keeps the token's file name for logs, its SHA-256 hash for
+history, and the authenticated `Octocrab` client together; the worker never
+reads credential paths or environment variables. The public `token_hash()`
+helper uses lowercase hexadecimal SHA-256 so rotation state survives token-file
+renames without writing credentials to history.
 
 The store accepts at most 1,024 pending entries. `list` returns at most 1,024
 entries, and both client and daemon enforce a 2 MiB response limit. A full
@@ -96,12 +107,29 @@ document.
 
 ### Configuration API
 
-`comenqd::config::Config` is the public runtime configuration model. The
-`Config::load()` entry point reads the daemon's `--config` file, merges
-`COMENQD_*` environment variables, applies supported CLI overrides, and
-resolves the effective GitHub credential. Its public fields cover the token
-sources, socket and queue paths, cooldown and flutter, restart delay, and
-GitHub API timeout.
+`comenqd::config::Config` is the public runtime configuration model. The daemon
+binary uses `Config::load_with_tokens()` to read the daemon's `--config` file,
+merge `COMENQD_*` environment variables, apply supported CLI overrides, and
+return both the `Config` and its resolved ordered token pool. Production
+startup passes that owned pool to `daemon::run_with_tokens()` for client
+construction, keeping the files validated during loading identical to the
+credentials used by the worker. `Config::load()` and `daemon::run()` remain
+compatibility entry points for callers that compose those steps themselves;
+`Config::load()` returns only the configuration, and `daemon::run()` resolves
+its tokens when called.
+
+`Config::github_tokens()` is a fallible resolver, not an accessor for a cached
+pool. Each call reads and validates the configured token files again. The
+`NamedToken` values returned by the resolver own both the token string and its
+non-secret name: the token file's name, or `default` for a single inline token.
+Filesystem and environment reads remain within the configuration adapter.
+
+`github_token_files` is an ordered list of file paths, and takes precedence over
+`github_token_file` and `github_token`. Each file is expanded for a leading
+`${VAR}`, read as UTF-8 with a 64 KiB limit, trimmed, and rejected if empty. An
+explicit CLI `--github-token` overrides every source; otherwise
+`--github-token-file` clears the configured pool and selects one file. The
+single-token settings resolve to a one-element pool when no list is configured.
 
 Tests and integrations built with the `test-support` feature can use
 `Config::from_file(path)` to load a particular file while retaining the
@@ -116,7 +144,9 @@ The post span contains only `task="worker"` and an `outcome` of `success`,
 `api_error`, or `timeout`; spans exclude credentials, payloads, repository
 names, paths, request identifiers, and raw errors. Operators and developers can
 select the emitted detail through `RUST_LOG`. The credential reader rejects
-files larger than 64 KiB before trimming their contents.
+files larger than 64 KiB before trimming their contents. History rendering
+shows the first eight token-hash characters; legacy records without a hash use
+the `--------` marker.
 
 The daemon attempts to expose Prometheus metrics at `127.0.0.1:9000/metrics`.
 The stable metric vocabulary is:
@@ -133,10 +163,10 @@ The stable metric vocabulary is:
   `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
-  `del`, `hist`, `history`, `append_history`, `next_due`, `claim`, `complete`,
-  `release`, `recover`, `metrics`, and `unknown`; `outcome` is `success`,
-  `failure`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `del`, `hist`, `history`, `append_history`, `latest_history_token`,
+  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
+  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
+  fixed classifications and is `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
@@ -153,14 +183,15 @@ Run repository gates through the Makefile. The principal code gates are
 `make check-fmt`, `make lint`, `make typecheck`, and `make test`; documentation
 changes additionally require `make fmt`, `make markdownlint`, and `make nixie`.
 
-The `make test` target includes the compiler-facing UI suite through its
-workspace `nextest` run. `tests/public_api.rs` uses `trybuild` to compile every
-pass fixture in `tests/ui/pass/*.rs` and to require compilation failure for
-every fixture in `tests/ui/fail/*.rs`, with each failure matched against its
-checked-in `.stderr` file. `trybuild` compiles an isolated fixture workspace;
-the first cold run is allowed a five-minute slow-test period in
-`.config/nextest.toml`. The complete `nextest` run has a 10-minute global
-timeout, after which `make test` runs the Cucumber test target separately.
+The `make test` target includes public API checks through its workspace
+`nextest` run. `tests/public_api.rs` uses explicit type annotations for the
+client socket candidates, optional token file, token-file list, and cooldown
+flutter. These assignments make the expected public types part of the compiler
+checks while reusing the workspace build artefacts. The previous `trybuild`
+suite rebuilt the daemon's production dependency graph in a separate target
+directory and exceeded the cold-test timeout. The complete `nextest` run has a
+10-minute global timeout, after which `make test` runs the Cucumber test target
+separately.
 
 Pull requests run the suite once. In `ci.yml`'s `build-test` job the coverage
 step selects every workspace target and every feature (`all-targets` and
