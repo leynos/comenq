@@ -172,6 +172,27 @@ fn token_pool_rejects_an_unset_environment_placeholder() {
 
 #[rstest]
 #[serial_test::serial]
+fn token_pool_rejects_an_unterminated_environment_placeholder() {
+    let dir = tempdir().expect("create tempdir");
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        "github_token_files=['${COMENQD_TOKEN_POOL_DIR/pool-token']",
+    )
+    .expect("write config fixture");
+
+    let error = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default())
+        .expect_err("an unterminated placeholder must fail config resolution");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unterminated environment placeholder")
+    );
+}
+
+#[rstest]
+#[serial_test::serial]
 fn token_pool_rejects_an_oversized_file() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("pool-token");
