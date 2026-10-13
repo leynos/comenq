@@ -6,6 +6,17 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 /// Constructs an authenticated Octocrab GitHub client using a personal access token.
+///
+/// # Examples
+///
+/// Client construction validates its configuration without making a GitHub
+/// request:
+///
+/// ```rust,ignore
+/// let client = build_octocrab("personal-access-token")
+///     .expect("client configuration is valid");
+/// let _client = client;
+/// ```
 #[expect(clippy::result_large_err, reason = "propagate Octocrab errors")]
 pub(crate) fn build_octocrab(token: &str) -> octocrab::Result<Octocrab> {
     Octocrab::builder()
@@ -89,6 +100,16 @@ impl TokenClient {
 ///
 /// Empty history and hashes that no longer match the configured pool start
 /// with the first token.
+///
+/// # Examples
+///
+/// A known hash selects its successor, and the last hash wraps to index zero:
+///
+/// ```rust,ignore
+/// let hashes = ["first-hash", "second-hash"];
+/// assert_eq!(next_token_index(hashes.iter().copied(), Some("first-hash")), 1);
+/// assert_eq!(next_token_index(hashes.iter().copied(), Some("second-hash")), 0);
+/// ```
 pub(super) fn next_token_index<'a>(
     mut token_hashes: impl ExactSizeIterator<Item = &'a str>,
     last_hash: Option<&str>,

@@ -25,6 +25,18 @@ pub struct NamedToken {
 /// Reads each path in `files`, naming the token after its file; each file
 /// must hold a non-empty token. When `files` is empty, `inline` forms a
 /// pool of one named `default`.
+///
+/// # Examples
+///
+/// With no token files, the inline token forms a one-entry pool:
+///
+/// ```rust,ignore
+/// let pool = resolve_pool(&[], "inline-token")?;
+/// assert_eq!(pool.len(), 1);
+/// assert_eq!(pool[0].name, "default");
+/// assert_eq!(pool[0].token, "inline-token");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<NamedToken>> {
     if files.is_empty() {
         return Ok(vec![NamedToken {
