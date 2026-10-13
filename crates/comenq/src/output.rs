@@ -250,6 +250,17 @@ mod tests {
     }
 
     #[rstest]
+    fn renders_legacy_history_line_without_token_hash() {
+        let mut entry = history(true, None);
+        entry.token_hash.clear();
+
+        assert_eq!(
+            render_history(&entry, 1_150),
+            "1a2b3c4d   2m 30s ago  ok    --------  octocat/hello-world#7  Hi there"
+        );
+    }
+
+    #[rstest]
     fn renders_failed_history_line_with_error() {
         assert_eq!(
             render_history(&history(false, Some("timeout\nafter 10s")), 1_045),

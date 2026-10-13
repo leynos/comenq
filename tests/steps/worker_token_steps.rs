@@ -98,10 +98,13 @@ async fn history_alternates(world: &mut WorkerWorld) -> anyhow::Result<()> {
         })
         .collect();
     assert_eq!(auth_headers.len(), 2, "both posts should reach GitHub");
-    assert_ne!(
-        auth_headers.first(),
-        auth_headers.get(1),
-        "each post should authenticate with a different token"
+    let expected_headers: Vec<String> = ROTATION_TOKENS
+        .iter()
+        .map(|(_, value)| format!("Bearer {value}"))
+        .collect();
+    assert_eq!(
+        auth_headers, expected_headers,
+        "posts should use the configured tokens in order"
     );
     world.shutdown_and_join().await;
     Ok(())
@@ -117,6 +120,27 @@ async fn newest_record_uses_first_token(world: &mut WorkerWorld) -> anyhow::Resu
         newest.token_hash,
         token_hash(first_value),
         "rotation should wrap from the second token back to the first"
+    );
+    let server = world
+        .server
+        .as_ref()
+        .context("server should be initialized")?;
+    let requests = server
+        .received_requests()
+        .await
+        .context("inbound requests should be recorded")?;
+    assert_eq!(requests.len(), 1, "one post should reach GitHub");
+    let authorization = requests
+        .first()
+        .context("GitHub request should be recorded")?
+        .headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .context("GitHub request should carry Authorization")?;
+    assert_eq!(
+        authorization,
+        format!("Bearer {first_value}"),
+        "the request should wrap to the first configured token"
     );
     Ok(())
 }
