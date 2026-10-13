@@ -55,7 +55,7 @@ Leading `${VAR}` placeholders in file paths expand from the daemon environment,
 including paths under systemd's `CREDENTIALS_DIRECTORY`.
 
 To rotate posts across multiple identities, store one PAT in each restricted
-file and list them in the order you want the daemon to use:
+file and list the files in the order the daemon must use them:
 
 ```toml
 github_token_files = [

@@ -7,6 +7,7 @@ use super::single_token::{
     MAX_GITHUB_TOKEN_FILE_BYTES, TokenFileReadError, TokenPathError, expand_token_path,
     read_token_file,
 };
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 
@@ -31,9 +32,10 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
             token: inline.to_owned(),
         }]);
     }
-    files
-        .iter()
-        .map(|configured_path| {
+    let mut paths_by_token: HashMap<String, PathBuf> = HashMap::with_capacity(files.len());
+    files.iter().try_fold(
+        Vec::with_capacity(files.len()),
+        |mut tokens, configured_path| {
             let file = expand_token_path(configured_path).map_err(token_path_io_error)?;
             let token =
                 read_token_file(&file).map_err(|error| token_file_io_error(&file, error))?;
@@ -44,17 +46,29 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
                     format!("token file {} is empty", file.display()),
                 ));
             }
+            if let Some(previous_path) = paths_by_token.get(token) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "token files {} and {} contain the same token",
+                        previous_path.display(),
+                        file.display()
+                    ),
+                ));
+            }
+            paths_by_token.insert(token.to_owned(), file);
             let name = configured_path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("token")
                 .to_owned();
-            Ok(NamedToken {
+            tokens.push(NamedToken {
                 name,
                 token: token.to_owned(),
-            })
-        })
-        .collect()
+            });
+            Ok(tokens)
+        },
+    )
 }
 
 /// Add token-file path context while preserving read error kinds.

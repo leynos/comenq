@@ -42,6 +42,25 @@ fn token_files_form_the_rotation_pool() {
 
 #[rstest]
 #[serial_test::serial]
+fn token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens() {
+    let dir = tempdir().expect("create tempdir");
+    let first = dir.path().join("first-token");
+    let second = dir.path().join("second-token");
+    fs::write(&first, "shared-secret\n").expect("write first token");
+    fs::write(&second, "  shared-secret \n").expect("write second token");
+
+    let error =
+        super::super::tokens::resolve_pool(&[first.clone(), second.clone()], "inline-token")
+            .expect_err("duplicate trimmed tokens must be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains(&first.display().to_string()));
+    assert!(error.to_string().contains(&second.display().to_string()));
+    assert!(!error.to_string().contains("shared-secret"));
+}
+
+#[rstest]
+#[serial_test::serial]
 fn token_pool_takes_precedence_over_single_token_sources() {
     let dir = tempdir().expect("create tempdir");
     let pool_token = dir.path().join("pool-token");

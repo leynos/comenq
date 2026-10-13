@@ -26,7 +26,6 @@ octocrab = { workspace = true }
 test-support = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
-trybuild = "1"
 
 [[test]]
 name = "cucumber"
