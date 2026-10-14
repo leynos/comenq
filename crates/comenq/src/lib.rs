@@ -1,7 +1,7 @@
 //! Client argument parsing, protocol requests, and safe human-readable output.
 //!
 //! [`Args`] and [`Command`] describe the `put`, `list`, `bump`, `bust`, `del`,
-//! and `hist` operations. [`run`] sends tagged requests to the daemon and
+//! `hist`, and `await` operations. [`run`] sends tagged requests to the daemon and
 //! returns [`ClientError`] for transport, timeout, protocol, or daemon
 //! failures. History requests may follow several paged replies.
 
@@ -9,11 +9,12 @@ use clap::{Parser, Subcommand, builder::ValueHint};
 use std::{fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
-mod client;
+#[doc(hidden)]
+pub mod client;
 mod output;
 
 pub use client::{ClientError, run};
-pub use output::{format_age, format_eta, one_line_summary};
+pub use output::{format_age, format_eta, one_line_summary, render_remaining, report_interval};
 
 /// A GitHub repository slug in `owner/repo` format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -161,12 +162,26 @@ pub enum Command {
         /// Identifier printed by `put` and `list`.
         id: String,
     },
+    /// Wait for posting and print the comment URL, with countdowns on stderr.
+    Await {
+        /// Eight hexadecimal characters printed by `put` and `list`.
+        #[arg(value_parser = parse_await_id)]
+        id: String,
+    },
     /// Show past posting attempts, oldest first.
     Hist {
         /// Show only the most recent LIMIT records.
         #[arg(long, short = 'n', value_name = "LIMIT")]
         limit: Option<usize>,
     },
+}
+
+fn parse_await_id(id: &str) -> Result<String, String> {
+    if id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(id.to_owned())
+    } else {
+        Err("identifier must contain exactly eight hexadecimal characters".to_owned())
+    }
 }
 
 impl Command {
@@ -190,6 +205,7 @@ impl Command {
                 immediate: *now,
             },
             Self::List => Request::List,
+            Self::Await { id } => Request::Await { id: id.clone() },
             Self::Bump { id } => Request::Bump { id: id.clone() },
             Self::Bust { id } => Request::Bust { id: id.clone() },
             Self::Del { id } => Request::Del { id: id.clone() },

@@ -143,11 +143,11 @@ providing clarity and maintainability compared to the more verbose builder
 pattern.[^3]
 
 The CLI has a global optional `--socket` override (also available through
-`COMENQ_SOCKET`) and six subcommands: `put`, `list`, `bump`, `bust`, `del`, and
-`hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>` and an optional
-`--now`; the other commands accept no positional arguments (`list`) or an
-eight-character entry identifier (`bump`, `bust`, and `del`). `hist` accepts an
-optional `-n` or `--limit` count.
+`COMENQ_SOCKET`) and seven subcommands: `put`, `list`, `bump`, `bust`, `del`,
+`await`, and `hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>`
+and an optional `--now`; the other commands accept no positional arguments
+(`list`) or an eight-character entry identifier (`bump`, `bust`, `del`, and
+`await`). `hist` accepts an optional `-n` or `--limit` count.
 
 The following code shows the shape of the shipped `Args` parser and its
 subcommands. The implementation delegates protocol and socket work to the
@@ -186,6 +186,7 @@ pub enum Command {
     Bump { id: String },
     Bust { id: String },
     Del { id: String },
+    Await { id: String },
     Hist {
         #[arg(short = 'n', long, value_name = "LIMIT")]
         limit: Option<usize>,
@@ -360,9 +361,8 @@ handling, so `run` operates on validated data without rechecking it.
 ### 2.4. Client Subcommands and ETA Semantics
 
 The historical blueprint above shows a client that only enqueues a comment. The
-shipped client instead exposes six subcommands, one per protocol operation, all
-sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
-environment variable):
+shipped client exposes seven subcommands, all sharing a global `--socket` flag
+(also settable via the `COMENQ_SOCKET` environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
   prints its identifier and an approximate ETA, e.g.
@@ -383,6 +383,13 @@ environment variable):
 
 - `comenq del <id>`: removes the identified comment from the queue.
 
+- `comenq await <id>`: waits in the foreground until the identified comment is
+  posted, then writes the full GitHub comment URL (including its comment
+  fragment) as one line on stdout. While it is queued, the client writes
+  newline-terminated countdown reports to stderr. It exits successfully after
+  reporting the URL; daemon errors, timeouts and lost connections fail the
+  command. Disconnecting or interrupting the client leaves the queue unchanged.
+
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
   `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
@@ -396,8 +403,26 @@ environment variable):
 
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
 for the store and §5 for the wire protocol). The client follows history cursors
-until the snapshot is complete, then renders the records; other commands print
-their confirmation or the daemon's error message after one reply.
+until the snapshot is complete, then renders the records; ordinary commands
+print their confirmation or the daemon's error message after one reply. `await`
+uses the streaming protocol described in §5.3.
+
+**Await countdown.** The first `waiting` frame produces a countdown report
+immediately on stderr. Later reports are newline-terminated and follow this
+cadence, capped at the current remaining ETA with a one-second minimum:
+
+| Remaining ETA     | Report interval |
+| ----------------- | --------------- |
+| Up to 60 s        | 10 s            |
+| 61 s to 10 min    | 30 s            |
+| 10 min 1 s to 1 h | 2 min           |
+| 1 h 1 s to 6 h    | 10 min          |
+| More than 6 h     | 30 min          |
+
+Non-zero countdowns use the same `format_eta` conventions as `put` and `list`,
+followed by `remaining`; zero is rendered as `due now`. Each report updates
+from the latest daemon ETA and elapsed time. The client allows 5 s for its
+first complete frame and 45 s between later frames.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -1201,16 +1226,16 @@ shutdown, full capacity (64 connected waiters), a legacy success without a URL,
 a URL too large for the frame limit, or a store read failure. Each frame is
 newline-terminated, includes its newline in the 64 KiB limit, and is written
 with a 5 s deadline. The daemon sends a waiting heartbeat every 15 s while
-idle; the client-side stream deadline is 45 s between complete frames. `await`
-is a daemon protocol operation; the matching CLI command and its countdown
-rendering are tracked separately.
+idle. The client allows 5 s for the first complete frame and 45 s between later
+frames. It renders `waiting` ETAs as newline-terminated countdown lines on
+stderr and writes only the full posted comment URL to stdout.
 
 ### 5.4. Historical Source for `comenq` (Client)
 
 The following is historical pseudocode for the original single-purpose client;
-it is not the shipped implementation. The current client uses the six
+it is not the shipped implementation. The current client uses the seven
 subcommands described in Section 2.4 and sends tagged `Request` values, then
-reads and handles a `Response` from the daemon.
+handles a `Response` or an `AwaitEvent` stream from the daemon.
 
 ```rust
 // Historical pseudocode for crates/comenq/src/main.rs

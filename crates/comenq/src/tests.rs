@@ -205,3 +205,18 @@ fn socket_flag_overrides_env_var() {
     .expect("valid arguments should parse");
     assert_eq!(args.socket, Some(PathBuf::from("/tmp/flag.sock")));
 }
+
+#[rstest]
+#[case("1a2b3c4d", true)]
+#[case("ABCDEF12", true)]
+#[case("1234567", false)]
+#[case("123456789", false)]
+#[case("1a2b3c4g", false)]
+#[case("é234567", false)]
+fn validates_await_identifier(#[case] id: &str, #[case] valid: bool) {
+    let parsed = Args::try_parse_from(["comenq", "await", id]);
+    assert_eq!(parsed.is_ok(), valid);
+    if let Ok(args) = parsed {
+        assert_eq!(args.command.to_request(), Request::Await { id: id.into() });
+    }
+}

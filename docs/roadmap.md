@@ -155,7 +155,7 @@ and macOS, simplifying installation and improving security and maintainability.
 
 ### 7.2. Client, behaviour and user-facing documentation
 
-- [ ] 7.2.1. Add `comenq await <id>` with a stdout URL and stderr countdown.
+- [x] 7.2.1. Add `comenq await <id>` with a stdout URL and stderr countdown.
 
   Preserve the queue when the client disconnects.
 
