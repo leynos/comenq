@@ -689,15 +689,16 @@ An `await` connection receives NDJSON frames, each no larger than 64 KiB
 including its newline. While the selected entry remains queued, the handler
 sends `waiting` frames with the current ETA at least every 15 s. It ends with
 exactly one `posted` frame containing the full comment URL or one `error` frame
-for an unknown or removed entry, shutdown, or a durable success without a URL.
-The client enforces a 45 s deadline between complete frames. Waiters subscribe
-to a queue-state version signal before lookup, separately from the worker's
-`Notify`, so waiting cannot consume or delay a worker wake-up. They recheck
-after state changes and on heartbeats, and hold no store lock while writing.
-Lookup checks the pending entry first, then history. Its first pending result
-retains a history byte offset and persisted entry incarnation; later lookups
-use both to bind completion to that queued lifetime, even if the
-eight-character identifier is reused.
+for an unknown or removed entry, shutdown, full waiter capacity (64 connected
+waiters), a legacy success without a URL, a URL too large for the frame limit,
+or a store read failure. The client enforces a 45 s deadline between complete
+frames. Waiters subscribe to a queue-state version signal before lookup,
+separately from the worker's `Notify`, so waiting cannot consume or delay a
+worker wake-up. They recheck after state changes and on heartbeats, and hold no
+store lock while writing. Lookup checks the pending entry first, then history.
+Its first pending result retains a history byte offset and persisted entry
+incarnation; later lookups use both to bind completion to that queued lifetime,
+even if the eight-character identifier is reused.
 
 The pending ETA uses the same list scheduling projection. The projection is
 cached under the store mutex for each state version and clock second, so many
@@ -1194,14 +1195,15 @@ is pending and then after GitHub accepts the comment, the daemon may send:
 {"status":"posted","comment_url":"https://github.com/owner/repo/issues/123#issuecomment-456"}
 ```
 
-The terminal `posted` frame carries the full comment URL. If the entry is
-unknown, removed, or the daemon is shutting down, the terminal frame is
-`{"status":"error","message":"..."}`. Each frame is newline-terminated,
-includes its newline in the 64 KiB limit, and is written with a 5 s deadline.
-The daemon sends a waiting heartbeat every 15 s while idle; the client-side
-stream deadline is 45 s between complete frames. The daemon caps concurrent
-waiters at 64. `await` is a daemon protocol operation; the matching CLI command
-and its countdown rendering are tracked separately.
+The terminal `posted` frame carries the full comment URL. A terminal
+`{"status":"error","message":"..."}` frame reports an unknown or removed entry,
+shutdown, full capacity (64 connected waiters), a legacy success without a URL,
+a URL too large for the frame limit, or a store read failure. Each frame is
+newline-terminated, includes its newline in the 64 KiB limit, and is written
+with a 5 s deadline. The daemon sends a waiting heartbeat every 15 s while
+idle; the client-side stream deadline is 45 s between complete frames. `await`
+is a daemon protocol operation; the matching CLI command and its countdown
+rendering are tracked separately.
 
 ### 5.4. Historical Source for `comenq` (Client)
 

@@ -155,14 +155,14 @@ and macOS, simplifying installation and improving security and maintainability.
 
 ### 7.2. Client, behaviour and user-facing documentation
 
-- [ ] 7.2.1. Add `comenq await <id>` with an ETA countdown on stderr and the
-      full
-  GitHub comment URL on stdout; preserve the queue when the client disconnects.
+- [ ] 7.2.1. Add `comenq await <id>` with a stdout URL and stderr countdown.
+
+  Preserve the queue when the client disconnects.
 
 - [ ] 7.2.2. Add behavioural coverage for successful URL reporting, unknown IDs,
   retry after posting failure, deletion while waiting, and interruption
   followed by a successful later wait.
 
-- [ ] 7.2.3. Document the command, countdown, URL output, exit behaviour and
-      retry
-  semantics in the README, man page, user guide and design document.
+- [ ] 7.2.3. Document the command, output, exit behaviour and retry semantics.
+
+  Cover the README, man page, user guide and design document.

@@ -70,24 +70,7 @@ async fn await_entry(
             Ok(AwaitState::Posted {
                 comment_url: Some(comment_url),
                 ..
-            }) => {
-                let event = AwaitEvent::Posted { comment_url };
-                if serde_json::to_vec(&event)
-                    .map_or(true, |bytes| bytes.len() >= MAX_AWAIT_FRAME_BYTES)
-                {
-                    return send_terminal(
-                        stream,
-                        "posted comment URL exceeds the await frame limit",
-                        "posted_url_too_large",
-                    )
-                    .await;
-                }
-                return if send_frame(stream, &event).await.is_ok() {
-                    "posted"
-                } else {
-                    "client_gone"
-                };
-            }
+            }) => return send_posted(stream, comment_url).await,
             Ok(AwaitState::Posted {
                 comment_url: None, ..
             }) => {
@@ -107,6 +90,25 @@ async fn await_entry(
             _ = state.changed() => {}
             _ = tokio::time::sleep(heartbeat) => {}
         }
+    }
+}
+
+/// Send a terminal URL frame, or an explicit error when its representation cannot fit.
+async fn send_posted(stream: &mut UnixStream, comment_url: String) -> &'static str {
+    let event = AwaitEvent::Posted { comment_url };
+    let fits = serde_json::to_vec(&event).is_ok_and(|bytes| bytes.len() < MAX_AWAIT_FRAME_BYTES);
+    if !fits {
+        return send_terminal(
+            stream,
+            "posted comment URL exceeds the await frame limit",
+            "posted_url_too_large",
+        )
+        .await;
+    }
+    if send_frame(stream, &event).await.is_ok() {
+        "posted"
+    } else {
+        "client_gone"
     }
 }
 
