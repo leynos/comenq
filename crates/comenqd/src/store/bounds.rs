@@ -258,6 +258,7 @@ pub(super) fn entry_headroom(entry: &StoredEntry) -> u64 {
     ENTRY_MUTATION_HEADROOM_BYTES
         .saturating_sub(order_growth)
         .saturating_sub(claim_growth)
+        .saturating_add(incarnation_growth(entry))
 }
 
 /// Calculate worst-case growth needed for the entry's order and claim fields.
@@ -272,7 +273,9 @@ fn maximum_mutation_growth(entry: &StoredEntry) -> u64 {
     });
     let claim_growth =
         UUID_JSON_BYTES.saturating_sub(u64::try_from(claim_bytes).unwrap_or(u64::MAX));
-    order_growth.saturating_add(claim_growth)
+    order_growth
+        .saturating_add(claim_growth)
+        .saturating_add(incarnation_growth(entry))
 }
 
 /// Reject a write whose persisted bytes and remaining reservations exceed budget.
@@ -286,4 +289,9 @@ fn ensure_queue_bytes(used: u64, requested: u64) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// The pretty-printed UUID field is absent in legacy records and adds 57 bytes.
+fn incarnation_growth(entry: &StoredEntry) -> u64 {
+    if entry.incarnation.is_empty() { 57 } else { 0 }
 }

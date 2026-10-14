@@ -33,7 +33,7 @@ pub struct StoredEntry {
     /// Deterministic eight-character identifier.
     pub id: String,
     /// Unique lifetime of this entry, so a reused identifier cannot redirect a wait.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub incarnation: String,
     /// Explicit queue position; lower posts first. May go negative after
     /// repeated bumps.

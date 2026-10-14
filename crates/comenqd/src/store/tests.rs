@@ -268,3 +268,5 @@ mod resource_limits;
 mod scheduling;
 
 mod await_lookup;
+
+mod legacy_limits;

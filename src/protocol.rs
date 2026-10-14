@@ -4,7 +4,11 @@
 //! Every connection carries exactly one JSON-encoded [`Request`]; the daemon
 //! replies with one JSON-encoded [`Response`] and closes the connection.
 //! [`Request::Await`] instead streams newline-delimited [`AwaitEvent`] frames,
-//! ending with exactly one posted or error frame before closure.
+//! ending with exactly one posted or error frame before closure. Frames include
+//! their newline in the 64 KiB [`MAX_AWAIT_FRAME_BYTES`] limit. Idle waits send a
+//! heartbeat at least every [`AWAIT_HEARTBEAT_SECS`] seconds; clients allow
+//! [`AWAIT_IDLE_TIMEOUT_SECS`] seconds between complete frames. A disconnected
+//! wait never cancels the entry or changes its posting schedule.
 
 use serde::{Deserialize, Serialize};
 

@@ -178,9 +178,24 @@ async fn disconnected_waiter_releases_capacity_after_heartbeat() {
     let id = put(&queue).await.expect("put");
     let (_shutdown, rx) = watch::channel(());
     let permits = Arc::new(Semaphore::new(1));
-    let (mut first, task) = connect(queue.clone(), &id, rx.clone(), permits.clone())
+    let (mut first_stream, mut server) = UnixStream::pair().expect("pair");
+    first_stream.shutdown().await.expect("half-close");
+    let first_queue = queue.clone();
+    let first_id = id.clone();
+    let first_permits = permits.clone();
+    let first_shutdown = rx.clone();
+    let task = tokio::spawn(async move {
+        let _permit = first_permits.try_acquire_owned().expect("test permit");
+        await_entry(
+            &mut server,
+            &first_queue,
+            &first_id,
+            first_shutdown,
+            Duration::from_millis(50),
+        )
         .await
-        .expect("connect");
+    });
+    let mut first = BufReader::new(first_stream);
     assert!(matches!(
         frame(&mut first).await.expect("waiting"),
         AwaitEvent::Waiting { .. }
@@ -196,8 +211,7 @@ async fn disconnected_waiter_releases_capacity_after_heartbeat() {
     );
     rejected.await.expect("join").expect("handler");
     drop(first);
-    tokio::time::sleep(Duration::from_secs(AWAIT_HEARTBEAT_SECS)).await;
-    task.await.expect("join").expect("disconnection handled");
+    assert_eq!(task.await.expect("join"), "client_gone");
     assert_eq!(permits.available_permits(), 1);
     assert!(matches!(
         queue
@@ -229,4 +243,44 @@ async fn already_posted_id_returns_url_immediately() {
     let read = client.read_line(&mut line).await.expect("EOF");
     assert_eq!(read, 0);
     task.await.expect("join").expect("handler");
+}
+
+#[rstest::rstest]
+#[case::storage_fault(false, "invalid_json")]
+#[case::oversized_url(true, "posted_url_too_large")]
+#[tokio::test]
+async fn failure_outcomes_preserve_the_bounded_error_category(
+    #[case] oversized: bool,
+    #[case] expected_outcome: &str,
+) {
+    let dir = TempDir::new().expect("tempdir");
+    let queue = queue(&dir).expect("queue");
+    let id = put(&queue).await.expect("put");
+    if oversized {
+        let entry = queue.next_due().await.expect("next").expect("entry").0;
+        queue
+            .complete(&entry, "hash", &"x".repeat(MAX_AWAIT_FRAME_BYTES))
+            .await
+            .expect("complete");
+    } else {
+        let path = queue
+            .config()
+            .queue_path
+            .join("entries")
+            .join(format!("{id}.json"));
+        std::fs::write(path, "bad json").expect("corrupt entry");
+    }
+    let (_shutdown, rx) = watch::channel(());
+    let (client, server) = UnixStream::pair().expect("pair");
+    let task = tokio::spawn(handle_await(
+        server,
+        queue,
+        id,
+        rx,
+        Arc::new(Semaphore::new(1)),
+    ));
+    let mut reader = BufReader::new(client);
+    let event = frame(&mut reader).await.expect("error frame");
+    assert!(matches!(event, AwaitEvent::Error { .. }));
+    assert_eq!(task.await.expect("join"), expected_outcome);
 }

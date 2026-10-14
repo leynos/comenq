@@ -137,3 +137,32 @@ and macOS, simplifying installation and improving security and maintainability.
 
   - [ ] 6.1.4.2. Add a new document to the `/docs` directory detailing the
     automated packaging process for future maintainers and contributors.
+
+## 7. Foreground Await for Posted Comment URLs
+
+### 7.1. Durable completion and daemon streaming protocol for issue 221
+
+- [x] 7.1.1. Persist each successful comment URL in the completion journal and
+  history record, retaining it through crash recovery and keeping legacy
+  records readable.
+
+- [x] 7.1.2. Resolve await lookups pending-first and bind a wait to the history
+  offset and persisted incarnation selected for that queued entry.
+
+- [x] 7.1.3. Add the read-only `Await` protocol operation with bounded NDJSON
+  waiting and terminal frames, state-version notifications, waiter limits,
+  timeouts and bounded outcome metrics.
+
+### 7.2. Client, behaviour and user-facing documentation
+
+- [ ] 7.2.1. Add `comenq await <id>` with an ETA countdown on stderr and the
+      full
+  GitHub comment URL on stdout; preserve the queue when the client disconnects.
+
+- [ ] 7.2.2. Add behavioural coverage for successful URL reporting, unknown IDs,
+  retry after posting failure, deletion while waiting, and interruption
+  followed by a successful later wait.
+
+- [ ] 7.2.3. Document the command, countdown, URL output, exit behaviour and
+      retry
+  semantics in the README, man page, user guide and design document.

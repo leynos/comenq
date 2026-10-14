@@ -36,6 +36,7 @@ pub enum AwaitState {
 
 impl QueueStore {
     /// Resolve pending entries before history, binding repeat lookups to one lifetime.
+    #[cfg(test)]
     pub(crate) fn resolve_await(
         &self,
         id: &str,
@@ -43,9 +44,26 @@ impl QueueStore {
         cooldown: u64,
         now: u64,
     ) -> Result<AwaitState> {
+        self.resolve_await_with_eta(id, cursor, |store, entry| {
+            Ok(store
+                .schedule(cooldown, now)?
+                .into_iter()
+                .find(|(scheduled, _)| scheduled.id == entry.id)
+                .map_or(0, |(_, eta)| eta))
+        })
+    }
+
+    /// Resolve one entry, invoking the projection only for a matching pending lifetime.
+    pub(crate) fn resolve_await_with_eta(
+        &self,
+        id: &str,
+        cursor: Option<&AwaitCursor>,
+        eta: impl FnOnce(&Self, &StoredEntry) -> Result<u64>,
+    ) -> Result<AwaitState> {
         match self.find(id) {
             Ok(entry) if cursor.is_none_or(|cursor| cursor.incarnation == entry.incarnation) => {
-                return self.pending_await_state(entry, cursor, cooldown, now);
+                let eta_seconds = eta(self, &entry)?;
+                return self.pending_await_state(entry, cursor, eta_seconds);
             }
             Ok(_) | Err(StoreError::UnknownId(_)) => {}
             Err(error) => return Err(error),
@@ -64,14 +82,8 @@ impl QueueStore {
         &self,
         entry: StoredEntry,
         cursor: Option<&AwaitCursor>,
-        cooldown: u64,
-        now: u64,
+        eta_seconds: u64,
     ) -> Result<AwaitState> {
-        let eta_seconds = self
-            .schedule(cooldown, now)?
-            .into_iter()
-            .find(|(scheduled, _)| scheduled.id == entry.id)
-            .map_or(0, |(_, eta)| eta);
         let cursor = match cursor {
             Some(cursor) => cursor.clone(),
             None => AwaitCursor {

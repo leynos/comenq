@@ -29,7 +29,14 @@ pub(super) async fn handle_await(
         )
         .await;
     };
-    await_entry(&mut stream, &queue, &id, shutdown).await
+    await_entry(
+        &mut stream,
+        &queue,
+        &id,
+        shutdown,
+        Duration::from_secs(AWAIT_HEARTBEAT_SECS),
+    )
+    .await
 }
 
 async fn await_entry(
@@ -37,6 +44,7 @@ async fn await_entry(
     queue: &SharedQueue,
     id: &str,
     mut shutdown: watch::Receiver<()>,
+    heartbeat: Duration,
 ) -> &'static str {
     // Register before lookup: a mutation during the read must remain unseen.
     let mut state = queue.subscribe_state();
@@ -70,7 +78,7 @@ async fn await_entry(
                     return send_terminal(
                         stream,
                         "posted comment URL exceeds the await frame limit",
-                        "removed",
+                        "posted_url_too_large",
                     )
                     .await;
                 }
@@ -88,7 +96,7 @@ async fn await_entry(
             }
             Ok(AwaitState::Unknown) => return missing_entry(stream, id, cursor.as_ref()).await,
             Err(error) => {
-                return send_terminal(stream, &error.to_string(), "unknown_identifier").await;
+                return send_terminal(stream, &error.to_string(), error.category()).await;
             }
         }
         tokio::select! {
@@ -97,7 +105,7 @@ async fn await_entry(
                 return send_terminal(stream, "daemon is shutting down", "shutdown").await;
             }
             _ = state.changed() => {}
-            _ = tokio::time::sleep(Duration::from_secs(AWAIT_HEARTBEAT_SECS)) => {}
+            _ = tokio::time::sleep(heartbeat) => {}
         }
     }
 }
