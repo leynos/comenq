@@ -4,6 +4,11 @@ use super::SharedQueue;
 use crate::store::{AwaitCursor, AwaitState, Result};
 
 impl SharedQueue {
+    /// Subscribe to queue-state versions without consuming worker wakeups.
+    pub(crate) fn subscribe_state(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.state_version.subscribe()
+    }
+
     /// Resolve an identifier against the queue and its durable completion history.
     ///
     /// # Examples
@@ -25,4 +30,19 @@ impl SharedQueue {
         })
         .await
     }
+}
+
+/// Operations that can alter an await lookup or its projected schedule.
+pub(super) fn is_state_mutation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "put"
+            | "bump"
+            | "bust"
+            | "del"
+            | "claim_next_due"
+            | "complete"
+            | "release_claim"
+            | "recover_worker_state"
+    )
 }

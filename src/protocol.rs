@@ -3,6 +3,8 @@
 //!
 //! Every connection carries exactly one JSON-encoded [`Request`]; the daemon
 //! replies with one JSON-encoded [`Response`] and closes the connection.
+//! [`Request::Await`] instead streams newline-delimited [`AwaitEvent`] frames,
+//! ending with exactly one posted or error frame before closure.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,34 @@ pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum number of pending entries retained and returned by `list`.
 pub const MAX_PENDING_ENTRIES: usize = 1024;
+
+/// Maximum size of one newline-delimited await frame, including its delimiter.
+pub const MAX_AWAIT_FRAME_BYTES: usize = 64 * 1024;
+/// Maximum interval between await heartbeats when the store is idle.
+pub const AWAIT_HEARTBEAT_SECS: u64 = 15;
+/// Client deadline between complete await frames.
+pub const AWAIT_IDLE_TIMEOUT_SECS: u64 = 45;
+
+/// One JSON line in an await stream; posted and error frames are terminal.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AwaitEvent {
+    /// The entry is still queued, including after a failed posting attempt.
+    Waiting {
+        /// Estimated seconds until the next posting attempt.
+        eta_seconds: u64,
+    },
+    /// GitHub accepted the comment and its URL is durably recorded.
+    Posted {
+        /// Full GitHub comment URL, including its comment fragment.
+        comment_url: String,
+    },
+    /// The entry is unrecoverable or the daemon is shutting down.
+    Error {
+        /// Human-readable failure description.
+        message: String,
+    },
+}
 
 /// Operation requested by the client.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,6 +73,11 @@ pub enum Request {
     /// Remove the identified entry from the queue.
     Del {
         /// Identifier printed by `list` and `put`.
+        id: String,
+    },
+    /// Wait for this entry's successful post without mutating the queue.
+    Await {
+        /// Eight hexadecimal characters printed by `put` and `list`.
         id: String,
     },
     /// Report past posting attempts in chronological order.
@@ -188,162 +223,4 @@ impl Response {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Serialization round-trip tests for the client-daemon protocol.
-    use super::{HistoryCursor, HistoryEntry, PendingEntry, Request, Response};
-    use crate::CommentRequest;
-
-    fn sample_entry() -> PendingEntry {
-        PendingEntry {
-            id: "0011aabb".into(),
-            eta_seconds: 120,
-            owner: "octocat".into(),
-            repo: "hello-world".into(),
-            pr_number: 7,
-            body: "Hi".into(),
-        }
-    }
-
-    fn sample_history() -> HistoryEntry {
-        HistoryEntry {
-            id: "0011aabb".into(),
-            posted_at: 1_700_000_000,
-            success: false,
-            error: Some("timeout".into()),
-            token_hash: "ab".repeat(32),
-            owner: "octocat".into(),
-            repo: "hello-world".into(),
-            pr_number: 7,
-            body: "Hi".into(),
-        }
-    }
-
-    #[test]
-    fn put_round_trips_through_json() {
-        let req = Request::Put {
-            request: CommentRequest {
-                owner: "octocat".into(),
-                repo: "hello-world".into(),
-                pr_number: 7,
-                body: "Hi".into(),
-            },
-            immediate: false,
-        };
-        let json = serde_json::to_string(&req).unwrap_or_else(|e| panic!("serialize: {e}"));
-        assert!(json.contains(r#""op":"put""#), "missing op tag: {json}");
-        let back: Request =
-            serde_json::from_str(&json).unwrap_or_else(|e| panic!("deserialize: {e}"));
-        assert_eq!(back, req);
-    }
-
-    #[test]
-    fn id_operations_round_trip_through_json() {
-        for req in [
-            Request::List,
-            Request::Bump {
-                id: "0011aabb".into(),
-            },
-            Request::Bust {
-                id: "0011aabb".into(),
-            },
-            Request::Del {
-                id: "0011aabb".into(),
-            },
-            Request::Hist {
-                limit: None,
-                cursor: None,
-            },
-            Request::Hist {
-                limit: Some(20),
-                cursor: None,
-            },
-            Request::Hist {
-                limit: None,
-                cursor: Some(HistoryCursor {
-                    offset: 10,
-                    end_offset: 20,
-                }),
-            },
-        ] {
-            let json = serde_json::to_string(&req).unwrap_or_else(|e| panic!("serialize: {e}"));
-            let back: Request =
-                serde_json::from_str(&json).unwrap_or_else(|e| panic!("deserialize: {e}"));
-            assert_eq!(back, req);
-        }
-    }
-
-    #[test]
-    fn responses_round_trip_through_json() {
-        for resp in [
-            Response::ok(),
-            Response::entry(sample_entry()),
-            Response::entries(vec![sample_entry()]),
-            Response::history(vec![sample_history()], None),
-            Response::history(
-                vec![sample_history()],
-                Some(HistoryCursor {
-                    offset: 10,
-                    end_offset: 20,
-                }),
-            ),
-            Response::error("nope"),
-        ] {
-            let json = serde_json::to_string(&resp).unwrap_or_else(|e| panic!("serialize: {e}"));
-            let back: Response =
-                serde_json::from_str(&json).unwrap_or_else(|e| panic!("deserialize: {e}"));
-            assert_eq!(back, resp);
-        }
-    }
-
-    #[test]
-    fn history_entries_without_token_hash_remain_readable() -> Result<(), String> {
-        let mut value =
-            serde_json::to_value(sample_history()).map_err(|error| error.to_string())?;
-        value
-            .as_object_mut()
-            .ok_or_else(|| "serialized history must be an object".to_owned())?
-            .remove("token_hash")
-            .ok_or_else(|| "sample history must contain a token hash".to_owned())?;
-
-        let entry: HistoryEntry =
-            serde_json::from_value(value).map_err(|error| error.to_string())?;
-
-        assert!(entry.token_hash.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn put_defaults_to_deferred_posting() {
-        let json = concat!(
-            r#"{"op":"put","request":{"owner":"o","repo":"r","#,
-            r#""pr_number":1,"body":"b"}}"#
-        );
-        let req: Request = serde_json::from_str(json).unwrap_or_else(|e| panic!("parse: {e}"));
-        assert!(matches!(
-            req,
-            Request::Put {
-                immediate: false,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn hist_defaults_to_no_limit() {
-        let req: Request =
-            serde_json::from_str(r#"{"op":"hist"}"#).unwrap_or_else(|e| panic!("parse: {e}"));
-        assert_eq!(
-            req,
-            Request::Hist {
-                limit: None,
-                cursor: None,
-            }
-        );
-    }
-
-    #[test]
-    fn unknown_operation_fails_to_parse() {
-        let result: Result<Request, _> = serde_json::from_str(r#"{"op":"zap"}"#);
-        assert!(result.is_err());
-    }
-}
+mod tests;

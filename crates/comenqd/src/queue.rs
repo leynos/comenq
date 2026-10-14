@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
 use rand::Rng;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::config::Config;
 use crate::metrics;
@@ -71,6 +71,7 @@ pub struct SharedQueue {
     clock: Arc<dyn UnixClock>,
     flutter_sampler: Arc<dyn FlutterSampler>,
     changed: Notify,
+    state_version: Arc<watch::Sender<u64>>,
 }
 
 impl SharedQueue {
@@ -99,6 +100,7 @@ impl SharedQueue {
             clock,
             flutter_sampler,
             changed: Notify::new(),
+            state_version: Arc::new(watch::channel(0).0),
         }))
     }
 
@@ -280,6 +282,7 @@ impl SharedQueue {
     {
         let started = Instant::now();
         let store = Arc::clone(&self.store);
+        let state_version = Arc::clone(&self.state_version);
         let span = tracing::info_span!(
             "queue_store",
             operation,
@@ -293,7 +296,12 @@ impl SharedQueue {
             let store = store
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            work(&store)
+            let result = work(&store);
+            if result.is_ok() && is_state_mutation(operation) {
+                // Publish under the same lock even if the calling future was dropped.
+                state_version.send_modify(|version| *version = version.wrapping_add(1));
+            }
+            result
         })
         .await
         .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
@@ -370,4 +378,5 @@ fn is_safe_repository_component(component: &str) -> bool {
 mod tests;
 
 mod await_lookup;
+use await_lookup::is_state_mutation;
 mod history;
