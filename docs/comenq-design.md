@@ -1240,7 +1240,9 @@ newline-terminated, includes its newline in the 64 KiB limit, and is written
 with a 5 s deadline. The daemon sends a waiting heartbeat every 15 s while
 idle. The client allows 5 s for the first complete frame and 45 s between later
 frames. It renders `waiting` ETAs as newline-terminated countdown lines on
-stderr and writes only the full posted comment URL to stdout.
+stderr and writes only the full posted comment URL to stdout. For a store
+lookup failure, the client receives `queue lookup failed: <category>` while the
+daemon log retains the detailed error.
 
 ### 5.4. Historical Source for `comenq` (Client)
 

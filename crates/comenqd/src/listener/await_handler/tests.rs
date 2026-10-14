@@ -63,7 +63,7 @@ async fn frame(client: &mut BufReader<UnixStream>) -> anyhow::Result<AwaitEvent>
 
 #[rstest::rstest]
 #[case::unknown("deadbeef", "unknown comment identifier")]
-#[case::invalid("../badid", "eight hexadecimal characters")]
+#[case::invalid("../badid", "queue lookup failed: unsafe_identifier")]
 #[tokio::test]
 async fn first_frame_rejects_unknown_or_invalid_id(#[case] id: &str, #[case] message: &str) {
     let dir = TempDir::new().expect("tempdir");
@@ -246,12 +246,17 @@ async fn already_posted_id_returns_url_immediately() {
 }
 
 #[rstest::rstest]
-#[case::storage_fault(false, "invalid_json")]
-#[case::oversized_url(true, "posted_url_too_large")]
+#[case::storage_fault(false, "invalid_json", "queue lookup failed: invalid_json")]
+#[case::oversized_url(
+    true,
+    "posted_url_too_large",
+    "posted comment URL exceeds the await frame limit"
+)]
 #[tokio::test]
 async fn failure_outcomes_preserve_the_bounded_error_category(
     #[case] oversized: bool,
     #[case] expected_outcome: &str,
+    #[case] expected_message: &str,
 ) {
     let dir = TempDir::new().expect("tempdir");
     let queue = queue(&dir).expect("queue");
@@ -281,7 +286,12 @@ async fn failure_outcomes_preserve_the_bounded_error_category(
     ));
     let mut reader = BufReader::new(client);
     let event = frame(&mut reader).await.expect("error frame");
-    assert!(matches!(event, AwaitEvent::Error { .. }));
+    assert_eq!(
+        event,
+        AwaitEvent::Error {
+            message: expected_message.into()
+        }
+    );
     assert_eq!(task.await.expect("join"), expected_outcome);
 }
 

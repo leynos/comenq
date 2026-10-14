@@ -83,7 +83,14 @@ async fn await_entry(
             }
             Ok(AwaitState::Unknown) => return missing_entry(stream, id, cursor.as_ref()).await,
             Err(error) => {
-                return send_terminal(stream, &error.to_string(), error.category()).await;
+                let category = error.category();
+                tracing::warn!(error_kind = category, error = %error, "await lookup failed");
+                return send_terminal(
+                    stream,
+                    &format!("queue lookup failed: {category}"),
+                    category,
+                )
+                .await;
             }
         }
         // The client has already half-closed its request side: read readiness
