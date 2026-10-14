@@ -26,6 +26,10 @@ pub(super) fn recent_start(
 }
 
 /// Return the newest matching record at or beyond a caller's history offset.
+///
+/// `minimum_offset` must be a record boundary or a previously captured snapshot
+/// EOF. An unterminated snapshot tail is safe: `append_line` inserts a delimiter
+/// at that EOF before writing the next record, so the older fragment is excluded.
 pub(super) fn scan_reverse(
     path: &Path,
     file: &mut File,

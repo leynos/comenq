@@ -240,3 +240,34 @@ fn legacy_entries_gain_persisted_distinct_lifetimes_before_waiting() {
         .expect("original lookup");
     assert_eq!(original, AwaitState::Unknown);
 }
+
+#[rstest]
+fn completion_after_a_torn_snapshot_tail_resolves_the_wait() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("torn tail"), &immediate(0), 1000)
+        .expect("put");
+    let partial = b"not json, without a final newline";
+    fs::write(dir.path().join("history.jsonl"), partial).expect("seed torn tail");
+    let state = store
+        .resolve_await(&entry.id, None, 600, 1000)
+        .expect("initial lookup");
+    let AwaitState::Pending { cursor, .. } = state else {
+        panic!("pending")
+    };
+    assert_eq!(cursor.offset, partial.len() as u64);
+    store
+        .complete_claim_with_token(&entry, "hash", 1200, Some(URL.into()))
+        .expect("complete");
+    let outcome = store
+        .resolve_await(&entry.id, Some(&cursor), 600, 1200)
+        .expect("resolve after append");
+    assert_eq!(
+        outcome,
+        AwaitState::Posted {
+            comment_url: Some(URL.into()),
+            posted_at: 1200
+        }
+    );
+}
