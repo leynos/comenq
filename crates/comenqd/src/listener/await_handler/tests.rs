@@ -9,7 +9,7 @@ use comenq_lib::{
 };
 use tempfile::TempDir;
 use test_support::temp_config;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
 
 const URL: &str = "https://github.com/o/r/issues/1#issuecomment-1";
@@ -312,4 +312,48 @@ async fn legacy_success_has_its_own_bounded_failure_category() {
         }
     );
     assert_eq!(task.await.expect("join"), "posted_without_url");
+}
+
+#[tokio::test]
+async fn request_half_close_is_readable_eof_but_the_waiter_is_still_live() {
+    let dir = TempDir::new().expect("tempdir");
+    let queue = queue(&dir).expect("queue");
+    let id = put(&queue).await.expect("put");
+    let (mut client, mut server) = UnixStream::pair().expect("pair");
+    let request = serde_json::to_vec(&Request::Await { id: id.clone() }).expect("request");
+    client.write_all(&request).await.expect("write request");
+    client.shutdown().await.expect("half-close request side");
+    let mut received = Vec::new();
+    server
+        .read_to_end(&mut received)
+        .await
+        .expect("read request");
+    assert_eq!(received, request);
+    server
+        .readable()
+        .await
+        .expect("read readiness at half-close");
+    let read = server.try_read(&mut [0]).expect("read EOF");
+    assert_eq!(read, 0);
+    let (_shutdown, rx) = watch::channel(());
+    let task = tokio::spawn(handle_await(
+        server,
+        queue.clone(),
+        id,
+        rx,
+        Arc::new(Semaphore::new(1)),
+    ));
+    let mut reader = BufReader::new(client);
+    let waiting = frame(&mut reader).await.expect("waiting frame");
+    assert!(matches!(waiting, AwaitEvent::Waiting { .. }));
+    let entry = queue.next_due().await.expect("next").expect("entry").0;
+    queue.complete(&entry, "hash", URL).await.expect("complete");
+    let posted = frame(&mut reader).await.expect("posted frame");
+    assert_eq!(
+        posted,
+        AwaitEvent::Posted {
+            comment_url: URL.into()
+        }
+    );
+    assert_eq!(task.await.expect("join"), "posted");
 }

@@ -86,6 +86,9 @@ async fn await_entry(
                 return send_terminal(stream, &error.to_string(), error.category()).await;
             }
         }
+        // The client has already half-closed its request side: read readiness
+        // means EOF even for a live waiter. Detect departure on bounded writes
+        // instead, without mistaking that protocol EOF for a cancelled wait.
         tokio::select! {
             biased;
             _ = shutdown.changed() => {
