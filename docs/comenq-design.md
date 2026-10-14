@@ -619,18 +619,19 @@ The store admits at most 1,024 pending entries and caps total accounted queue
 data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
 its remaining mutation reservation. New puts reserve up to 80 bytes each;
 existing valid entries' remaining reservation is derived from the serialized
-widths of their mutable `order` and `claim_token` fields. Claim and ordering
-updates consume that reservation, and writes preserve the remaining aggregate
-headroom. A new `put` is rejected before persistence if its serialized entry
-would exceed 2 MiB minus the 80-byte reservation, or if it would exceed the
-aggregate budget. On startup, the daemon fails closed if the number of existing
-regular `.json` files exceeds 1,024, or their raw bytes plus remaining
-reservations exceed 32 MiB. It also fails closed if a valid entry lacks enough
-room below the 2 MiB per-file cap for every reachable `order` or `claim_token`
-mutation. Startup leaves these files untouched; an operator must remove or
-repair the excess data before restarting. Reads accept files up to 2 MiB;
-oversized or corrupt files are logged and skipped by `entries()`, provided the
-startup count and aggregate-size checks pass. Their raw bytes still count
+widths of their mutable `order` and `claim_token` fields and, for legacy
+entries, the missing incarnation field. Claim, ordering and incarnation updates
+consume that reservation, and writes preserve the remaining aggregate headroom.
+A new `put` is rejected before persistence if its serialized entry would exceed
+2 MiB minus the 80-byte reservation, or if it would exceed the aggregate
+budget. On startup, the daemon fails closed if the number of existing regular
+`.json` files exceeds 1,024, or their raw bytes plus remaining reservations
+exceed 32 MiB. It also fails closed if a valid entry lacks enough room below
+the 2 MiB per-file cap for every reachable `order`, `claim_token` or
+incarnation mutation. Startup leaves these files untouched; an operator must
+remove or repair the excess data before restarting. Reads accept files up to 2
+MiB; oversized or corrupt files are logged and skipped by `entries()`, provided
+the startup count and aggregate-size checks pass. Their raw bytes still count
 towards the aggregate admission budget.
 
 The `list` response contains at most 1,024 scheduled entries, and client and

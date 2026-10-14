@@ -244,7 +244,8 @@ fn store_error_kind(error: &StoreError) -> &'static str {
 ///
 /// The reservation starts with room for worst-case `order` and `claim_token`
 /// updates. As their serialized widths grow, the unused part shrinks by the
-/// same amount, so a later mutation cannot exceed the bytes already budgeted.
+/// same amount. Legacy entries also reserve room for their missing incarnation
+/// UUID, so a later mutation cannot exceed the bytes already budgeted.
 pub(super) fn entry_headroom(entry: &StoredEntry) -> u64 {
     let order_growth =
         u64::try_from(entry.order.to_string().len().saturating_sub(1)).unwrap_or(u64::MAX);
@@ -261,7 +262,7 @@ pub(super) fn entry_headroom(entry: &StoredEntry) -> u64 {
         .saturating_add(incarnation_growth(entry))
 }
 
-/// Calculate worst-case growth needed for the entry's order and claim fields.
+/// Calculate worst-case growth for order, claim and incarnation updates.
 fn maximum_mutation_growth(entry: &StoredEntry) -> u64 {
     const MAX_ORDER_BYTES: u64 = 20;
     const UUID_JSON_BYTES: u64 = 38;
