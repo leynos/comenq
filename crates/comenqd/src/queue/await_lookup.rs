@@ -1,6 +1,7 @@
 //! Read-only posting outcome queries serialized with queue mutations.
 
 use super::{SharedQueue, store_access::QueueState};
+use crate::store::{AwaitCursor, AwaitState, Result};
 use std::collections::HashMap;
 
 /// One projection shared by all waiters for a state version and clock second.
@@ -8,7 +9,6 @@ pub(super) struct AwaitSchedule {
     built_at: u64,
     etas: HashMap<String, u64>,
 }
-use crate::store::{AwaitCursor, AwaitState, Result};
 
 impl SharedQueue {
     /// Subscribe to queue-state versions without consuming worker wakeups.

@@ -74,8 +74,12 @@ async fn await_entry(
             Ok(AwaitState::Posted {
                 comment_url: None, ..
             }) => {
-                return send_terminal(stream, "posted comment has no recorded URL", "removed")
-                    .await;
+                return send_terminal(
+                    stream,
+                    "posted comment has no recorded URL",
+                    "posted_without_url",
+                )
+                .await;
             }
             Ok(AwaitState::Unknown) => return missing_entry(stream, id, cursor.as_ref()).await,
             Err(error) => {

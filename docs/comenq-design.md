@@ -439,7 +439,7 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 
 1. **Listener** (`run_listener`): This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
-   `comenq` clients. For each connection it reads one JSON `Request`; ordinary
+   `comenq` clients. For each connection, it reads one JSON `Request`; ordinary
    requests receive one JSON `Response`, while `await` streams progress and a
    terminal outcome before closing the connection.
 

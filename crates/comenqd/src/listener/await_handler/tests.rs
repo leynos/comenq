@@ -284,3 +284,32 @@ async fn failure_outcomes_preserve_the_bounded_error_category(
     assert!(matches!(event, AwaitEvent::Error { .. }));
     assert_eq!(task.await.expect("join"), expected_outcome);
 }
+
+#[tokio::test]
+async fn legacy_success_has_its_own_bounded_failure_category() {
+    let dir = TempDir::new().expect("tempdir");
+    let queue = queue(&dir).expect("queue");
+    let id = put(&queue).await.expect("put");
+    let legacy_store = crate::store::QueueStore::open(&queue.config().queue_path).expect("store");
+    legacy_store
+        .complete(&id, 1000)
+        .expect("legacy completion without URL");
+    let (_shutdown, rx) = watch::channel(());
+    let (client, server) = UnixStream::pair().expect("pair");
+    let task = tokio::spawn(handle_await(
+        server,
+        queue,
+        id,
+        rx,
+        Arc::new(Semaphore::new(1)),
+    ));
+    let mut reader = BufReader::new(client);
+    let event = frame(&mut reader).await.expect("error frame");
+    assert_eq!(
+        event,
+        AwaitEvent::Error {
+            message: "posted comment has no recorded URL".into()
+        }
+    );
+    assert_eq!(task.await.expect("join"), "posted_without_url");
+}
