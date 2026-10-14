@@ -163,13 +163,19 @@ impl SharedQueue {
     }
 
     /// Durably record a successful post before removing its queue entry.
-    pub async fn complete(&self, entry: &StoredEntry, token_hash: &str) -> StoreResult<()> {
+    pub async fn complete(
+        &self,
+        entry: &StoredEntry,
+        token_hash: &str,
+        comment_url: &str,
+    ) -> StoreResult<()> {
         let entry = entry.clone();
         let token_hash = token_hash.to_owned();
+        let comment_url = comment_url.to_owned();
         let now = self.clock.unix_now();
         let result = self
             .with_store("complete", move |store| {
-                store.complete_claim_with_token(&entry, &token_hash, now)
+                store.complete_claim_with_token(&entry, &token_hash, now, Some(comment_url))
             })
             .await;
         if result.is_ok() {
@@ -363,4 +369,5 @@ fn is_safe_repository_component(component: &str) -> bool {
 #[cfg(test)]
 mod tests;
 
+mod await_lookup;
 mod history;

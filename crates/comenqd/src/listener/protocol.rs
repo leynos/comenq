@@ -194,6 +194,8 @@ mod tests {
 
     fn history_record(body: String) -> HistoryRecord {
         HistoryRecord {
+            comment_url: None,
+            incarnation: String::new(),
             attempt_id: "attempt".into(),
             id: "1a2b3c4d".into(),
             posted_at: 1_700_000_000,

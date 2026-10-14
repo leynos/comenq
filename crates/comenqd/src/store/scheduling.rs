@@ -32,6 +32,7 @@ impl QueueStore {
 
         let entry = StoredEntry {
             id,
+            incarnation: Uuid::new_v4().to_string(),
             order: entries
                 .last()
                 .map_or(0, |tail| tail.order.saturating_add(1)),
@@ -129,10 +130,15 @@ impl QueueStore {
             .max())
     }
 
-    /// Clear claims left by a worker that exited before completing its post.
+    /// Clear interrupted claims and assign stable lifetimes to legacy entries.
     pub(super) fn reclaim_claims(&self) -> Result<()> {
         for mut entry in self.entries()? {
-            if entry.claim_token.take().is_some() {
+            let was_claimed = entry.claim_token.take().is_some();
+            let needs_incarnation = entry.incarnation.is_empty();
+            if needs_incarnation {
+                entry.incarnation = Uuid::new_v4().to_string();
+            }
+            if was_claimed || needs_incarnation {
                 self.write_entry(&entry)?;
             }
         }

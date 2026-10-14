@@ -25,7 +25,7 @@ fn history_records_round_trip_in_order_across_pages() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
-    let success = HistoryRecord::success(&entry, "", 1_600);
+    let success = HistoryRecord::success(&entry, "", 1_600, None);
     let failure = HistoryRecord::failure(&entry, "", 2_200, "timeout");
     store.append_history(&success).expect("append success");
     store.append_history(&failure).expect("append failure");
@@ -44,6 +44,8 @@ fn history_records_round_trip_in_order_across_pages() {
 #[rstest]
 fn history_records_without_token_hash_remain_readable() {
     let mut legacy = serde_json::to_value(HistoryRecord {
+        comment_url: None,
+        incarnation: String::new(),
         attempt_id: "legacy-attempt".into(),
         id: "0011aabb".into(),
         posted_at: 1_600,
@@ -70,7 +72,7 @@ fn history_skips_malformed_lines() {
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
     store
-        .append_history(&HistoryRecord::success(&entry, "", 1_600))
+        .append_history(&HistoryRecord::success(&entry, "", 1_600, None))
         .expect("append success");
     let log = dir.path().join("history.jsonl");
     let mut text = fs::read(&log).expect("read log");
@@ -124,9 +126,9 @@ fn history_cursor_keeps_the_initial_snapshot_when_new_records_are_appended() {
     let dir = TempDir::new().expect("tempdir");
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
-    let first = HistoryRecord::success(&entry, "", 1_600);
-    let second = HistoryRecord::success(&entry, "", 2_200);
-    let later = HistoryRecord::success(&entry, "", 2_800);
+    let first = HistoryRecord::success(&entry, "", 1_600, None);
+    let second = HistoryRecord::success(&entry, "", 2_200, None);
+    let later = HistoryRecord::success(&entry, "", 2_800, None);
     store.append_history(&first).expect("append first");
     store.append_history(&second).expect("append second");
 
@@ -156,7 +158,7 @@ fn recent_history_limit_is_applied_before_paginated_reads() {
     let store = open_store(&dir);
     let entry = store.put(request("a"), &immediate(0), 1_000).expect("put");
     let expected: Vec<_> = (0..6)
-        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt))
+        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt, None))
         .collect();
     for record in &expected {
         store.append_history(record).expect("append record");
@@ -174,7 +176,7 @@ fn recent_history_scan_crosses_chunk_boundaries() {
         .put(request(&body), &immediate(0), 1_000)
         .expect("put");
     let expected: Vec<_> = (0..12)
-        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt))
+        .map(|attempt| HistoryRecord::success(&entry, "", 1_600 + attempt, None))
         .collect();
     for record in &expected {
         store.append_history(record).expect("append record");
@@ -196,7 +198,7 @@ proptest! {
         let store = open_store(&dir);
         let entry = store.put(request("generated"), &immediate(0), 1_000).expect("put");
         let expected: Vec<_> = (0..record_count)
-            .map(|attempt| HistoryRecord::success(&entry, "", 2_000 + attempt as u64))
+            .map(|attempt| HistoryRecord::success(&entry, "", 2_000 + attempt as u64, None))
             .collect();
         for record in &expected {
             store.append_history(record).expect("append record");

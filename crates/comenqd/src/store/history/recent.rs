@@ -1,4 +1,4 @@
-//! Reverse scanning for bounded recent-history reads.
+//! Reverse scanning for bounded recent-history reads and completion lookup.
 
 use std::fs::File;
 use std::io::{self, Read as _, Seek as _, SeekFrom};
@@ -6,7 +6,6 @@ use std::path::Path;
 
 use super::{HistoryRecord, MAX_HISTORY_LINE_BYTES, Result, log_malformed, log_oversized};
 
-/// Keep reverse reads small while avoiding one seek per byte.
 const REVERSE_CHUNK_BYTES: usize = 16 * 1024;
 
 /// Find the start of the newest `limit` valid records without scanning older history.
@@ -16,28 +15,44 @@ pub(super) fn recent_start(
     end_offset: u64,
     limit: usize,
 ) -> Result<u64> {
+    let mut count = 0;
+    let mut oldest = end_offset;
+    scan_reverse(path, file, end_offset, 0, |start, _| {
+        oldest = start;
+        count += 1;
+        count == limit
+    })?;
+    Ok(oldest)
+}
+
+/// Return the newest matching record at or beyond a caller's history offset.
+pub(super) fn scan_reverse(
+    path: &Path,
+    file: &mut File,
+    end_offset: u64,
+    minimum_offset: u64,
+    mut accept: impl FnMut(u64, &HistoryRecord) -> bool,
+) -> Result<Option<HistoryRecord>> {
     let mut chunk_end = end_offset;
     let mut reversed_line = Vec::new();
     let mut line_start = None;
     let mut oversized = false;
-    let mut record_starts = Vec::with_capacity(limit.min(1024));
-
-    while chunk_end > 0 {
-        let chunk_start = chunk_end.saturating_sub(REVERSE_CHUNK_BYTES as u64);
+    while chunk_end > minimum_offset {
+        let chunk_start = chunk_end
+            .saturating_sub(REVERSE_CHUNK_BYTES as u64)
+            .max(minimum_offset);
         let chunk_len = usize::try_from(chunk_end - chunk_start)
             .map_err(|_| io::Error::other("history chunk length exceeds address space"))?;
         file.seek(SeekFrom::Start(chunk_start))?;
         let mut chunk = vec![0; chunk_len];
         file.read_exact(&mut chunk)?;
-
         for (index, byte) in chunk.iter().enumerate().rev() {
             let offset = chunk_start + index as u64;
             if *byte == b'\n' {
-                if let Some(start) = finish_line(path, line_start, &mut reversed_line, oversized) {
-                    record_starts.push(start);
-                    if record_starts.len() == limit {
-                        return Ok(start);
-                    }
+                if let Some(record) = finish_line(path, line_start, &mut reversed_line, oversized)
+                    && accept(offset + 1, &record)
+                {
+                    return Ok(Some(record));
                 }
                 reversed_line.clear();
                 line_start = None;
@@ -56,11 +71,12 @@ pub(super) fn recent_start(
         }
         chunk_end = chunk_start;
     }
-
-    if let Some(start) = finish_line(path, line_start, &mut reversed_line, oversized) {
-        record_starts.push(start);
+    if let Some(record) = finish_line(path, line_start, &mut reversed_line, oversized)
+        && accept(minimum_offset, &record)
+    {
+        return Ok(Some(record));
     }
-    Ok(record_starts.last().copied().unwrap_or(end_offset))
+    Ok(None)
 }
 
 fn finish_line(
@@ -68,12 +84,8 @@ fn finish_line(
     line_start: Option<u64>,
     reversed_line: &mut [u8],
     oversized: bool,
-) -> Option<u64> {
+) -> Option<HistoryRecord> {
     let start = line_start?;
-    accept_line(path, start, reversed_line, oversized)
-}
-
-fn accept_line(path: &Path, start: u64, reversed_line: &mut [u8], oversized: bool) -> Option<u64> {
     if oversized {
         log_oversized(path, start);
         return None;
@@ -83,7 +95,7 @@ fn accept_line(path: &Path, start: u64, reversed_line: &mut [u8], oversized: boo
         return None;
     }
     match serde_json::from_slice::<HistoryRecord>(reversed_line) {
-        Ok(_) => Some(start),
+        Ok(record) => Some(record),
         Err(error) => {
             log_malformed(path, start, &error);
             None

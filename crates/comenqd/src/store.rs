@@ -32,6 +32,9 @@ const COMPLETION_FILE: &str = "completion";
 pub struct StoredEntry {
     /// Deterministic eight-character identifier.
     pub id: String,
+    /// Unique lifetime of this entry, so a reused identifier cannot redirect a wait.
+    #[serde(default)]
+    pub incarnation: String,
     /// Explicit queue position; lower posts first. May go negative after
     /// repeated bumps.
     pub order: i64,
@@ -369,6 +372,8 @@ fn is_valid_id(id: &str) -> bool {
     id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+mod await_lookup;
+pub use await_lookup::{AwaitCursor, AwaitState};
 mod bounds;
 mod completion;
 mod history;

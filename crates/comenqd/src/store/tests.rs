@@ -221,6 +221,7 @@ fn id_collision_with_a_different_request_uses_a_salted_id() {
             enqueued_at: 1000,
             not_before: 0,
             claim_token: None,
+            incarnation: String::new(),
             request: request("different"),
         })
         .expect("seed colliding entry");
@@ -248,6 +249,7 @@ fn unsafe_stored_identifiers_are_skipped_without_path_traversal() {
         enqueued_at: 1000,
         not_before: 0,
         claim_token: None,
+        incarnation: String::new(),
         request: request("unsafe"),
     };
     let bytes = serde_json::to_vec(&unsafe_entry).expect("serialize unsafe entry");
@@ -264,3 +266,5 @@ mod claims;
 mod history;
 mod resource_limits;
 mod scheduling;
+
+mod await_lookup;

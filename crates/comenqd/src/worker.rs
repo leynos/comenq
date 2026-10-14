@@ -23,7 +23,6 @@ use tokens::next_token_index;
 pub use tokens::{TokenClient, token_hash};
 
 const RETRY_OVERFLOW_FALLBACK: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
-
 /// Errors returned when posting a comment to GitHub.
 #[derive(Debug, Error)]
 enum PostCommentError {
@@ -43,11 +42,13 @@ async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
     config: &Config,
-) -> Result<(), PostCommentError> {
+) -> Result<String, PostCommentError> {
     let issues = octocrab.issues(&request.owner, &request.repo);
     let fut = issues.create_comment(request.pr_number, &request.body);
     match tokio::time::timeout(Duration::from_secs(config.github_api_timeout_secs), fut).await {
-        Ok(res) => res.map(|_| ()).map_err(PostCommentError::Api),
+        Ok(res) => res
+            .map(|comment| comment.html_url.to_string())
+            .map_err(PostCommentError::Api),
         Err(_) => Err(PostCommentError::Timeout),
     }
 }
@@ -61,12 +62,12 @@ async fn post_comment_with_metrics(
     octocrab: &Octocrab,
     request: &CommentRequest,
     config: &Config,
-) -> Result<(), PostCommentError> {
+) -> Result<String, PostCommentError> {
     let start = Instant::now();
     let result = post_comment(octocrab, request, config).await;
     metrics::record_github_post_duration(start.elapsed());
     let outcome = match &result {
-        Ok(()) => "success",
+        Ok(_) => "success",
         Err(PostCommentError::Api(_)) => "api_error",
         Err(PostCommentError::Timeout) => "timeout",
     };
@@ -344,8 +345,8 @@ pub async fn run_worker(
         );
         let client = clients.get(index).context("token index in range")?;
         match post_comment_with_metrics(&client.octocrab, &entry.request, &config).await {
-            Ok(()) => {
-                queue.complete(&entry, &client.hash).await?;
+            Ok(comment_url) => {
+                queue.complete(&entry, &client.hash, &comment_url).await?;
             }
             Err(e) => {
                 tracing::error!(
@@ -394,6 +395,5 @@ fn retry_deadline(cooldown: Duration) -> Instant {
         .or_else(|| now.checked_add(RETRY_OVERFLOW_FALLBACK))
         .unwrap_or(now)
 }
-
 #[cfg(test)]
 mod tests;

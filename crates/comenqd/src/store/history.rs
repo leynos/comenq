@@ -3,95 +3,20 @@
 //! The store owns durable attempt records and file positions; protocol adapters
 //! convert records to wire types and decide how many fit in a response.
 
-use comenq_lib::CommentRequest;
-use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
-use uuid::Uuid;
 
-use super::{Result, StoredEntry};
+use super::Result;
 
-mod logging;
-mod recent;
-use logging::{log_malformed, log_oversized};
-
-/// Bound error text so one failed attempt always fits within a history page.
-const MAX_HISTORY_ERROR_BYTES: usize = 64 * 1024;
 /// Bound memory used to inspect one history line, including corrupt lines.
 const MAX_HISTORY_LINE_BYTES: usize = 2 * 1024 * 1024;
 
-/// One posting attempt, as recorded in the history log.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct HistoryRecord {
-    /// Stable identifier used to make completion recovery idempotent.
-    #[serde(default)]
-    pub attempt_id: String,
-    /// Identifier the entry carried while queued.
-    pub id: String,
-    /// Unix time the posting attempt finished, in seconds.
-    pub posted_at: u64,
-    /// Whether GitHub accepted the comment.
-    pub success: bool,
-    /// Failure description when `success` is false.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// Hex SHA-256 of the token that made the attempt.
-    ///
-    /// Missing values identify records written before token rotation existed.
-    #[serde(default)]
-    pub token_hash: String,
-    /// The comment that was posted (or attempted).
-    pub request: CommentRequest,
-}
-
-impl HistoryRecord {
-    /// Record a successful post of `entry` using `token_hash`.
-    #[must_use]
-    pub(crate) fn success(entry: &StoredEntry, token_hash: &str, posted_at: u64) -> Self {
-        Self {
-            attempt_id: Uuid::new_v4().to_string(),
-            id: entry.id.clone(),
-            posted_at,
-            success: true,
-            error: None,
-            token_hash: token_hash.to_owned(),
-            request: entry.request.clone(),
-        }
-    }
-
-    /// Record a failed posting attempt of `entry` using `token_hash`.
-    #[must_use]
-    pub(crate) fn failure(
-        entry: &StoredEntry,
-        token_hash: &str,
-        posted_at: u64,
-        error: impl Into<String>,
-    ) -> Self {
-        Self {
-            attempt_id: Uuid::new_v4().to_string(),
-            id: entry.id.clone(),
-            posted_at,
-            success: false,
-            error: Some(bounded_error(error.into())),
-            token_hash: token_hash.to_owned(),
-            request: entry.request.clone(),
-        }
-    }
-}
-
-fn bounded_error(mut error: String) -> String {
-    if error.len() <= MAX_HISTORY_ERROR_BYTES {
-        return error;
-    }
-    let mut end = MAX_HISTORY_ERROR_BYTES - 3;
-    while !error.is_char_boundary(end) {
-        end -= 1;
-    }
-    error.truncate(end);
-    error.push_str("...");
-    error
-}
+mod record;
+pub(crate) use record::HistoryRecord;
+mod logging;
+mod recent;
+use logging::{log_malformed, log_oversized};
 
 /// Position in a fixed snapshot of the append-only history file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,4 +309,21 @@ fn contains_attempt(path: &Path, attempt_id: &str, search_from: u64) -> Result<b
 
 fn invalid_position() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "history cursor is invalid")
+}
+
+/// Find the newest success, excluding attempts from older incarnations.
+pub(super) fn latest_completion(
+    path: &Path,
+    id: &str,
+    cursor: Option<&super::await_lookup::AwaitCursor>,
+) -> Result<Option<HistoryRecord>> {
+    let Some((mut file, end)) = open_history_snapshot(path, true)? else {
+        return Ok(None);
+    };
+    let minimum = cursor.map_or(0, |cursor| cursor.offset);
+    recent::scan_reverse(path, &mut file, end, minimum, |_, record| {
+        record.id == id
+            && record.success
+            && cursor.is_none_or(|cursor| record.incarnation == cursor.incarnation)
+    })
 }
