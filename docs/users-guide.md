@@ -201,20 +201,23 @@ The stable metric names and labels are:
   task restarts.
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
   `bump`, `bust`, `del`, `hist`, `await`) and `outcome` labels. Ordinary
-  operations use `accepted`, `failed`, or `rejected`; `await` uses fixed
-  terminal outcomes or bounded store-error categories. Requests without a
-  parsed operation omit the `operation` label.
+  operations use `accepted`, `failed`, or `rejected`; `await` uses the fixed
+  terminal outcomes listed below and bounded store-error categories. Requests
+  without a parsed operation omit the `operation` label.
 - `comenqd_protocol_transaction_duration_seconds` measures complete listener
   transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
-  `bust`, `del`, `hist`, and `unknown`; `outcome` is `accepted`, `failed`,
-  `rejected`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `bust`, `del`, `hist`, `await`, and `unknown`. `outcome` is `accepted`,
+  `failed`, `rejected`, or `unknown` for ordinary operations. Await terminal
+  outcomes are `posted`, `unknown_identifier`, `removed`, `rejected_capacity`,
+  `shutdown`, `client_gone`, `posted_without_url`, and `posted_url_too_large`,
+  plus bounded store-error categories. `error_kind` uses fixed classifications
+  and is `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
   `del`, `hist`, `history`, `append_history`, `latest_history_token`,
-  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
-  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
-  fixed classifications and is `none` on success.
+  `next_due`, `claim`, `complete`, `resolve_await`, `release`, `recover`,
+  `metrics`, and `unknown`; `outcome` is `success`, `failure`, or `unknown`.
+  `error_kind` uses fixed classifications and is `none` on success.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
