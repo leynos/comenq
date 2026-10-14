@@ -159,10 +159,10 @@ and macOS, simplifying installation and improving security and maintainability.
 
   Preserve the queue when the client disconnects.
 
-- [ ] 7.2.2. Add behavioural coverage for successful URL reporting, unknown IDs,
+- [x] 7.2.2. Add behavioural coverage for successful URL reporting, unknown IDs,
   retry after posting failure, deletion while waiting, and interruption
   followed by a successful later wait.
 
-- [ ] 7.2.3. Document the command, output, exit behaviour and retry semantics.
+- [x] 7.2.3. Document the command, output, exit behaviour and retry semantics.
 
   Cover the README, man page, user guide and design document.

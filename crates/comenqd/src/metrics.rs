@@ -8,6 +8,8 @@
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
+#[cfg(test)]
+mod await_tests;
 mod duration;
 
 pub(crate) use duration::{record_protocol_duration, record_queue_store_duration};
@@ -340,7 +342,7 @@ mod tests {
 
     /// Assert that one histogram sample was recorded with exactly the labels
     /// required by a metric scenario.
-    fn assert_histogram_labels(
+    pub(super) fn assert_histogram_labels(
         metrics: &[(
             metrics_util::CompositeKey,
             Option<metrics::Unit>,

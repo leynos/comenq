@@ -6,8 +6,8 @@
 mod steps;
 use cucumber::World as _;
 use steps::{
-    CliWorld, ClientWorld, CommentWorld, ConfigWorld, HistoryWorld, ListenerWorld, PackagingWorld,
-    QueueWorld, ReleaseWorld, WorkerWorld,
+    AwaitWorld, CliWorld, ClientWorld, CommentWorld, ConfigWorld, HistoryWorld, ListenerWorld,
+    PackagingWorld, QueueWorld, ReleaseWorld, WorkerWorld,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -21,6 +21,7 @@ fn main() -> anyhow::Result<()> {
         .context("failed to build the Tokio runtime for the cucumber test binary")?;
     runtime.block_on(async {
         tokio::join!(
+            AwaitWorld::run("tests/features/await.feature"),
             ReleaseWorld::run("tests/features/release.feature"),
             CommentWorld::run("tests/features/comment_request.feature"),
             ListenerWorld::run("tests/features/listener.feature"),

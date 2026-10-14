@@ -383,13 +383,6 @@ shipped client exposes seven subcommands, all sharing a global `--socket` flag
 
 - `comenq del <id>`: removes the identified comment from the queue.
 
-- `comenq await <id>`: waits in the foreground until the identified comment is
-  posted, then writes the full GitHub comment URL (including its comment
-  fragment) as one line on stdout. While it is queued, the client writes
-  newline-terminated countdown reports to stderr. It exits successfully after
-  reporting the URL; daemon errors, timeouts and lost connections fail the
-  command. Disconnecting or interrupting the client leaves the queue unchanged.
-
 - `comenq hist [-n|--limit <limit>]`: prints the posting-history log, oldest
   first, one line per record: the identifier, the age of the attempt (e.g.
   `2m 30s ago`, or `just now`), the outcome (`ok` or `FAIL`), the first eight
@@ -400,6 +393,24 @@ shipped client exposes seven subcommands, all sharing a global `--socket` flag
   restricts the output to the most recent `N` records without changing that
   ordering. If no attempts have been recorded, the client prints
   `No posting history recorded.` instead of a table.
+
+- `comenq await <id>`: waits in the foreground until the identified comment is
+  posted, then writes the full GitHub comment URL (including its comment
+  fragment) as one line on stdout. While it is queued, the client writes
+  newline-terminated countdown reports to stderr. It exits successfully after
+  reporting the URL; daemon errors, timeouts and lost connections fail the
+  command. Disconnecting or interrupting the client leaves the queue unchanged.
+
+The `<id>` must contain exactly eight hexadecimal characters. An unknown ID
+fails before the first countdown. A failed posting attempt remains queued and
+is retried after a full cooldown; `await` continues waiting through the retry.
+Deletion, daemon shutdown or connection loss fails the wait, as does a legacy
+successful history record without a stored comment URL. Interrupting the client
+only drops its connection, so a later `await` can still report a post.
+
+For example, a countdown line on stderr can be `2m 30s remaining`; after the
+post, stdout contains the full URL:
+`https://github.com/owner/repo/issues/123#issuecomment-456`.
 
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
 for the store and §5 for the wire protocol). The client follows history cursors

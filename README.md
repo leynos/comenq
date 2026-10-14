@@ -5,10 +5,10 @@ https://deepwiki.com/leynos/comenq)
 
 Comenq is a fault-tolerant service that queues GitHub Pull Request comments. It
 follows a daemon-client model: the `comenqd` daemon enforces a 16-minute
-cooling-off period for posting, while the `comenq` CLI simply enqueues
-requests. The architecture and crate choices are described in
-[docs/comenq-design.md](docs/comenq-design.md). Further guides in the
-[`docs/`](docs/) directory detail testing approaches and library rationale.
+cooling-off period for posting, while the `comenq` CLI manages queued requests
+and can wait for a posted comment's URL. The architecture and crate choices are
+described in [docs/comenq-design.md](docs/comenq-design.md). Further guides in
+the [`docs/`](docs/) directory detail testing approaches and library rationale.
 
 ## Building and testing
 
@@ -56,6 +56,27 @@ characters of the posting token's hash:
 ```bash
 comenq hist -n 20    # the twenty most recent posting attempts
 ```
+
+Use `await` when a script needs the full GitHub comment URL. It prints only
+that URL to stdout, so it can be captured directly; newline-terminated ETA
+countdowns go to stderr. Reports use the usual ETA format followed by
+`remaining`, or `due now` at zero, and use a bounded cadence. Capture the URL
+with:
+
+```bash
+URL=$(comenq await 1a2b3c4d)
+printf '%s\n' "$URL"
+```
+
+The identifier must be the eight-character hexadecimal ID shown by `put` or
+`list`. An unknown ID fails before any countdown. While the comment remains
+queued, `await` keeps waiting through failed post attempts, which the daemon
+retries after a full cooldown. Deletion, daemon shutdown or a lost connection
+ends the wait with an error. Interrupting `await` leaves the queue unchanged;
+you can await the same ID later. A successful historical post without a
+recorded comment URL also returns an error. Success exits with status 0,
+operation failures with status 1, and invalid command-line arguments with
+status 2.
 
 ## Running as a user service
 
