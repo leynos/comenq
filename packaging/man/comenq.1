@@ -142,7 +142,8 @@ URL=$(comenq await 1a2b3c4d)
 .B 0
 The requested operation succeeded. For
 .BR await ,
-the comment URL was received and written.
+the daemon confirmed the post. The client writes the URL to standard output; a
+broken output pipe does not change the successful status.
 .TP
 .B 1
 The operation failed, including an unknown or removed await identifier,

@@ -57,11 +57,12 @@ characters of the posting token's hash:
 comenq hist -n 20    # the twenty most recent posting attempts
 ```
 
-Use `await` when a script needs the full GitHub comment URL. It prints only
+Use `await` when a script needs the full GitHub comment URL. It writes only
 that URL to stdout, so it can be captured directly; newline-terminated ETA
 countdowns go to stderr. Reports use the usual ETA format followed by
-`remaining`, or `due now` at zero, and use a bounded cadence. Capture the URL
-with:
+`remaining`, or `due now` at zero, and use a bounded cadence. A zero exit
+status means the daemon confirmed the post; a closed stdout pipe does not
+change that status. Capture the URL with:
 
 ```bash
 URL=$(comenq await 1a2b3c4d)

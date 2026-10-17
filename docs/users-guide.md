@@ -152,9 +152,12 @@ posted. The command requires the eight-character hexadecimal ID printed by
 comenq await 1a2b3c4d
 ```
 
-On success, `await` writes the full GitHub comment URL, including the comment
-fragment, as its only stdout line. This makes the URL safe to capture in a
-script; progress countdowns are newline-terminated lines on stderr:
+After the daemon confirms the post, `await` writes the full GitHub comment URL,
+including the comment fragment, as its only stdout line. If the caller has
+closed stdout, `await` ignores the broken pipe and still exits successfully
+after daemon confirmation, though the caller will not receive the URL. This
+makes the URL safe to capture in a script; progress countdowns are
+newline-terminated lines on stderr:
 
 ```bash
 URL=$(comenq await 1a2b3c4d)
@@ -182,8 +185,9 @@ successful historical post with no recorded comment URL also returns an
 explicit error. Interrupting or disconnecting `await` does not change the
 queue; a later `await` on the same ID can still return the URL.
 
-`await` exits with status 0 after writing the URL, status 1 on a daemon, queue,
-or connection error, and status 2 when the command line is invalid.
+`await` exits with status 0 after the daemon confirms the post, status 1 on a
+daemon, queue, or connection error, and status 2 when the command line is
+invalid.
 
 ## Inspect local metrics
 

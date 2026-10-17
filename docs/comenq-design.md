@@ -397,9 +397,10 @@ shipped client exposes seven subcommands, all sharing a global `--socket` flag
 - `comenq await <id>`: waits in the foreground until the identified comment is
   posted, then writes the full GitHub comment URL (including its comment
   fragment) as one line on stdout. While it is queued, the client writes
-  newline-terminated countdown reports to stderr. It exits successfully after
-  reporting the URL; daemon errors, timeouts and lost connections fail the
-  command. Disconnecting or interrupting the client leaves the queue unchanged.
+  newline-terminated countdown reports to stderr. It exits successfully once
+  the daemon confirms the post; a broken stdout pipe does not change that
+  status. Daemon errors, timeouts and lost connections fail the command.
+  Disconnecting or interrupting the client leaves the queue unchanged.
 
 The `<id>` must contain exactly eight hexadecimal characters. An unknown ID
 fails before the first countdown. A failed posting attempt remains queued and
