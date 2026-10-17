@@ -178,7 +178,7 @@ pub enum Command {
 
 fn parse_await_id(id: &str) -> Result<String, String> {
     if id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(id.to_owned())
+        Ok(id.to_ascii_lowercase())
     } else {
         Err("identifier must contain exactly eight hexadecimal characters".to_owned())
     }

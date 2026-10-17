@@ -70,6 +70,29 @@ impl Countdown {
         self.next_report = Instant::now() + Duration::from_secs(report_interval(remaining));
         Ok(())
     }
+
+    fn observe(
+        countdown: &mut Option<Self>,
+        eta_seconds: u64,
+        stderr: &mut impl Write,
+    ) -> Result<(), ClientError> {
+        if let Some(current) = countdown {
+            current.eta = eta_seconds;
+            current.arrived = Instant::now();
+            current.next_report = current
+                .next_report
+                .min(Instant::now() + Duration::from_secs(report_interval(eta_seconds)));
+        } else {
+            let mut first = Self {
+                eta: eta_seconds,
+                arrived: Instant::now(),
+                next_report: Instant::now(),
+            };
+            first.report(stderr)?;
+            *countdown = Some(first);
+        }
+        Ok(())
+    }
 }
 
 pub(super) async fn receive(
@@ -80,20 +103,7 @@ pub(super) async fn receive(
     let mut countdown: Option<Countdown> = None;
     let mut deadline = CLIENT_REPLY_TIMEOUT;
     loop {
-        // Keep the same read future alive across countdown ticks: cancelling a
-        // partially consumed frame would lose its prefix.
-        let frame = tokio::time::timeout(deadline, read_frame(reader));
-        tokio::pin!(frame);
-        let event = loop {
-            let report_at = countdown.as_ref().map(|countdown| countdown.next_report);
-            tokio::select! {
-                biased;
-                result = &mut frame => break result.map_err(|_| ClientError::ReplyTimeout)??,
-                () = report_tick(report_at) => {
-                    if let Some(countdown) = &mut countdown { countdown.report(stderr)?; }
-                }
-            }
-        };
+        let event = next_event(reader, &mut countdown, stderr, deadline).await?;
         deadline = Duration::from_secs(AWAIT_IDLE_TIMEOUT_SECS);
         match event {
             AwaitEvent::Posted { comment_url } => {
@@ -102,21 +112,29 @@ pub(super) async fn receive(
             }
             AwaitEvent::Error { message } => return Err(ClientError::Daemon(message)),
             AwaitEvent::Waiting { eta_seconds } => {
-                if let Some(countdown) = &mut countdown {
-                    countdown.eta = eta_seconds;
-                    countdown.arrived = Instant::now();
-                    countdown.next_report = countdown
-                        .next_report
-                        .min(Instant::now() + Duration::from_secs(report_interval(eta_seconds)));
-                } else {
-                    let mut first = Countdown {
-                        eta: eta_seconds,
-                        arrived: Instant::now(),
-                        next_report: Instant::now(),
-                    };
-                    first.report(stderr)?;
-                    countdown = Some(first);
-                }
+                Countdown::observe(&mut countdown, eta_seconds, stderr)?;
+            }
+        }
+    }
+}
+
+async fn next_event(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    countdown: &mut Option<Countdown>,
+    stderr: &mut impl Write,
+    deadline: Duration,
+) -> Result<AwaitEvent, ClientError> {
+    // Keep the same read future alive across countdown ticks: cancelling a
+    // partially consumed frame would lose its prefix.
+    let frame = tokio::time::timeout(deadline, read_frame(reader));
+    tokio::pin!(frame);
+    loop {
+        let report_at = countdown.as_ref().map(|countdown| countdown.next_report);
+        tokio::select! {
+            biased;
+            result = &mut frame => return result.map_err(|_| ClientError::ReplyTimeout)?,
+            () = report_tick(report_at) => {
+                if let Some(countdown) = countdown { countdown.report(stderr)?; }
             }
         }
     }

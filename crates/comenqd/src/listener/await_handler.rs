@@ -5,6 +5,7 @@ use crate::queue::SharedQueue;
 use crate::store::{AwaitCursor, AwaitState};
 use anyhow::Result;
 use comenq_lib::protocol::{AWAIT_HEARTBEAT_SECS, AwaitEvent, MAX_AWAIT_FRAME_BYTES};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -54,44 +55,8 @@ async fn await_entry(
         if shutdown.has_changed().unwrap_or(true) {
             return send_terminal(stream, "daemon is shutting down", "shutdown").await;
         }
-        match queue.resolve_await(id, cursor.clone()).await {
-            Ok(AwaitState::Pending {
-                eta_seconds,
-                cursor: selected,
-            }) => {
-                cursor = Some(selected);
-                if send_frame(stream, &AwaitEvent::Waiting { eta_seconds })
-                    .await
-                    .is_err()
-                {
-                    return "client_gone";
-                }
-            }
-            Ok(AwaitState::Posted {
-                comment_url: Some(comment_url),
-                ..
-            }) => return send_posted(stream, comment_url).await,
-            Ok(AwaitState::Posted {
-                comment_url: None, ..
-            }) => {
-                return send_terminal(
-                    stream,
-                    "posted comment has no recorded URL",
-                    "posted_without_url",
-                )
-                .await;
-            }
-            Ok(AwaitState::Unknown) => return missing_entry(stream, id, cursor.as_ref()).await,
-            Err(error) => {
-                let category = error.category();
-                tracing::warn!(error_kind = category, error = %error, "await lookup failed");
-                return send_terminal(
-                    stream,
-                    &format!("queue lookup failed: {category}"),
-                    category,
-                )
-                .await;
-            }
+        if let ControlFlow::Break(outcome) = respond(stream, queue, id, &mut cursor).await {
+            return outcome;
         }
         // The client has already half-closed its request side: read readiness
         // means EOF even for a live waiter. Detect departure on bounded writes
@@ -103,6 +68,59 @@ async fn await_entry(
             }
             _ = state.changed() => {}
             _ = tokio::time::sleep(heartbeat) => {}
+        }
+    }
+}
+
+async fn respond(
+    stream: &mut UnixStream,
+    queue: &SharedQueue,
+    id: &str,
+    cursor: &mut Option<AwaitCursor>,
+) -> ControlFlow<&'static str> {
+    match queue.resolve_await(id, cursor.clone()).await {
+        Ok(AwaitState::Pending {
+            eta_seconds,
+            cursor: selected,
+        }) => {
+            *cursor = Some(selected);
+            if send_frame(stream, &AwaitEvent::Waiting { eta_seconds })
+                .await
+                .is_err()
+            {
+                ControlFlow::Break("client_gone")
+            } else {
+                ControlFlow::Continue(())
+            }
+        }
+        Ok(AwaitState::Posted {
+            comment_url: Some(comment_url),
+            ..
+        }) => ControlFlow::Break(send_posted(stream, comment_url).await),
+        Ok(AwaitState::Posted {
+            comment_url: None, ..
+        }) => ControlFlow::Break(
+            send_terminal(
+                stream,
+                "posted comment has no recorded URL",
+                "posted_without_url",
+            )
+            .await,
+        ),
+        Ok(AwaitState::Unknown) => {
+            ControlFlow::Break(missing_entry(stream, id, cursor.as_ref()).await)
+        }
+        Err(error) => {
+            let category = error.category();
+            tracing::warn!(error_kind = category, error = %error, "await lookup failed");
+            ControlFlow::Break(
+                send_terminal(
+                    stream,
+                    &format!("queue lookup failed: {category}"),
+                    category,
+                )
+                .await,
+            )
         }
     }
 }
