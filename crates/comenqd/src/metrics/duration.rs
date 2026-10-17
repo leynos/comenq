@@ -56,6 +56,7 @@ fn protocol_operation_label(operation: Option<&'static str>) -> &'static str {
         Some("bust") => "bust",
         Some("del") => "del",
         Some("hist") => "hist",
+        Some("await") => "await",
         _ => "unknown",
     }
 }
@@ -74,7 +75,8 @@ fn queue_store_operation_label(operation: &'static str) -> &'static str {
         | "append_history"
         | "latest_history_token"
         | "next_due"
-        | "complete" => operation,
+        | "complete"
+        | "resolve_await" => operation,
         "claim_next_due" => "claim",
         "release_claim" => "release",
         "recover_worker_state" => "recover",
@@ -87,7 +89,33 @@ fn queue_store_operation_label(operation: &'static str) -> &'static str {
 /// unrecognised values are recorded as `unknown`.
 fn bounded_outcome_label(outcome: &'static str) -> &'static str {
     match outcome {
-        "accepted" | "failed" | "rejected" | "success" | "failure" => outcome,
+        "accepted"
+        | "failed"
+        | "rejected"
+        | "success"
+        | "failure"
+        | "posted"
+        | "unknown_identifier"
+        | "removed"
+        | "rejected_capacity"
+        | "shutdown"
+        | "client_gone"
+        | "posted_without_url"
+        | "posted_url_too_large"
+        | "not_found"
+        | "permission_denied"
+        | "invalid_data"
+        | "io_error"
+        | "invalid_json"
+        | "invalid_identifier"
+        | "unsafe_identifier"
+        | "invalid_repository_component"
+        | "invalid_last_post"
+        | "invalid_last_attempt"
+        | "blocking_task"
+        | "queue_full"
+        | "entry_too_large"
+        | "byte_budget_exceeded" => outcome,
         _ => "unknown",
     }
 }

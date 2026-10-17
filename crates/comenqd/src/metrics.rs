@@ -8,6 +8,8 @@
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 
+#[cfg(test)]
+mod await_tests;
 mod duration;
 
 pub(crate) use duration::{record_protocol_duration, record_queue_store_duration};
@@ -19,6 +21,7 @@ const TASK_RESTARTS: &str = "comenqd_task_restarts_total";
 const REQUESTS: &str = "comenqd_requests_total";
 const QUEUE_ENTRIES: &str = "comenqd_queue_entries";
 const QUEUE_BYTES: &str = "comenqd_queue_bytes";
+const AWAIT_SCHEDULE_CACHE: &str = "comenqd_await_schedule_cache_total";
 const COOLDOWN_WAIT_DURATION: &str = "comenqd_cooldown_wait_duration_seconds";
 const GITHUB_POSTS: &str = "comenqd_github_posts_total";
 const GITHUB_POST_DURATION: &str = "comenqd_github_post_duration_seconds";
@@ -57,6 +60,11 @@ pub(crate) fn record_queue_entries(count: usize) {
 /// Record persisted entry bytes plus reserved mutation headroom without labels.
 pub(crate) fn record_queue_bytes(bytes: u64) {
     gauge!(QUEUE_BYTES).set(bytes as f64);
+}
+
+/// Record a cache rebuild, reuse, or invalidation with a fixed outcome label.
+pub(crate) fn record_await_schedule_cache(outcome: &'static str) {
+    counter!(AWAIT_SCHEDULE_CACHE, "outcome" => outcome).increment(1);
 }
 
 /// Record the configured duration of a cooldown wait.
@@ -340,7 +348,7 @@ mod tests {
 
     /// Assert that one histogram sample was recorded with exactly the labels
     /// required by a metric scenario.
-    fn assert_histogram_labels(
+    pub(super) fn assert_histogram_labels(
         metrics: &[(
             metrics_util::CompositeKey,
             Option<metrics::Unit>,
@@ -360,6 +368,33 @@ mod tests {
                         })
                     })
                 && matches!(value, DebugValue::Histogram(samples) if samples.len() == 1)
+        }));
+    }
+
+    #[test]
+    fn records_await_cache_outcomes_with_bounded_labels() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            record_await_schedule_cache("hit");
+            record_await_schedule_cache("rebuild");
+            record_await_schedule_cache("invalidation");
+        });
+
+        let cache_metrics: Vec<_> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| key.key().name() == AWAIT_SCHEDULE_CACHE)
+            .collect();
+        assert_eq!(cache_metrics.len(), 3);
+        assert!(cache_metrics.iter().all(|(key, _, _, _)| {
+            let labels: Vec<_> = key.key().labels().collect();
+            labels.len() == 1
+                && matches!(
+                    (labels[0].key(), labels[0].value()),
+                    ("outcome", "hit" | "rebuild" | "invalidation")
+                )
         }));
     }
 }

@@ -21,6 +21,7 @@ fn entry(request: CommentRequest, order: i64, enqueued_at: u64) -> StoredEntry {
         enqueued_at,
         not_before: 0,
         claim_token: None,
+        incarnation: uuid::Uuid::new_v4().to_string(),
         request,
     }
 }

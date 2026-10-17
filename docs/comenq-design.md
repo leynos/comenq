@@ -143,11 +143,11 @@ providing clarity and maintainability compared to the more verbose builder
 pattern.[^3]
 
 The CLI has a global optional `--socket` override (also available through
-`COMENQ_SOCKET`) and six subcommands: `put`, `list`, `bump`, `bust`, `del`, and
-`hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>` and an optional
-`--now`; the other commands accept no positional arguments (`list`) or an
-eight-character entry identifier (`bump`, `bust`, and `del`). `hist` accepts an
-optional `-n` or `--limit` count.
+`COMENQ_SOCKET`) and seven subcommands: `put`, `list`, `bump`, `bust`, `del`,
+`await`, and `hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>`
+and an optional `--now`; the other commands accept no positional arguments
+(`list`) or an eight-character entry identifier (`bump`, `bust`, `del`, and
+`await`). `hist` accepts an optional `-n` or `--limit` count.
 
 The following code shows the shape of the shipped `Args` parser and its
 subcommands. The implementation delegates protocol and socket work to the
@@ -186,6 +186,7 @@ pub enum Command {
     Bump { id: String },
     Bust { id: String },
     Del { id: String },
+    Await { id: String },
     Hist {
         #[arg(short = 'n', long, value_name = "LIMIT")]
         limit: Option<usize>,
@@ -204,10 +205,13 @@ time, so the client can try the user runtime socket before the system socket.
 
 ### 2.2. Client-Daemon IPC Protocol
 
-Each Unix domain socket connection carries one JSON-encoded `Request`. The
-client writes the complete request and shuts down its write side; the daemon
-deserializes it, sends one JSON-encoded `Response`, then closes the connection.
-The shared protocol types are defined in `src/protocol.rs`; `CommentRequest` in
+Each Unix domain socket connection carries one JSON-encoded `Request`. For
+ordinary operations, the client writes the complete request and shuts down its
+write side; the daemon deserializes it, sends one JSON-encoded `Response`, then
+closes the connection. `await` is the streaming exception: after the client
+half-closes, the daemon sends newline-delimited JSON `AwaitEvent` frames until
+one terminal `posted` or `error` frame, then closes the connection. The shared
+protocol types are defined in `src/protocol.rs`; `CommentRequest` in
 `src/lib.rs` is the payload nested inside a `put` request, not a standalone
 wire message.
 
@@ -215,13 +219,14 @@ wire message.
 snake_case. `put` contains a `request` object with `owner`, `repo`,
 `pr_number`, and `body`; its optional `immediate` field defaults to `false`.
 `list` has no additional fields. `bump`, `bust`, and `del` each contain an `id`
-string. `hist` accepts an optional `limit` and continuation cursor, and returns
-`history` records in chronological pages over a fixed log snapshot. A
-successful response is tagged with `"outcome":"ok"` and may contain an `entry`
-(for `put`), `entries` (for `list`), or `history` (for `hist`). A history
-response includes `next_cursor` when more records remain. A failed response is
-tagged with `"outcome":"error"` and contains a human-readable `message`. Absent
-payload fields are omitted.
+string. `await` contains an eight-character hexadecimal `id`; it is read-only
+and does not change queue or worker state. `hist` accepts an optional `limit`
+and continuation cursor, and returns `history` records in chronological pages
+over a fixed log snapshot. A successful response is tagged with
+`"outcome":"ok"` and may contain an `entry` (for `put`), `entries` (for
+`list`), or `history` (for `hist`). A history response includes `next_cursor`
+when more records remain. A failed response is tagged with `"outcome":"error"`
+and contains a human-readable `message`. Absent payload fields are omitted.
 
 The JSON is sent over a `tokio::net::UnixStream`. A Unix Domain Socket (UDS) is
 used for local IPC:
@@ -356,9 +361,8 @@ handling, so `run` operates on validated data without rechecking it.
 ### 2.4. Client Subcommands and ETA Semantics
 
 The historical blueprint above shows a client that only enqueues a comment. The
-shipped client instead exposes six subcommands, one per protocol operation, all
-sharing a global `--socket` flag (also settable via the `COMENQ_SOCKET`
-environment variable):
+shipped client exposes seven subcommands, all sharing a global `--socket` flag
+(also settable via the `COMENQ_SOCKET` environment variable):
 
 - `comenq put <owner/repo> <pr_number> <comment_body>`: enqueues a comment and
   prints its identifier and an approximate ETA, e.g.
@@ -390,10 +394,49 @@ environment variable):
   ordering. If no attempts have been recorded, the client prints
   `No posting history recorded.` instead of a table.
 
+- `comenq await <id>`: waits in the foreground until the identified comment is
+  posted, then writes the full GitHub comment URL (including its comment
+  fragment) as one line on stdout. While it is queued, the client writes
+  newline-terminated countdown reports to stderr. It exits successfully once
+  the daemon confirms the post; a broken stdout pipe does not change that
+  status. Daemon errors, timeouts and lost connections fail the command.
+  Disconnecting or interrupting the client leaves the queue unchanged.
+
+The `<id>` must contain exactly eight hexadecimal characters. An unknown ID
+fails before the first countdown. A failed posting attempt remains queued and
+is retried after a full cooldown; `await` continues waiting through the retry.
+Deletion, daemon shutdown or connection loss fails the wait, as does a legacy
+successful history record without a stored comment URL. Interrupting the client
+only drops its connection, so a later `await` can still report a post.
+
+For example, a countdown line on stderr can be `2m 30s remaining`; after the
+post, stdout contains the full URL:
+`https://github.com/owner/repo/issues/123#issuecomment-456`.
+
 Each subcommand maps directly to one variant of the `Request` enum (see §3.2
 for the store and §5 for the wire protocol). The client follows history cursors
-until the snapshot is complete, then renders the records; other commands print
-their confirmation or the daemon's error message after one reply.
+until the snapshot is complete, then renders the records; ordinary commands
+print their confirmation or the daemon's error message after one reply. `await`
+uses the streaming protocol described in §5.3.
+
+**Await countdown.** The first `waiting` frame produces a countdown report
+immediately on stderr. Later reports are newline-terminated and follow this
+cadence, capped at the current non-zero remaining ETA with a one-second
+minimum. At zero ETA the client reports `due now` no more than once per minute
+while it waits for a terminal frame:
+
+| Remaining ETA     | Report interval |
+| ----------------- | --------------- |
+| Up to 60 s        | 10 s            |
+| 61 s to 10 min    | 30 s            |
+| 10 min 1 s to 1 h | 2 min           |
+| 1 h 1 s to 6 h    | 10 min          |
+| More than 6 h     | 30 min          |
+
+Non-zero countdowns use the same `format_eta` conventions as `put` and `list`,
+followed by `remaining`; zero is rendered as `due now`. Each report updates
+from the latest daemon ETA and elapsed time. The client allows 5 s for its
+first complete frame and 45 s between later frames.
 
 **ETA semantics.** The estimated time until posting shown by `put` and `list`
 reflects three rules enforced by the daemon:
@@ -435,9 +478,9 @@ asynchronous tasks that run concurrently for the lifetime of the daemon:
 
 1. **Listener** (`run_listener`): This task is the daemon's public-facing
    interface. It binds to the UDS and listens for incoming connections from
-   `comenq` clients. For each connection it reads one JSON `Request`, executes
-   it directly against the shared queue, and writes back one JSON `Response`
-   before closing the connection.
+   `comenq` clients. For each connection, it reads one JSON `Request`; ordinary
+   requests receive one JSON `Response`, while `await` streams progress and a
+   terminal outcome before closing the connection.
 
 2. **Worker** (`run_worker`): This is the main worker task. It operates in a
    loop, recomputing the head entry's due time on every iteration, waiting
@@ -560,32 +603,48 @@ attempt and keeps retry ETAs paced across daemon restarts. Each entry (a
 
 Entries are written to a temporary sibling file and then renamed into place, so
 a reader never observes a half-written entry. `bump`, `bust`, and `del` mutate
-or remove a single entry file the same way. `complete` first writes a durable
-`completion` recovery record containing the entry identifier, claim token,
-posting time, history record and history-log offset. It then idempotently
-appends the successful attempt, removes the matching claimed entry, atomically
+or remove a single entry file the same way. New entries carry a persisted
+incarnation identifier so an `await` lookup stays bound to one lifetime even
+when the deterministic eight-character ID is reused. The store reserves 57
+bytes for this UUID field when migrating legacy entries and rejects admission
+before migration if an entry or the queue lacks that space. `complete` first
+writes a durable `completion` recovery record containing the entry identifier,
+claim token, posting time, full comment URL in the history record, and
+history-log offset. It then idempotently appends the successful attempt, clears
+a superseded deletion marker, removes the matching claimed entry, atomically
 rewrites `last_post`, and clears the recovery record. `QueueStore::open`
 reconciles a record left by an interrupted completion and clears abandoned
 claims before the worker schedules entries. A completion for an entry deleted
 or replaced during the external post still records the successful post time,
 but cannot delete a replacement with a different claim.
 
+The store also keeps a marker under `await-deletions/<id>` when an entry is
+deleted. It records the deleted entry's incarnation. A successful completion
+clears a marker only when it belongs to that incarnation or to a currently
+queued successor, so an older in-flight completion cannot erase a newer
+deletion. A no-cursor `await` lookup treats a remaining marker as the latest
+identifier lifetime and returns unknown instead of exposing an older success.
+Startup removes markers for identifiers that are queued again, because the
+pending entry then takes precedence. These markers do not appear in the `hist`
+protocol or CLI.
+
 The store admits at most 1,024 pending entries and caps total accounted queue
 data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
 its remaining mutation reservation. New puts reserve up to 80 bytes each;
 existing valid entries' remaining reservation is derived from the serialized
-widths of their mutable `order` and `claim_token` fields. Claim and ordering
-updates consume that reservation, and writes preserve the remaining aggregate
-headroom. A new `put` is rejected before persistence if its serialized entry
-would exceed 2 MiB minus the 80-byte reservation, or if it would exceed the
-aggregate budget. On startup, the daemon fails closed if the number of existing
-regular `.json` files exceeds 1,024, or their raw bytes plus remaining
-reservations exceed 32 MiB. It also fails closed if a valid entry lacks enough
-room below the 2 MiB per-file cap for every reachable `order` or `claim_token`
-mutation. Startup leaves these files untouched; an operator must remove or
-repair the excess data before restarting. Reads accept files up to 2 MiB;
-oversized or corrupt files are logged and skipped by `entries()`, provided the
-startup count and aggregate-size checks pass. Their raw bytes still count
+widths of their mutable `order` and `claim_token` fields and, for legacy
+entries, the missing incarnation field. Claim, ordering and incarnation updates
+consume that reservation, and writes preserve the remaining aggregate headroom.
+A new `put` is rejected before persistence if its serialized entry would exceed
+2 MiB minus the 80-byte reservation, or if it would exceed the aggregate
+budget. On startup, the daemon fails closed if the number of existing regular
+`.json` files exceeds 1,024, or their raw bytes plus remaining reservations
+exceed 32 MiB. It also fails closed if a valid entry lacks enough room below
+the 2 MiB per-file cap for every reachable `order`, `claim_token` or
+incarnation mutation. Startup leaves these files untouched; an operator must
+remove or repair the excess data before restarting. Reads accept files up to 2
+MiB; oversized or corrupt files are logged and skipped by `entries()`, provided
+the startup count and aggregate-size checks pass. Their raw bytes still count
 towards the aggregate admission budget.
 
 The `list` response contains at most 1,024 scheduled entries, and client and
@@ -607,18 +666,22 @@ each entry.
 appends one JSON line per posting attempt to `<queue_path>/history.jsonl` (JSON
 Lines: append-only, one record per line). Each `HistoryRecord` carries the
 entry's `id` (the identifier it had while queued), `posted_at` (Unix seconds),
-`success`, an `error` description (present only when `success` is false),
-`token_hash` (the hex SHA-256 of the token value that made the attempt), and the
-`request` that was posted or attempted. Hashing rather than naming the token
-means rotation state survives token-file renames, and the log never holds a
-secret. Each record also has an attempt ID used to make successful completion
-recovery idempotent. A successful post is recorded before `complete` removes
-the entry from the queue and updates `last_post`. A failed post is recorded on
-every retry attempt, since the entry stays queued and is retried after a
-cooldown rather than being removed; each attempt therefore contributes its own
-failure record. Writing the history record on the failure path can itself fail
-(e.g. a full disk); the worker logs that error but never lets it interrupt the
-retry loop, so a history-logging fault cannot stall comment posting. Appending
+`success`, the `comment_url` for new successful records, an `error` description
+(present only when `success` is false), `token_hash` (the hex SHA-256 of the
+token value that made the attempt), and the `request` that was posted or
+attempted. New records also retain the entry's persisted incarnation, which
+distinguishes lifetimes when an identifier is reused. Older records without a
+URL or incarnation remain readable; an `await` for a legacy success without a
+URL returns an explicit error. Hashing rather than naming the token means
+rotation state survives token-file renames, and the log never holds a secret.
+Each record also has an attempt ID used to make successful completion recovery
+idempotent. A successful post is recorded before `complete` removes the entry
+from the queue and updates `last_post`. A failed post is recorded on every
+retry attempt, since the entry stays queued and is retried after a cooldown
+rather than being removed; each attempt therefore contributes its own failure
+record. Writing the history record on the failure path can itself fail (e.g. a
+full disk); the worker logs that error but never lets it interrupt the retry
+loop, so a history-logging fault cannot stall comment posting. Appending
 repairs a missing final line delimiter before the next record. When the log is
 read back (to serve the `hist` protocol operation), malformed and oversized
 lines are skipped with an error log. Reads return bounded pages and use a fixed
@@ -659,17 +722,46 @@ Its workflow is as follows:
    `CLIENT_READ_TIMEOUT_SECS` (default: 5 s); larger or slower requests are
    rejected with a timeout or size error. The `MAX_REQUEST_BYTES` and
    `CLIENT_READ_TIMEOUT_SECS` limits are compile-time constants that can be
-   adjusted. It deserializes the received JSON into a `Request` and passes it to
-   `listener::protocol::dispatch_request`, which maps it to a typed
-   `SharedQueue` operation and returns the resulting `Response` for the client
-   before the connection closes. Responses are capped at 2 MiB on both client
-   and daemon, and `list` returns at most 1,024 entries. If the complete list
-   exceeds the response cap, the daemon returns an error rather than a partial
-   response. Persisted entry reads accept files up to 2 MiB. Up to 80 bytes per
-   entry are reserved for metadata growth, and the store admits at most 32 MiB
-   of file bytes plus remaining reservations. A request that fails to
-   deserialize receives an error `Response` rather than a silently dropped
-   connection.
+   adjusted. It deserializes the received JSON into a `Request`. Ordinary
+   requests go to `listener::protocol::dispatch_request`, which maps them to a
+   typed `SharedQueue` operation and returns one `Response` before connection
+   closure. `Await` is routed to a read-only streaming handler. A
+   listener-owned semaphore caps concurrent waiters at 64; each frame write has
+   a 5 s deadline. Responses are capped at 2 MiB on both client and daemon, and
+   `list` returns at most 1,024 entries. If the complete list exceeds the
+   response cap, the daemon returns an error rather than a partial response.
+   Persisted entry reads accept files up to 2 MiB. Up to 80 bytes per entry are
+   reserved for metadata growth, and the store admits at most 32 MiB of file
+   bytes plus remaining reservations. A request that fails to deserialize
+   receives an error `Response` rather than a silently dropped connection.
+
+An `await` connection receives NDJSON frames, each no larger than 64 KiB
+including its newline. While the selected entry remains queued, the handler
+sends `waiting` frames with the current ETA at least every 15 s. It ends with
+exactly one `posted` frame containing the full comment URL or one `error` frame
+for an unknown or removed entry, shutdown, full waiter capacity (64 connected
+waiters), a legacy success without a URL, a URL too large for the frame limit,
+or a store read failure. The client enforces a 45 s deadline between complete
+frames. Waiters subscribe to a queue-state version signal before lookup,
+separately from the worker's `Notify`, so waiting cannot consume or delay a
+worker wake-up. The queue exposes an opaque `AwaitToken` and application-level
+change subscription; history offsets, incarnation matching, and Tokio's watch
+receiver remain inside their adapters. Waiters recheck after state changes and
+on heartbeats, and hold no store lock while writing. Lookup checks the pending
+entry first, then history. Its first pending result retains an internal history
+byte offset and persisted entry incarnation; later lookups use both to bind
+completion to that queued lifetime, even if the eight-character identifier is
+reused. A no-cursor history scan runs on a blocking task outside the queue
+mutex. The queue rechecks pending state and its generation after the scan,
+retrying when a put or completion changed the snapshot.
+
+The pending ETA uses the same list scheduling projection. The projection is
+cached under the store mutex for each state version and clock second, so many
+waiters do not repeatedly rebuild an unchanged schedule. The
+`comenqd_await_schedule_cache_total` metric counts cache `hit`, `rebuild`, and
+`invalidation` outcomes. Await metrics use bounded outcome and store-error
+categories, including `posted_url_too_large`; identifiers and comment URLs are
+never metric labels or structured error fields.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -698,6 +790,7 @@ sequenceDiagram
   Q-->>A: typed queue result
   A-->>H: Response
   H-->>Client: write JSON Response, close
+  Note over Client,Q: Await uses the streaming handler and state-version subscription
 ```
 
 ### 3.4. The GitHub Comment-Posting Worker (`run_worker`)
@@ -1141,6 +1234,7 @@ request operation:
 {"op":"bump","id":"1a2b3c4d"}
 {"op":"bust","id":"1a2b3c4d"}
 {"op":"del","id":"1a2b3c4d"}
+{"op":"await","id":"1a2b3c4d"}
 {"op":"hist","limit":20}
 ```
 
@@ -1149,12 +1243,33 @@ Replies use one tagged `Response` per connection. `put` replies include an
 and a `next_cursor` when more records remain. Other successful operations return
 `{"outcome":"ok"}`, and failures return `{"outcome":"error","message":"..."}`.
 
+`await` instead streams one JSON object per line. For example, while an entry
+is pending and then after GitHub accepts the comment, the daemon may send:
+
+```json
+{"status":"waiting","eta_seconds":61}
+{"status":"waiting","eta_seconds":46}
+{"status":"posted","comment_url":"https://github.com/owner/repo/issues/123#issuecomment-456"}
+```
+
+The terminal `posted` frame carries the full comment URL. A terminal
+`{"status":"error","message":"..."}` frame reports an unknown or removed entry,
+shutdown, full capacity (64 connected waiters), a legacy success without a URL,
+a URL too large for the frame limit, or a store read failure. Each frame is
+newline-terminated, includes its newline in the 64 KiB limit, and is written
+with a 5 s deadline. The daemon sends a waiting heartbeat every 15 s while
+idle. The client allows 5 s for the first complete frame and 45 s between later
+frames. It renders `waiting` ETAs as newline-terminated countdown lines on
+stderr and writes only the full posted comment URL to stdout. For a store
+lookup failure, the client receives `await lookup failed (<category>)` while
+the daemon log retains the detailed error.
+
 ### 5.4. Historical Source for `comenq` (Client)
 
 The following is historical pseudocode for the original single-purpose client;
-it is not the shipped implementation. The current client uses the six
+it is not the shipped implementation. The current client uses the seven
 subcommands described in Section 2.4 and sends tagged `Request` values, then
-reads and handles a `Response` from the daemon.
+handles a `Response` or an `AwaitEvent` stream from the daemon.
 
 ```rust
 // Historical pseudocode for crates/comenq/src/main.rs

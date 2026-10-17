@@ -27,7 +27,7 @@ impl QueueStore {
 
     /// Complete a claimed post without deleting a replacement entry.
     pub fn complete_claim(&self, entry: &StoredEntry, now: u64) -> Result<()> {
-        self.complete_claim_with_token(entry, "", now)
+        self.complete_claim_with_token(entry, "", now, None)
     }
 
     /// Complete a claimed post and persist its token identity for rotation.
@@ -36,6 +36,7 @@ impl QueueStore {
         entry: &StoredEntry,
         token_hash: &str,
         now: u64,
+        comment_url: Option<String>,
     ) -> Result<()> {
         if entry.claim_token.is_none() {
             self.find(&entry.id)?;
@@ -49,7 +50,7 @@ impl QueueStore {
             id: entry.id.clone(),
             posted_at: now,
             claim_token: entry.claim_token.clone(),
-            history: Some(HistoryRecord::success(entry, token_hash, now)),
+            history: Some(HistoryRecord::success(entry, token_hash, now, comment_url)),
             history_offset: Some(history_offset),
         })?;
         self.write_atomic(&self.completion_path, &record)?;
@@ -67,6 +68,7 @@ impl QueueStore {
         let entry_path = self.entry_path(&record.id)?;
         if let Some(history) = &record.history {
             self.append_completion_history(history, record.history_offset.unwrap_or(0))?;
+            self.clear_await_deletion(&record.id, &history.incarnation)?;
         }
         let remove_entry = match self.find(&record.id) {
             Ok(entry) => record

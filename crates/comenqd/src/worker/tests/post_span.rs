@@ -114,10 +114,11 @@ fn github_post_span_records_only_bounded_outcomes() {
                 .await;
             let success_client = octocrab_for(&success_server).expect("build success client");
             let (_success_dir, success_config) = config_with_api_timeout(1);
-            assert!(
+            assert_eq!(
                 post_comment_with_metrics(&success_client, &request, &success_config)
                     .await
-                    .is_ok()
+                    .expect("post succeeds"),
+                "https://github.com/o/r/issues/1#issuecomment-1"
             );
 
             let error_server = MockServer::start().await;

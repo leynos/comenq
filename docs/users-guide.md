@@ -98,6 +98,7 @@ comenq list
 comenq bump 1a2b3c4d
 comenq bust 1a2b3c4d
 comenq del 1a2b3c4d
+comenq await 1a2b3c4d
 comenq hist --limit 20
 ```
 
@@ -125,18 +126,69 @@ the history is read.
 The queue accepts at most 1,024 entries and 32 MiB of accounted data.
 Accounting includes each regular entry file's bytes plus its remaining mutation
 reservation. New puts reserve up to 80 bytes each; for existing entries, the
-remaining reservation is derived from the serialized widths of `order` and
-`claim_token`. Claim and ordering updates consume that headroom. A new `put` is
-rejected if its data would exceed the per-entry limit of 2 MiB minus the
-80-byte reservation, or if it would exceed the aggregate budget. The daemon
-refuses to start if existing regular entry files exceed the count or if their
-raw bytes plus remaining reservations exceed the aggregate limit. It also
-refuses startup if a valid entry lacks room under the 2 MiB file cap for every
-reachable order/claim-token update. It leaves files untouched; remove or repair
-the excess data before restarting. Reads accept files up to 2 MiB; oversized or
-corrupt files are logged and skipped, but their bytes still count towards the
-budget. `list` returns an error, not a partial result, if its complete response
-would exceed the 2 MiB client/daemon response limit.
+remaining reservation is derived from the serialized widths of `order`,
+`claim_token`, and a missing `incarnation` field. Migrating a legacy entry
+reserves 57 bytes for the incarnation UUID and is rejected before migration if
+that space is unavailable. Claim, ordering and incarnation updates consume the
+headroom. A new `put` is rejected if its data would exceed the per-entry limit
+of 2 MiB minus the 80-byte reservation, or if it would exceed the aggregate
+budget. The daemon refuses to start if existing regular entry files exceed the
+count or if their raw bytes plus remaining reservations exceed the aggregate
+limit. It also refuses startup if a valid entry lacks room under the 2 MiB file
+cap for every reachable order, claim-token or incarnation update. It leaves
+files untouched; remove or repair the excess data before restarting. Reads
+accept files up to 2 MiB; oversized or corrupt files are logged and skipped,
+but their bytes still count towards the budget. `list` returns an error, not a
+partial result, if its complete response would exceed the 2 MiB client/daemon
+response limit.
+
+### Wait for a posted comment URL
+
+Use `await` to keep a foreground client connected until a queued comment is
+posted. The command requires the eight-character hexadecimal ID printed by
+`put` or `list`:
+
+```bash
+comenq await 1a2b3c4d
+```
+
+After the daemon confirms the post, `await` writes the full GitHub comment URL,
+including the comment fragment, as its only stdout line. If the caller has
+closed stdout, `await` ignores the broken pipe and still exits successfully
+after daemon confirmation, though the caller will not receive the URL. This
+makes the URL safe to capture in a script; progress countdowns are
+newline-terminated lines on stderr:
+
+```bash
+URL=$(comenq await 1a2b3c4d)
+printf '%s\n' "$URL"
+```
+
+The command reports the first ETA immediately, using the same duration format as
+`put` and `list` followed by `remaining`. A zero ETA is `due now`; while it is
+still waiting for the daemon, that report repeats no more than once per minute.
+For non-zero ETAs, the countdown cadence is capped at the remaining time and
+never less than one second:
+
+| Remaining ETA                 | Countdown interval |
+| ----------------------------- | ------------------ |
+| Up to 60 seconds              | 10 seconds         |
+| 61 seconds to 10 minutes      | 30 seconds         |
+| 10 minutes 1 second to 1 hour | 2 minutes          |
+| 1 hour 1 second to 6 hours    | 10 minutes         |
+| More than 6 hours             | 30 minutes         |
+
+An unknown identifier fails before any countdown. A failed GitHub posting
+attempt leaves its entry queued; the daemon retries it after a full cooldown,
+and `await` continues waiting through the retry. Deleting the entry, losing the
+connection, or shutting down the daemon ends the wait with an error. A
+successful historical post with no recorded comment URL also returns an
+explicit error. Interrupting or disconnecting `await` does not change the
+queue; a later `await` on the same ID can still return the URL.
+
+`await` exits with status 0 after the daemon confirms the post, status 1 on a
+daemon, queue, or connection error, and status 2 when the command line is
+invalid.
 
 ## Inspect local metrics
 
@@ -154,19 +206,27 @@ The stable metric names and labels are:
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
-  `bump`, `bust`, `del`, `hist`) and `outcome` labels (`accepted`, `failed`,
-  `rejected`); requests without a parsed operation omit the `operation` label.
+  `bump`, `bust`, `del`, `hist`, `await`) and `outcome` labels. Ordinary
+  operations use `accepted`, `failed`, or `rejected`; `await` uses the fixed
+  terminal outcomes listed below and bounded store-error categories. Requests
+  without a parsed operation omit the `operation` label.
 - `comenqd_protocol_transaction_duration_seconds` measures complete listener
   transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
-  `bust`, `del`, `hist`, and `unknown`; `outcome` is `accepted`, `failed`,
-  `rejected`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `bust`, `del`, `hist`, `await`, and `unknown`. `outcome` is `accepted`,
+  `failed`, `rejected`, or `unknown` for ordinary operations. Await terminal
+  outcomes are `posted`, `unknown_identifier`, `removed`, `rejected_capacity`,
+  `shutdown`, `client_gone`, `posted_without_url`, and `posted_url_too_large`,
+  plus bounded store-error categories such as `invalid_identifier`.
+  `error_kind` uses fixed classifications and is `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
   `del`, `hist`, `history`, `append_history`, `latest_history_token`,
-  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
-  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
-  fixed classifications and is `none` on success.
+  `next_due`, `claim`, `complete`, `resolve_await`, `release`, `recover`,
+  `metrics`, and `unknown`; `outcome` is `success`, `failure`, or `unknown`.
+  `error_kind` uses fixed classifications and is `none` on success.
+- `comenqd_await_schedule_cache_total{outcome=hit|rebuild|invalidation}` counts
+  reuse, rebuild, and invalidation of the cached `list` scheduling projection
+  used to report `await` countdowns.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
@@ -190,6 +250,6 @@ only lengthens its cooldown-derived ETA; zero disables it. Configure flutter in
 the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
-[Comenq design](comenq-design.md). For an existing deployment, see
-[Migrate to 0.1.0](migration-0.1.0.md) and
-[Migrate to 0.2.0](migration-0.2.0.md).
+[Comenq design](comenq-design.md). For an existing deployment, see the
+migration guides for [0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md),
+and [0.3.0](migration-0.3.0.md).

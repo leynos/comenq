@@ -1,6 +1,6 @@
 .TH COMENQ 1 "May 2024" "comenq" "User Commands"
 .SH NAME
-comenq \- enqueue a GitHub pull request comment for the comenqd daemon
+comenq \- manage queued GitHub pull request comments
 .SH SYNOPSIS
 .B comenq put
 [
@@ -19,6 +19,9 @@ comenq \- enqueue a GitHub pull request comment for the comenqd daemon
 .I id
 .br
 .B comenq del
+.I id
+.br
+.B comenq await
 .I id
 .br
 .B comenq hist
@@ -57,6 +60,40 @@ Move the identified comment to the tail of the queue.
 .TP
 .B del
 Remove the identified comment from the queue.
+.TP
+.B await
+Wait for the identified queued comment to be posted. The identifier must be
+the eight-character hexadecimal ID printed by
+.B put
+or
+.BR list .
+On success, print the full GitHub comment URL, including its comment fragment,
+as the sole line on standard output. Newline-terminated ETA countdowns are
+written to standard error, so scripts can capture the URL with
+.BR "URL=$(comenq await 1a2b3c4d)" .
+An unknown identifier fails before a countdown is printed. Failed posting
+attempts leave the comment queued for the daemon to retry after a full cooldown;
+.B await
+continues waiting through those retries. Deletion, daemon shutdown, connection
+loss, or a successful historical post with no recorded URL ends the wait with
+an error. Interrupting the client leaves the queue unchanged, and a later
+.B await
+can still report the URL.
+.IP
+Countdowns use the ETA format shown by
+.B put
+and
+.BR list ,
+followed by
+.BR remaining ;
+zero is printed as
+.BR "due now" .
+While it is still waiting at zero ETA, that report repeats no more than once
+per minute.
+The report interval is 10 seconds through 60 seconds remaining, 30 seconds
+through 10 minutes, 2 minutes through 1 hour, 10 minutes through 6 hours, and
+30 minutes for longer waits. For non-zero waits, each interval is capped at the
+remaining wait, with a one-second minimum.
 .TP
 .B hist
 Print the posting-history log, oldest first: identifier, age, status (
@@ -98,7 +135,24 @@ Send a comment to pull request 42 of example/repo, then inspect the queue:
 .nf
 comenq put example/repo 42 "Queued for review"
 comenq list
+comenq await 1a2b3c4d
+URL=$(comenq await 1a2b3c4d)
 .fi
 .RE
+.SH EXIT STATUS
+.TP
+.B 0
+The requested operation succeeded. For
+.BR await ,
+the daemon confirmed the post. The client writes the URL to standard output; a
+broken output pipe does not change the successful status.
+.TP
+.B 1
+The operation failed, including an unknown or removed await identifier,
+posting history without a URL, daemon error or connection failure.
+.TP
+.B 2
+The command line is invalid, including an await identifier that is not exactly
+eight hexadecimal characters.
 .SH SEE ALSO
 .BR comenqd (8)

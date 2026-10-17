@@ -7,15 +7,15 @@
 
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use comenq_lib::CommentRequest;
 use rand::Rng;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::config::Config;
 use crate::metrics;
-use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoreError, StoredEntry};
+use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
 
 /// Current Unix time in whole seconds.
 ///
@@ -67,10 +67,11 @@ impl UnixClock for SystemClock {
 #[derive(Debug)]
 pub struct SharedQueue {
     cfg: Arc<Config>,
-    store: Arc<Mutex<QueueStore>>,
+    store: Arc<Mutex<QueueState>>,
     clock: Arc<dyn UnixClock>,
     flutter_sampler: Arc<dyn FlutterSampler>,
     changed: Notify,
+    state_version: Arc<watch::Sender<u64>>,
 }
 
 impl SharedQueue {
@@ -95,10 +96,11 @@ impl SharedQueue {
         metrics::record_queue_bytes(accounted_bytes);
         Ok(Arc::new(Self {
             cfg,
-            store: Arc::new(Mutex::new(store)),
+            store: Arc::new(Mutex::new(QueueState::new(store))),
             clock,
             flutter_sampler,
             changed: Notify::new(),
+            state_version: Arc::new(watch::channel(0).0),
         }))
     }
 
@@ -163,13 +165,19 @@ impl SharedQueue {
     }
 
     /// Durably record a successful post before removing its queue entry.
-    pub async fn complete(&self, entry: &StoredEntry, token_hash: &str) -> StoreResult<()> {
+    pub async fn complete(
+        &self,
+        entry: &StoredEntry,
+        token_hash: &str,
+        comment_url: &str,
+    ) -> StoreResult<()> {
         let entry = entry.clone();
         let token_hash = token_hash.to_owned();
+        let comment_url = comment_url.to_owned();
         let now = self.clock.unix_now();
         let result = self
             .with_store("complete", move |store| {
-                store.complete_claim_with_token(&entry, &token_hash, now)
+                store.complete_claim_with_token(&entry, &token_hash, now, Some(comment_url))
             })
             .await;
         if result.is_ok() {
@@ -265,76 +273,6 @@ impl SharedQueue {
         // notify_one buffers a permit while the worker is processing an entry.
         self.changed.notify_one();
     }
-
-    /// Run synchronous store work outside Tokio's asynchronous executor.
-    async fn with_store<T, F>(&self, operation: &'static str, work: F) -> StoreResult<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&QueueStore) -> StoreResult<T> + Send + 'static,
-    {
-        let started = Instant::now();
-        let store = Arc::clone(&self.store);
-        let span = tracing::info_span!(
-            "queue_store",
-            operation,
-            elapsed_ms = tracing::field::Empty,
-            outcome = tracing::field::Empty,
-            error_kind = tracing::field::Empty,
-        );
-        let worker_span = span.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let _entered = worker_span.enter();
-            let store = store
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            work(&store)
-        })
-        .await
-        .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
-        let duration = started.elapsed();
-        let elapsed_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-        span.record("elapsed_ms", elapsed_ms);
-        let (outcome, error_kind) = match &result {
-            Ok(_) => {
-                span.record("outcome", "success");
-                span.record("error_kind", "none");
-                ("success", None)
-            }
-            Err(error) => {
-                let error_kind = error.category();
-                span.record("outcome", "failure");
-                span.record("error_kind", error_kind);
-                if error.is_unexpected() {
-                    tracing::error!(
-                        parent: &span,
-                        operation,
-                        error_kind,
-                        "Queue store operation failed",
-                    );
-                }
-                ("failure", Some(error_kind))
-            }
-        };
-        metrics::record_queue_store_duration(operation, outcome, error_kind, duration);
-        result
-    }
-
-    /// Refresh entry-count and accounted-byte gauges from persisted data.
-    async fn update_queue_gauges(&self) {
-        match self
-            .with_store("queue_metrics_snapshot", QueueStore::queue_metrics_snapshot)
-            .await
-        {
-            Ok((count, bytes)) => {
-                metrics::record_queue_entries(count);
-                metrics::record_queue_bytes(bytes);
-            }
-            Err(_) => tracing::warn!(
-                error_kind = "queue_snapshot_failed",
-                "Failed to refresh queue metrics"
-            ),
-        }
-    }
 }
 
 /// Reject repository components that could alter paths, URLs, or terminal output.
@@ -363,4 +301,8 @@ fn is_safe_repository_component(component: &str) -> bool {
 #[cfg(test)]
 mod tests;
 
+mod await_lookup;
+pub use await_lookup::{AwaitError, AwaitOutcome, AwaitToken};
+mod store_access;
+use store_access::QueueState;
 mod history;

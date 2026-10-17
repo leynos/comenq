@@ -21,6 +21,10 @@ use tracing::{debug, warn};
 use crate::output::{render_entry, render_history as render_history_line, render_put};
 use crate::{Args, Command};
 
+mod await_stream;
+#[doc(hidden)]
+pub use await_stream::await_with_writers;
+
 /// Maximum time to wait for a complete daemon reply.
 const CLIENT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -51,8 +55,11 @@ pub enum ClientError {
     #[error("failed to read daemon reply: {0}")]
     Read(#[source] std::io::Error),
     /// The daemon reply exceeds the protocol size limit.
-    #[error("daemon reply exceeds {MAX_RESPONSE_BYTES} bytes")]
+    #[error("daemon reply exceeds the protocol size limit")]
     ReplyTooLarge,
+    /// The streaming connection ended before a terminal frame.
+    #[error("connection lost before posting completed")]
+    ConnectionLost,
     /// The daemon did not finish its reply before the client deadline.
     #[error("timed out waiting for daemon reply")]
     ReplyTimeout,
@@ -161,6 +168,15 @@ async fn transact_with_timeout(
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
     let candidates = args.socket_candidates();
+    if let Command::Await { id } = &args.command {
+        return await_with_writers(
+            &candidates,
+            id,
+            &mut std::io::stdout(),
+            &mut std::io::stderr(),
+        )
+        .await;
+    }
     if let Command::Hist { limit } = &args.command {
         return run_history_pages(&candidates, *limit, |history, now| {
             let stdout = std::io::stdout();
@@ -180,6 +196,9 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 #[cfg(test)]
 async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), ClientError> {
     let candidates = args.socket_candidates();
+    if let Command::Await { id } = &args.command {
+        return await_with_writers(&candidates, id, writer, &mut std::io::sink()).await;
+    }
     if let Command::Hist { limit } = &args.command {
         return run_history_pages(&candidates, *limit, |history, now| {
             render_history_reply(history, now, writer)

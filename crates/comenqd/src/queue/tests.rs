@@ -21,6 +21,7 @@ fn open_queue_with_bodies(body_sizes: &[usize]) -> (tempfile::TempDir, Arc<Share
             enqueued_at: index as u64,
             not_before: 0,
             claim_token: None,
+            incarnation: String::new(),
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),
@@ -59,6 +60,7 @@ fn body_sizes_at_response_limit(extra_bytes: usize) -> [usize; 2] {
             enqueued_at: index as u64,
             not_before: 0,
             claim_token: None,
+            incarnation: String::new(),
             request: CommentRequest {
                 owner: "octocat".into(),
                 repo: "hello-world".into(),

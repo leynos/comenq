@@ -5,21 +5,21 @@
 
 use anyhow::{Context, Result};
 pub use comenq_lib::protocol::MAX_REQUEST_BYTES;
-use comenq_lib::protocol::{MAX_RESPONSE_BYTES, Request, Response};
 use std::fs as stdfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
+use std::time::Duration;
+use tokio::net::UnixListener;
+use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
-use crate::metrics;
 use crate::queue::SharedQueue;
 use crate::supervisor::backoff;
 
+mod await_handler;
+mod connection;
+pub use connection::{CLIENT_READ_TIMEOUT_SECS, CLIENT_WRITE_TIMEOUT_SECS, handle_client};
 pub(crate) mod protocol;
 #[cfg(test)]
 pub(crate) use protocol::dispatch_request;
@@ -129,6 +129,7 @@ pub async fn run_listener(
     let min_delay = Duration::from_millis(cfg.restart_min_delay_ms);
     let mut accept_backoff = backoff(min_delay);
 
+    let await_permits = Arc::new(Semaphore::new(await_handler::MAX_AWAITERS));
     loop {
         tokio::select! {
             res = listener.accept() => match res {
@@ -138,8 +139,10 @@ pub async fn run_listener(
                     let pid = cred.as_ref().map(|c| c.pid());
                     let uid = cred.as_ref().map(|c| c.uid());
                     let queue = queue.clone();
+                    let shutdown = shutdown.clone();
+                    let permits = Arc::clone(&await_permits);
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, queue).await {
+                        if let Err(e) = connection::handle_client_with_control(stream, queue, shutdown, permits).await {
                             match (pid, uid) {
                                 (Some(pid), Some(uid)) => {
                                     tracing::warn!(pid, uid, error = %e, "Client handling failed");
@@ -166,130 +169,6 @@ pub async fn run_listener(
         }
     }
     Ok(())
-}
-
-/// Seconds a client has to transmit its request.
-pub const CLIENT_READ_TIMEOUT_SECS: u64 = 5;
-/// Seconds a client has to receive the daemon response and close cleanly.
-pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;
-
-#[derive(Clone, Copy)]
-enum ClientOutcome {
-    Accepted,
-    Failed,
-}
-
-/// Read a single request from `stream`, execute it, and reply.
-///
-/// Expects the client to send one JSON encoded [`Request`] and then close its
-/// write side. The reply is a JSON encoded [`Response`] written back over the
-/// same connection. A malformed request receives an error reply rather than
-/// silently closing the connection.
-///
-/// # Errors
-/// Fails if reading from or writing to the socket fails, or if the payload
-/// exceeds [`MAX_REQUEST_BYTES`].
-#[tracing::instrument(
-    skip(stream, queue),
-    fields(
-        task = "listener",
-        operation = tracing::field::Empty,
-        elapsed_ms = tracing::field::Empty,
-        outcome = tracing::field::Empty,
-        error_kind = tracing::field::Empty,
-    )
-)]
-pub async fn handle_client(stream: UnixStream, queue: Arc<SharedQueue>) -> Result<()> {
-    let started = Instant::now();
-    let mut operation = None;
-    let result = handle_client_inner(stream, queue, &mut operation).await;
-    let (outcome, error_kind) = match &result {
-        Ok((ClientOutcome::Accepted, error_kind)) => ("accepted", *error_kind),
-        Ok((ClientOutcome::Failed, error_kind)) => ("failed", *error_kind),
-        Err(_) => ("rejected", Some("protocol_io")),
-    };
-    let span = tracing::Span::current();
-    span.record("operation", operation.unwrap_or("unknown"));
-    let duration = started.elapsed();
-    span.record(
-        "elapsed_ms",
-        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
-    );
-    span.record("outcome", outcome);
-    span.record("error_kind", error_kind.unwrap_or("none"));
-    metrics::record_request(operation, outcome);
-    metrics::record_protocol_duration(operation, outcome, error_kind, duration);
-    result.map(|_| ())
-}
-
-async fn handle_client_inner(
-    stream: UnixStream,
-    queue: Arc<SharedQueue>,
-    operation: &mut Option<&'static str>,
-) -> Result<(ClientOutcome, Option<&'static str>)> {
-    let mut buffer = Vec::with_capacity(8 * 1024);
-    // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
-    let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
-    tokio::time::timeout(
-        Duration::from_secs(CLIENT_READ_TIMEOUT_SECS),
-        limited.read_to_end(&mut buffer),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("client read timed out"))??;
-    if buffer.len() > MAX_REQUEST_BYTES {
-        anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
-    }
-    let (response, mut outcome, mut error_kind) = match serde_json::from_slice::<Request>(&buffer) {
-        Ok(request) => {
-            *operation = Some(request_operation(&request));
-            let (response, error_kind) =
-                protocol::dispatch_request_with_error_kind(&queue, request).await;
-            let outcome = if matches!(&response, Response::Error { .. }) {
-                ClientOutcome::Failed
-            } else {
-                ClientOutcome::Accepted
-            };
-            (response, outcome, error_kind)
-        }
-        Err(e) => (
-            Response::error(format!("invalid request: {e}")),
-            ClientOutcome::Failed,
-            Some("invalid_json"),
-        ),
-    };
-    let mut bytes = serde_json::to_vec(&response)?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
-        outcome = ClientOutcome::Failed;
-        error_kind = Some("response_too_large");
-        bytes = serde_json::to_vec(&Response::error(format!(
-            "response exceeds {MAX_RESPONSE_BYTES} bytes"
-        )))?;
-    }
-    let mut stream = limited.into_inner();
-    tokio::time::timeout(
-        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
-        stream.write_all(&bytes),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("client response write timed out"))??;
-    tokio::time::timeout(
-        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
-        stream.shutdown(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
-    Ok((outcome, error_kind))
-}
-
-fn request_operation(request: &Request) -> &'static str {
-    match request {
-        Request::Put { .. } => "put",
-        Request::List => "list",
-        Request::Bump { .. } => "bump",
-        Request::Bust { .. } => "bust",
-        Request::Del { .. } => "del",
-        Request::Hist { .. } => "hist",
-    }
 }
 
 #[cfg(test)]

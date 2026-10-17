@@ -1,4 +1,5 @@
 //! Output and user-visible behaviour tests for the client.
+mod await_transport;
 mod connect;
 mod history_transport;
 mod transport;

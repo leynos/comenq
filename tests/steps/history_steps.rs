@@ -135,7 +135,11 @@ async fn head_posted(world: &mut HistoryWorld) -> anyhow::Result<()> {
     let entry = world.head().await?;
     world
         .queue()?
-        .complete(&entry, FIRST_TOKEN_HASH)
+        .complete(
+            &entry,
+            FIRST_TOKEN_HASH,
+            "https://github.com/o/r/issues/1#issuecomment-1",
+        )
         .await
         .context("complete")?;
     world.recorded.push(entry.id);

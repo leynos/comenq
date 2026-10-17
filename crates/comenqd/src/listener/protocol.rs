@@ -24,6 +24,10 @@ pub(crate) async fn dispatch_request_with_error_kind(
             Ok((entry, eta)) => (Response::entry(pending_entry(entry, eta)), None),
             Err(error) => store_error_response(error),
         },
+        Request::Await { .. } => (
+            Response::error("await requires a streaming connection"),
+            Some("stream_required"),
+        ),
         Request::List => match queue.list().await {
             Ok(schedule) => match response_for_schedule(schedule) {
                 Ok(response) => {
@@ -194,6 +198,8 @@ mod tests {
 
     fn history_record(body: String) -> HistoryRecord {
         HistoryRecord {
+            comment_url: None,
+            incarnation: String::new(),
             attempt_id: "attempt".into(),
             id: "1a2b3c4d".into(),
             posted_at: 1_700_000_000,

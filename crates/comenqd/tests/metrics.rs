@@ -220,7 +220,11 @@ async fn exporter_serves_listener_request_metrics() {
         .expect("claim entry for completion")
         .expect("queue has a due entry");
     queue
-        .complete(&claimed, "")
+        .complete(
+            &claimed,
+            "",
+            "https://github.com/o/r/issues/1#issuecomment-1",
+        )
         .await
         .expect("complete posted entry");
     assert_queue_gauges(&dir.path().join("queue"), 1).await;
