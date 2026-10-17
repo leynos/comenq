@@ -78,45 +78,10 @@ fn pending_entry_takes_precedence_over_an_older_success() {
             .expect("lookup"),
         AwaitState::Unknown
     );
-    assert!(matches!(
+    assert_eq!(
         store
             .resolve_await(&entry.id, None, 600, 1100)
             .expect("later lookup"),
-        AwaitState::Posted { .. }
-    ));
-}
-
-#[rstest]
-fn a_replacement_cannot_redirect_an_existing_wait() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = open_store(&dir);
-    let entry = store
-        .put(request("reuse"), &immediate(0), 1000)
-        .expect("put");
-    let AwaitState::Pending { cursor, .. } = store
-        .resolve_await(&entry.id, None, 600, 1000)
-        .expect("lookup")
-    else {
-        panic!("pending")
-    };
-    store.del(&entry.id).expect("delete");
-    let replacement = store
-        .put(request("reuse"), &immediate(0), 1000)
-        .expect("replace");
-    assert_ne!(entry.incarnation, replacement.incarnation);
-    assert_eq!(
-        store
-            .resolve_await(&entry.id, Some(&cursor), 600, 1000)
-            .expect("lookup"),
-        AwaitState::Unknown
-    );
-    store
-        .complete_claim_with_token(&replacement, "", 1100, Some(URL.into()))
-        .expect("complete replacement");
-    assert_eq!(
-        store
-            .resolve_await(&entry.id, Some(&cursor), 600, 1100)
-            .expect("lookup"),
         AwaitState::Unknown
     );
 }
@@ -134,13 +99,15 @@ fn completion_lookup_skips_corrupt_lines_and_failures(
     let entry = store
         .put(request("history"), &immediate(0), 1000)
         .expect("put");
-    let record = if success {
-        HistoryRecord::success(&entry, "", 1100, url.map(str::to_owned))
+    if success {
+        store
+            .complete_claim_with_token(&entry, "", 1100, url.map(str::to_owned))
+            .expect("record successful completion");
     } else {
-        HistoryRecord::failure(&entry, "", 1100, "failed")
-    };
-    store.append_history(&record).expect("append");
-    store.del(&entry.id).expect("remove");
+        let record = HistoryRecord::failure(&entry, "", 1100, "failed");
+        store.append_history(&record).expect("append failure");
+        store.del(&entry.id).expect("remove failed entry");
+    }
     let path = dir.path().join("history.jsonl");
     let mut bytes = fs::read(&path).expect("read");
     bytes.extend_from_slice(b"bad json\n");

@@ -85,6 +85,7 @@ pub(super) async fn handle_client_with_control(
     result.map(|_| ())
 }
 
+/// Read one request and route streaming awaits away from one-shot responses.
 async fn handle_client_inner(
     stream: UnixStream,
     queue: Arc<SharedQueue>,
@@ -157,6 +158,7 @@ async fn handle_client_inner(
     Ok((outcome, error_kind))
 }
 
+/// Map a parsed request to the fixed operation label used by daemon metrics.
 fn request_operation(request: &Request) -> &'static str {
     match request {
         Request::Put { .. } => "put",

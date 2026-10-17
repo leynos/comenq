@@ -302,6 +302,7 @@ fn is_safe_repository_component(component: &str) -> bool {
 mod tests;
 
 mod await_lookup;
+pub use await_lookup::{AwaitError, AwaitOutcome, AwaitToken};
 mod store_access;
 use store_access::QueueState;
 mod history;

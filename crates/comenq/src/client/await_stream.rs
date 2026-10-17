@@ -60,10 +60,12 @@ struct Countdown {
 }
 
 impl Countdown {
+    /// Subtract time elapsed since the latest ETA frame, saturating at zero.
     fn remaining(&self) -> u64 {
         self.eta.saturating_sub(self.arrived.elapsed().as_secs())
     }
 
+    /// Write one countdown line and schedule the next cadence tick.
     fn report(&mut self, stderr: &mut impl Write) -> Result<(), ClientError> {
         let remaining = self.remaining();
         let _ = write_line(stderr, &render_remaining(remaining))?;
@@ -71,6 +73,7 @@ impl Countdown {
         Ok(())
     }
 
+    /// Start a countdown on its first frame and refresh its ETA on later frames.
     fn observe(
         countdown: &mut Option<Self>,
         eta_seconds: u64,
@@ -95,6 +98,7 @@ impl Countdown {
     }
 }
 
+/// Consume stream frames until a comment URL arrives or the daemon reports an error.
 pub(super) async fn receive(
     reader: &mut (impl AsyncBufRead + Unpin),
     stdout: &mut impl Write,
@@ -118,6 +122,7 @@ pub(super) async fn receive(
     }
 }
 
+/// Read the next event while preserving partial frames across countdown ticks.
 async fn next_event(
     reader: &mut (impl AsyncBufRead + Unpin),
     countdown: &mut Option<Countdown>,
@@ -140,6 +145,7 @@ async fn next_event(
     }
 }
 
+/// Wait until the countdown's next report, or forever before the first ETA.
 async fn report_tick(at: Option<Instant>) {
     match at {
         Some(at) => tokio::time::sleep_until(at).await,
@@ -147,6 +153,7 @@ async fn report_tick(at: Option<Instant>) {
     }
 }
 
+/// Read and validate one capped newline-delimited await event.
 async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<AwaitEvent, ClientError> {
     let mut bytes = Vec::new();
     let mut limited = (&mut *reader).take((MAX_AWAIT_FRAME_BYTES + 1) as u64);

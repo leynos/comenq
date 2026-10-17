@@ -22,16 +22,18 @@ probes those candidates by connecting rather than checking for socket files. An
 explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate.
 
 The supervisor starts the listener and worker against the same
-`Arc<SharedQueue>`. `SharedQueue` serializes access to the filesystem-backed
-`QueueStore` with a `std::sync::Mutex`; each synchronous store operation runs
-inside `spawn_blocking` so filesystem work does not occupy Tokio runtime
-threads. A `tokio::sync::Notify` wakes the worker after queue mutations. The
-supervisor restarts failed tasks with jittered exponential backoff and no
-maximum attempt count; shutdown interrupts the wait, while normal task
-completion does not trigger a restart. Each restart event records `task`, a
-one-based `restart_attempt` that continues across stable runs,
-`selected_delay_ms`, `stable_run_duration_ms`, and `backoff_reset`. A stable
-run resets the delay sequence but does not reset the attempt count.
+`Arc<SharedQueue>`. `SharedQueue` serializes short filesystem-backed
+`QueueStore` operations with a `std::sync::Mutex`; each synchronous store
+operation runs inside `spawn_blocking` so filesystem work does not occupy Tokio
+runtime threads. A `tokio::sync::Notify` wakes the worker after queue
+mutations. Await waiters use a separate generation subscription, exposed
+through a queue change port rather than Tokio's watch type. The supervisor
+restarts failed tasks with jittered exponential backoff and no maximum attempt
+count; shutdown interrupts the wait, while normal task completion does not
+trigger a restart. Each restart event records `task`, a one-based
+`restart_attempt` that continues across stable runs, `selected_delay_ms`,
+`stable_run_duration_ms`, and `backoff_reset`. A stable run resets the delay
+sequence but does not reset the attempt count.
 
 Queue listing logs unreadable or corrupt entry files and skips them. These
 bounds logs use static error categories and omit filesystem paths and stored
@@ -40,7 +42,7 @@ identifiers.
 ### Client and daemon API
 
 The `comenq::Args` parser exposes a global `--socket` option and the `put`,
-`list`, `bump`, `bust`, `del`, and `hist`
+`list`, `bump`, `bust`, `del`, `hist`, and `await`
 [`Command`](../crates/comenq/src/lib.rs) subcommands. `hist` accepts `-n` or
 `--limit` to select recent attempts. `Command::to_request()` maps each command
 to the shared `comenq_lib::protocol::Request` enum. `comenq::ClientError`
@@ -48,41 +50,61 @@ distinguishes connection, serialization, I/O, daemon-reported, and
 unexpected-response failures; `comenq::run()` renders successful replies for
 users.
 
-The Unix socket carries one tagged JSON `Request` per connection. The daemon
-returns a tagged JSON `Response`: `Response::Ok` contains an `entry` for `put`,
-an `entries` list for `list`, a `history` page and optional cursor for `hist`,
-or neither payload for `bump`, `bust`, and `del`; `Response::Error` contains
-the daemon's human-readable failure message. `PendingEntry` carries the
-deterministic eight-character ID, ETA in seconds, repository target, pull
-request number, and full comment body. History requests follow cursors over a
-fixed file snapshot so the CLI can render every record without exceeding the 2
-MiB response limit. Clients must treat response fields as untrusted and reject
-a successful reply whose payload shape does not match the request.
+The Unix socket carries one tagged JSON `Request` per connection. Ordinary
+requests receive one tagged JSON `Response`: `Response::Ok` contains an `entry`
+for `put`, an `entries` list for `list`, a `history` page and optional cursor
+for `hist`, or neither payload for `bump`, `bust`, and `del`; `Response::Error`
+contains the daemon's human-readable failure message. `await` is the streaming
+exception: it returns newline-delimited JSON `Waiting` frames followed by
+exactly one terminal `Posted` or `Error` frame. The listener caps each frame at
+64 KiB, sends a heartbeat at least every 15 seconds, and limits connected
+waiters to 64. The client allows 45 seconds between frames. Dropping the
+connection releases its waiter and does not alter the queued entry.
+`PendingEntry` carries the deterministic eight-character ID, ETA in seconds,
+repository target, pull request number, and full comment body. History requests
+follow cursors over a fixed file snapshot so the CLI can render every record
+without exceeding the 2 MiB response limit. Clients must treat response fields
+as untrusted and reject a successful reply whose payload shape does not match
+the request.
 
 The listener's `listener::protocol::dispatch_request` adapter maps each valid
-request to a typed `SharedQueue` operation: `put`, `list`, `bump`, `bust`,
-`del`, or `hist`. It converts the operation result to a protocol `Response`;
-queue mutations notify the worker after success. The queue performs scheduling
-and persistence through `QueueStore`. `SharedQueue::claim_next_due()` selects
-the due head and durably claims it while holding the store lock; the lock is
-released before the worker calls GitHub. A failed post records its timestamp
-before releasing its claim, so the cooldown remains in the persisted schedule
-after a daemon restart. Queue changes cannot shorten the worker's in-process
-retry deadline. `bump` and `bust` may reorder a claimed entry without changing
-its claim, while `del` removes it. Completion checks the claim token so a
-successful post cannot delete a replacement entry.
+ordinary request to a typed `SharedQueue` operation: `put`, `list`, `bump`,
+`bust`, `del`, or `hist`. It converts the operation result to a protocol
+`Response`; queue mutations notify the worker after success. The queue performs
+scheduling and persistence through `QueueStore`.
+`SharedQueue::claim_next_due()` selects the due head and durably claims it
+while holding the store lock; the lock is released before the worker calls
+GitHub. A failed post records its timestamp before releasing its claim, so the
+cooldown remains in the persisted schedule after a daemon restart. Queue
+changes cannot shorten the worker's in-process retry deadline. `bump` and
+`bust` may reorder a claimed entry without changing its claim, while `del`
+removes it. Completion checks the claim token so a successful post cannot
+delete a replacement entry.
 
-`SharedQueue::complete(entry, token_hash)` records the successful attempt,
-selected token hash, and posting timestamp before removing the claimed entry.
-Its durable recovery record contains the history payload and log offset as well
-as the entry identifier, claim token and posting time; reconciliation
-idempotently appends the history record, finishes the deletion and `last_post`
-update, then clears that record. Startup performs this recovery before
-reclaiming claims left by an interrupted worker. Failed attempts are recorded
-with `SharedQueue::record_failure(entry, token_hash, error)`; scheduling uses
-the later of the successful-post and failed-attempt timestamps as its cooldown
+`SharedQueue::complete(entry, token_hash, comment_url)` records the successful
+attempt, selected token hash, full comment URL, and posting timestamp before
+removing the claimed entry. Its durable recovery record contains the history
+payload and log offset as well as the entry identifier, claim token and posting
+time; reconciliation idempotently appends the history record, finishes the
+deletion and `last_post` update, then clears that record. Startup performs this
+recovery before reclaiming claims left by an interrupted worker. Failed
+attempts are recorded with
+`SharedQueue::record_failure(entry, token_hash, error)`; scheduling uses the
+later of the successful-post and failed-attempt timestamps as its cooldown
 anchor. Failure history writes are logged but do not interrupt claim release or
 retry pacing. Other queue-store failures become daemon error responses.
+
+The await use case returns `queue::AwaitOutcome` and an opaque `AwaitToken` for
+pending work. The token keeps the wait bound to one queue-entry lifetime; the
+filesystem history offset and incarnation stay inside the store adapter. The
+queue checks pending work under its mutex, scans history in `spawn_blocking`
+outside that mutex, then rechecks the state generation before returning a
+result. A retry on a changed generation avoids reporting a stale unknown result
+when a concurrent completion lands during the scan. Successful completion
+recovery clears a deletion marker only for its own or a queued successor's
+incarnation; a durable marker prevents a later lookup from resurfacing an older
+URL after a reused entry is deleted. Legacy successful history without a URL
+produces an explicit terminal error.
 
 The worker receives an ordered pool of `TokenClient` values. Before each post,
 it reads the latest history record's `token_hash` and selects the next matching
@@ -154,19 +176,26 @@ The stable metric vocabulary is:
 - `comenqd_task_restarts_total{task=listener|worker}` for supervised
   task restarts.
 - `comenqd_requests_total` with bounded `operation` labels (`put`, `list`,
-  `bump`, `bust`, `del`, `hist`) and `outcome` labels (`accepted`, `failed`,
-  `rejected`); requests without a parsed operation omit the `operation` label.
+  `bump`, `bust`, `del`, `hist`, `await`) and `outcome` labels (`accepted`,
+  `failed`, `rejected`); requests without a parsed operation omit the
+  `operation` label.
 - `comenqd_protocol_transaction_duration_seconds` measures complete listener
   transactions. Its bounded `operation` labels are `put`, `list`, `bump`,
-  `bust`, `del`, `hist`, and `unknown`; `outcome` is `accepted`, `failed`,
-  `rejected`, or `unknown`. `error_kind` uses fixed classifications and is
-  `none` on success.
+  `bust`, `del`, `hist`, `await`, and `unknown`; ordinary `outcome` values are
+  `accepted`, `failed`, `rejected`, or `unknown`. Await terminal outcomes are
+  `posted`, `unknown_identifier`, `removed`, `rejected_capacity`, `shutdown`,
+  `client_gone`, `posted_without_url`, and `posted_url_too_large`, plus bounded
+  store-error categories such as `invalid_identifier`. `error_kind` uses fixed
+  classifications and is `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
   `del`, `hist`, `history`, `append_history`, `latest_history_token`,
-  `next_due`, `claim`, `complete`, `release`, `recover`, `metrics`, and
-  `unknown`; `outcome` is `success`, `failure`, or `unknown`. `error_kind` uses
-  fixed classifications and is `none` on success.
+  `next_due`, `claim`, `complete`, `resolve_await`, `release`, `recover`,
+  `metrics`, and `unknown`; `outcome` is `success`, `failure`, or `unknown`.
+  `error_kind` uses fixed classifications and is `none` on success.
+- `comenqd_await_schedule_cache_total{outcome=hit|rebuild|invalidation}` counts
+  reuse, rebuild, and invalidation of the schedule projection used for await
+  ETAs. The outcome label is limited to those three values.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.
@@ -182,6 +211,10 @@ The stable metric vocabulary is:
 Run repository gates through the Makefile. The principal code gates are
 `make check-fmt`, `make lint`, `make typecheck`, and `make test`; documentation
 changes additionally require `make fmt`, `make markdownlint`, and `make nixie`.
+
+The `comenq` dev-dependency enables Tokio's `test-util` feature for
+paused-clock tests of countdown cadence and client frame deadlines. Production
+builds use the workspace Tokio dependency without that dev-only feature.
 
 The `make test` target includes public API checks through its workspace
 `nextest` run. `tests/public_api.rs` uses explicit type annotations for the

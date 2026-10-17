@@ -4,7 +4,8 @@
 //! ordering key for `bump`, `bust`, and `del`. `<queue_path>/last_post` and
 //! `<queue_path>/last_attempt` preserve successful-post and failed-post timing
 //! across daemon restarts. `<queue_path>/history.jsonl` records each posting
-//! attempt for the `hist` operation.
+//! attempt for the `hist` operation; `await-deletions` records reused IDs whose
+//! latest pending lifetime was deleted before it posted.
 //!
 //! The store holds no in-memory state; callers serialize mutations. It writes
 //! temporary siblings and renames them so entries are never half-written.
@@ -161,6 +162,7 @@ pub struct PutOptions {
 #[derive(Debug, Clone)]
 pub struct QueueStore {
     entries_dir: PathBuf,
+    await_deletions_dir: PathBuf,
     last_post_path: PathBuf,
     last_attempt_path: PathBuf,
     completion_path: PathBuf,
@@ -207,8 +209,11 @@ impl QueueStore {
     pub fn open(queue_path: &Path) -> Result<Self> {
         let entries_dir = queue_path.join(ENTRIES_DIR);
         fs::create_dir_all(&entries_dir)?;
+        let await_deletions_dir = queue_path.join(await_deletions::AWAIT_DELETIONS_DIR);
+        fs::create_dir_all(&await_deletions_dir)?;
         let store = Self {
             entries_dir,
+            await_deletions_dir,
             last_post_path: queue_path.join(LAST_POST_FILE),
             last_attempt_path: queue_path.join(LAST_ATTEMPT_FILE),
             completion_path: queue_path.join(COMPLETION_FILE),
@@ -217,6 +222,7 @@ impl QueueStore {
         store.reconcile_completion()?;
         store.validate_existing_limits()?;
         store.reclaim_claims()?;
+        store.reconcile_await_deletions()?;
         Ok(store)
     }
 
@@ -248,7 +254,8 @@ impl QueueStore {
 
     /// Remove the identified entry from the queue.
     pub fn del(&self, id: &str) -> Result<()> {
-        self.find(id)?;
+        let entry = self.find(id)?;
+        self.write_await_deletion(&entry)?;
         fs::remove_file(self.entry_path(id)?)?;
         Ok(())
     }
@@ -373,7 +380,8 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 mod await_lookup;
-pub use await_lookup::{AwaitCursor, AwaitState};
+pub(crate) use await_lookup::{AwaitCursor, AwaitState};
+mod await_deletions;
 mod bounds;
 mod completion;
 mod history;

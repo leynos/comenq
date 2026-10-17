@@ -267,6 +267,7 @@ mod history;
 mod resource_limits;
 mod scheduling;
 
+mod await_lifetimes;
 mod await_lookup;
 
 mod legacy_limits;

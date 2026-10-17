@@ -608,13 +608,23 @@ bytes for this UUID field when migrating legacy entries and rejects admission
 before migration if an entry or the queue lacks that space. `complete` first
 writes a durable `completion` recovery record containing the entry identifier,
 claim token, posting time, full comment URL in the history record, and
-history-log offset. It then idempotently appends the successful attempt,
-removes the matching claimed entry, atomically rewrites `last_post`, and clears
-the recovery record. `QueueStore::open` reconciles a record left by an
-interrupted completion and clears abandoned claims before the worker schedules
-entries. A completion for an entry deleted or replaced during the external post
-still records the successful post time, but cannot delete a replacement with a
-different claim.
+history-log offset. It then idempotently appends the successful attempt, clears
+a superseded deletion marker, removes the matching claimed entry, atomically
+rewrites `last_post`, and clears the recovery record. `QueueStore::open`
+reconciles a record left by an interrupted completion and clears abandoned
+claims before the worker schedules entries. A completion for an entry deleted
+or replaced during the external post still records the successful post time,
+but cannot delete a replacement with a different claim.
+
+The store also keeps a marker under `await-deletions/<id>` when an entry is
+deleted. It records the deleted entry's incarnation. A successful completion
+clears a marker only when it belongs to that incarnation or to a currently
+queued successor, so an older in-flight completion cannot erase a newer
+deletion. A no-cursor `await` lookup treats a remaining marker as the latest
+identifier lifetime and returns unknown instead of exposing an older success.
+Startup removes markers for identifiers that are queued again, because the
+pending entry then takes precedence. These markers do not appear in the `hist`
+protocol or CLI.
 
 The store admits at most 1,024 pending entries and caps total accounted queue
 data at 32 MiB. Accounting includes each regular entry file's raw bytes plus
@@ -732,17 +742,24 @@ waiters), a legacy success without a URL, a URL too large for the frame limit,
 or a store read failure. The client enforces a 45 s deadline between complete
 frames. Waiters subscribe to a queue-state version signal before lookup,
 separately from the worker's `Notify`, so waiting cannot consume or delay a
-worker wake-up. They recheck after state changes and on heartbeats, and hold no
-store lock while writing. Lookup checks the pending entry first, then history.
-Its first pending result retains a history byte offset and persisted entry
-incarnation; later lookups use both to bind completion to that queued lifetime,
-even if the eight-character identifier is reused.
+worker wake-up. The queue exposes an opaque `AwaitToken` and application-level
+change subscription; history offsets, incarnation matching, and Tokio's watch
+receiver remain inside their adapters. Waiters recheck after state changes and
+on heartbeats, and hold no store lock while writing. Lookup checks the pending
+entry first, then history. Its first pending result retains an internal history
+byte offset and persisted entry incarnation; later lookups use both to bind
+completion to that queued lifetime, even if the eight-character identifier is
+reused. A no-cursor history scan runs on a blocking task outside the queue
+mutex. The queue rechecks pending state and its generation after the scan,
+retrying when a put or completion changed the snapshot.
 
 The pending ETA uses the same list scheduling projection. The projection is
 cached under the store mutex for each state version and clock second, so many
-waiters do not repeatedly rebuild an unchanged schedule. Await metrics use
-bounded outcome and store-error categories, including `posted_url_too_large`;
-identifiers and comment URLs are never metric labels.
+waiters do not repeatedly rebuild an unchanged schedule. The
+`comenqd_await_schedule_cache_total` metric counts cache `hit`, `rebuild`, and
+`invalidation` outcomes. Await metrics use bounded outcome and store-error
+categories, including `posted_url_too_large`; identifiers and comment URLs are
+never metric labels or structured error fields.
 
 This design makes the request ingestion process highly concurrent and robust,
 capable of handling multiple simultaneous client connections without impacting
@@ -1242,8 +1259,8 @@ with a 5 s deadline. The daemon sends a waiting heartbeat every 15 s while
 idle. The client allows 5 s for the first complete frame and 45 s between later
 frames. It renders `waiting` ETAs as newline-terminated countdown lines on
 stderr and writes only the full posted comment URL to stdout. For a store
-lookup failure, the client receives `queue lookup failed: <category>` while the
-daemon log retains the detailed error.
+lookup failure, the client receives `await lookup failed (<category>)` while
+the daemon log retains the detailed error.
 
 ### 5.4. Historical Source for `comenq` (Client)
 

@@ -1,8 +1,7 @@
 //! Read-only streaming waits, independent of worker wake notifications.
 
 use super::CLIENT_WRITE_TIMEOUT_SECS;
-use crate::queue::SharedQueue;
-use crate::store::{AwaitCursor, AwaitState};
+use crate::queue::{AwaitOutcome, AwaitToken, SharedQueue};
 use anyhow::Result;
 use comenq_lib::protocol::{AWAIT_HEARTBEAT_SECS, AwaitEvent, MAX_AWAIT_FRAME_BYTES};
 use std::ops::ControlFlow;
@@ -40,6 +39,7 @@ pub(super) async fn handle_await(
     .await
 }
 
+/// Stream ETA updates until the queue resolves, shutdown begins, or the client leaves.
 async fn await_entry(
     stream: &mut UnixStream,
     queue: &SharedQueue,
@@ -49,13 +49,13 @@ async fn await_entry(
 ) -> &'static str {
     // Register before lookup: a mutation during the read must remain unseen.
     let mut state = queue.subscribe_state();
-    state.borrow_and_update();
-    let mut cursor = None;
+    state.mark_seen();
+    let mut token = None;
     loop {
         if shutdown.has_changed().unwrap_or(true) {
             return send_terminal(stream, "daemon is shutting down", "shutdown").await;
         }
-        if let ControlFlow::Break(outcome) = respond(stream, queue, id, &mut cursor).await {
+        if let ControlFlow::Break(outcome) = respond(stream, queue, id, &mut token).await {
             return outcome;
         }
         // The client has already half-closed its request side: read readiness
@@ -72,18 +72,19 @@ async fn await_entry(
     }
 }
 
+/// Resolve one waiter state and send its progress or terminal frame.
 async fn respond(
     stream: &mut UnixStream,
     queue: &SharedQueue,
     id: &str,
-    cursor: &mut Option<AwaitCursor>,
+    token: &mut Option<AwaitToken>,
 ) -> ControlFlow<&'static str> {
-    match queue.resolve_await(id, cursor.clone()).await {
-        Ok(AwaitState::Pending {
+    match queue.resolve_await(id, token.clone()).await {
+        Ok(AwaitOutcome::Pending {
             eta_seconds,
-            cursor: selected,
+            token: selected,
         }) => {
-            *cursor = Some(selected);
+            *token = Some(selected);
             if send_frame(stream, &AwaitEvent::Waiting { eta_seconds })
                 .await
                 .is_err()
@@ -93,11 +94,11 @@ async fn respond(
                 ControlFlow::Continue(())
             }
         }
-        Ok(AwaitState::Posted {
+        Ok(AwaitOutcome::Posted {
             comment_url: Some(comment_url),
             ..
         }) => ControlFlow::Break(send_posted(stream, comment_url).await),
-        Ok(AwaitState::Posted {
+        Ok(AwaitOutcome::Posted {
             comment_url: None, ..
         }) => ControlFlow::Break(
             send_terminal(
@@ -107,20 +108,13 @@ async fn respond(
             )
             .await,
         ),
-        Ok(AwaitState::Unknown) => {
-            ControlFlow::Break(missing_entry(stream, id, cursor.as_ref()).await)
+        Ok(AwaitOutcome::Unknown) => {
+            ControlFlow::Break(missing_entry(stream, token.as_ref()).await)
         }
         Err(error) => {
             let category = error.category();
-            tracing::warn!(error_kind = category, error = %error, "await lookup failed");
-            ControlFlow::Break(
-                send_terminal(
-                    stream,
-                    &format!("queue lookup failed: {category}"),
-                    category,
-                )
-                .await,
-            )
+            tracing::warn!(error_kind = category, "await lookup failed");
+            ControlFlow::Break(send_terminal(stream, &error.message(), category).await)
         }
     }
 }
@@ -144,22 +138,17 @@ async fn send_posted(stream: &mut UnixStream, comment_url: String) -> &'static s
     }
 }
 
-async fn missing_entry(
-    stream: &mut UnixStream,
-    id: &str,
-    cursor: Option<&AwaitCursor>,
-) -> &'static str {
-    let (message, outcome) = if cursor.is_some() {
-        (format!("comment '{id}' was removed"), "removed")
+/// Report whether an identifier was initially unknown or removed during a wait.
+async fn missing_entry(stream: &mut UnixStream, token: Option<&AwaitToken>) -> &'static str {
+    let (message, outcome) = if token.is_some() {
+        ("comment was removed", "removed")
     } else {
-        (
-            format!("unknown comment identifier '{id}'"),
-            "unknown_identifier",
-        )
+        ("unknown comment identifier", "unknown_identifier")
     };
-    send_terminal(stream, &message, outcome).await
+    send_terminal(stream, message, outcome).await
 }
 
+/// Send one terminal error frame and return its bounded outcome label.
 async fn send_terminal(
     stream: &mut UnixStream,
     message: &str,
@@ -180,6 +169,7 @@ async fn send_terminal(
     }
 }
 
+/// Serialize and write one newline-delimited frame within the listener deadline.
 async fn send_frame(stream: &mut UnixStream, event: &AwaitEvent) -> Result<()> {
     let mut bytes = serde_json::to_vec(event)?;
     anyhow::ensure!(

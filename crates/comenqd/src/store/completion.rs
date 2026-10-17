@@ -68,6 +68,7 @@ impl QueueStore {
         let entry_path = self.entry_path(&record.id)?;
         if let Some(history) = &record.history {
             self.append_completion_history(history, record.history_offset.unwrap_or(0))?;
+            self.clear_await_deletion(&record.id, &history.incarnation)?;
         }
         let remove_entry = match self.find(&record.id) {
             Ok(entry) => record

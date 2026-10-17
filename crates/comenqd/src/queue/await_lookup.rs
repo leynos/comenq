@@ -1,8 +1,98 @@
 //! Read-only posting outcome queries serialized with queue mutations.
 
 use super::{SharedQueue, store_access::QueueState};
-use crate::store::{AwaitCursor, AwaitState, Result};
+use crate::store::{AwaitCursor, AwaitState, Result, StoreError};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
+
+/// Opaque continuation token for one selected queue-entry lifetime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaitToken(AwaitCursor);
+
+/// Result of resolving an identifier through the queue use case.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AwaitOutcome {
+    /// The entry remains queued for the indicated time.
+    Pending {
+        /// Estimated seconds until the entry is due.
+        eta_seconds: u64,
+        /// Opaque token that keeps later queries bound to this entry lifetime.
+        token: AwaitToken,
+    },
+    /// A successful posting was recorded.
+    Posted {
+        /// Full GitHub comment URL, absent in legacy history.
+        comment_url: Option<String>,
+        /// Unix time of the successful posting attempt.
+        posted_at: u64,
+    },
+    /// No pending entry or completion is known for the identifier.
+    Unknown,
+}
+
+/// Bounded error returned by the await use case.
+#[derive(Debug, thiserror::Error)]
+pub enum AwaitError {
+    /// The identifier does not have the required eight hexadecimal characters.
+    #[error("await identifier must contain eight hexadecimal characters")]
+    InvalidIdentifier,
+    /// The queue could not resolve the request; the category is a fixed label.
+    #[error("await lookup failed ({0})")]
+    QueueLookup(&'static str),
+}
+
+impl AwaitError {
+    /// Return the bounded label suitable for metrics and structured logs.
+    pub(crate) fn category(&self) -> &'static str {
+        match self {
+            Self::InvalidIdentifier => "invalid_identifier",
+            Self::QueueLookup(category) => category,
+        }
+    }
+
+    /// Return a user-facing message without including caller-controlled input.
+    pub(crate) fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<AwaitState> for AwaitOutcome {
+    fn from(state: AwaitState) -> Self {
+        match state {
+            AwaitState::Pending {
+                eta_seconds,
+                cursor,
+            } => Self::Pending {
+                eta_seconds,
+                token: AwaitToken(cursor),
+            },
+            AwaitState::Posted {
+                comment_url,
+                posted_at,
+            } => Self::Posted {
+                comment_url,
+                posted_at,
+            },
+            AwaitState::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Application-level view of queue changes, independent of Tokio's watch API.
+pub(crate) struct StateSubscription(tokio::sync::watch::Receiver<u64>);
+
+impl StateSubscription {
+    /// Mark the current queue generation as observed before the first lookup.
+    pub(crate) fn mark_seen(&mut self) {
+        self.0.borrow_and_update();
+    }
+
+    /// Wait until the queue publishes a new generation.
+    pub(crate) async fn changed(&mut self) {
+        let _ = self.0.changed().await;
+    }
+}
 
 /// One projection shared by all waiters for a state version and clock second.
 pub(super) struct AwaitSchedule {
@@ -12,8 +102,8 @@ pub(super) struct AwaitSchedule {
 
 impl SharedQueue {
     /// Subscribe to queue-state versions without consuming worker wakeups.
-    pub(crate) fn subscribe_state(&self) -> tokio::sync::watch::Receiver<u64> {
-        self.state_version.subscribe()
+    pub(crate) fn subscribe_state(&self) -> StateSubscription {
+        StateSubscription(self.state_version.subscribe())
     }
 
     /// Resolve an identifier against the queue and its durable completion history.
@@ -22,43 +112,164 @@ impl SharedQueue {
     ///
     /// ```rust,no_run
     /// # use comenqd::queue::SharedQueue;
-    /// # async fn query(queue: &SharedQueue) -> Result<(), comenqd::store::StoreError> {
+    /// # async fn query(queue: &SharedQueue) -> Result<(), comenqd::queue::AwaitError> {
     /// let outcome = queue.resolve_await("1a2b3c4d", None).await?;
     /// println!("{outcome:?}");
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn resolve_await(&self, id: &str, cursor: Option<AwaitCursor>) -> Result<AwaitState> {
-        let id = id.to_owned();
-        let cooldown = self.cfg.cooldown_period_seconds;
-        let now = self.clock.unix_now();
-        self.with_state("resolve_await", move |state| {
-            #[cfg(test)]
-            let needs_projection = state
-                .await_schedule
-                .as_ref()
-                .is_none_or(|cached| cached.built_at != now);
-            let QueueState {
-                store,
-                await_schedule,
-                ..
-            } = state;
-            let outcome = store.resolve_await_with_eta(&id, cursor.as_ref(), |store, entry| {
-                cached_eta(store, await_schedule, &entry.id, cooldown, now)
-            });
-            #[cfg(test)]
-            if needs_projection
-                && state
-                    .await_schedule
-                    .as_ref()
-                    .is_some_and(|cached| cached.built_at == now)
-            {
-                state.projection_builds += 1;
-            }
-            outcome
+    pub async fn resolve_await(
+        &self,
+        id: &str,
+        token: Option<AwaitToken>,
+    ) -> std::result::Result<AwaitOutcome, AwaitError> {
+        let cursor = token.map(|token| token.0);
+        self.resolve_await_store(id, cursor)
+            .await
+            .map(AwaitOutcome::from)
+            .map_err(|error| match error {
+                StoreError::InvalidId(_) => AwaitError::InvalidIdentifier,
+                other => AwaitError::QueueLookup(other.category()),
+            })
+    }
+
+    /// Run the persistence adapter's lookup while keeping its cursor private.
+    async fn resolve_await_store(
+        &self,
+        id: &str,
+        cursor: Option<AwaitCursor>,
+    ) -> Result<AwaitState> {
+        self.resolve_await_store_with_history(id, cursor, |store, id, cursor| {
+            store.resolve_await_completion(&id, cursor.as_ref())
         })
         .await
     }
+
+    /// Keep the history adapter replaceable for deterministic concurrency tests.
+    async fn resolve_await_store_with_history<F>(
+        &self,
+        id: &str,
+        cursor: Option<AwaitCursor>,
+        history_lookup: F,
+    ) -> Result<AwaitState>
+    where
+        F: Fn(crate::store::QueueStore, String, Option<AwaitCursor>) -> Result<AwaitState>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        let id = id.to_owned();
+        let cooldown = self.cfg.cooldown_period_seconds;
+        loop {
+            let now = self.clock.unix_now();
+            let state_version = Arc::clone(&self.state_version);
+            let pending_id = id.clone();
+            let pending_cursor = cursor.clone();
+            let (observed_version, pending, store) = self
+                .with_state("resolve_await", move |state| {
+                    let version = *state_version.borrow();
+                    let pending = resolve_pending(
+                        state,
+                        &pending_id,
+                        pending_cursor.as_ref(),
+                        cooldown,
+                        now,
+                    )?;
+                    Ok((version, pending, state.store.clone()))
+                })
+                .await?;
+            if let Some(pending) = pending {
+                return Ok(pending);
+            }
+
+            let history_id = id.clone();
+            let history_cursor = cursor.clone();
+            let lookup = history_lookup.clone();
+            let history_started = Instant::now();
+            let history_result =
+                tokio::task::spawn_blocking(move || lookup(store, history_id, history_cursor))
+                    .await
+                    .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
+            let duration = history_started.elapsed();
+            let (outcome, error_kind) = match &history_result {
+                Ok(_) => ("success", None),
+                Err(error) => ("failure", Some(error.category())),
+            };
+            crate::metrics::record_queue_store_duration(
+                "resolve_await",
+                outcome,
+                error_kind,
+                duration,
+            );
+            if let Err(error) = &history_result
+                && error.is_unexpected()
+            {
+                tracing::warn!(
+                    operation = "resolve_await",
+                    error_kind = error.category(),
+                    "Queue history lookup failed"
+                );
+            }
+            let completed = history_result;
+
+            // Recheck pending state and the generation after the unlocked scan.
+            // A concurrent put/completion invalidates the history snapshot.
+            let current_version = Arc::clone(&self.state_version);
+            let pending_id = id.clone();
+            let pending_cursor = cursor.clone();
+            let now = self.clock.unix_now();
+            let (current_version, pending) = self
+                .with_state("resolve_await", move |state| {
+                    let version = *current_version.borrow();
+                    let pending = resolve_pending(
+                        state,
+                        &pending_id,
+                        pending_cursor.as_ref(),
+                        cooldown,
+                        now,
+                    )?;
+                    Ok((version, pending))
+                })
+                .await?;
+            if let Some(pending) = pending {
+                return Ok(pending);
+            }
+            if current_version == observed_version {
+                return completed;
+            }
+        }
+    }
+}
+
+/// Resolve only the selected pending lifetime while the shared queue is locked.
+fn resolve_pending(
+    state: &mut QueueState,
+    id: &str,
+    cursor: Option<&AwaitCursor>,
+    cooldown: u64,
+    now: u64,
+) -> Result<Option<AwaitState>> {
+    #[cfg(test)]
+    let needs_projection = state
+        .await_schedule
+        .as_ref()
+        .is_none_or(|cached| cached.built_at != now);
+    let outcome = state
+        .store
+        .resolve_await_pending_with_eta(id, cursor, |store, entry| {
+            cached_eta(store, &mut state.await_schedule, &entry.id, cooldown, now)
+        });
+    #[cfg(test)]
+    if needs_projection
+        && state
+            .await_schedule
+            .as_ref()
+            .is_some_and(|cached| cached.built_at == now)
+    {
+        state.projection_builds += 1;
+    }
+    outcome
 }
 
 /// Operations that can alter an await lookup or its projected schedule.
@@ -84,10 +295,11 @@ fn cached_eta(
     cooldown: u64,
     now: u64,
 ) -> Result<u64> {
-    if cache
+    let should_rebuild = cache
         .as_ref()
-        .is_none_or(|projection| projection.built_at != now)
-    {
+        .is_none_or(|projection| projection.built_at != now);
+    if should_rebuild {
+        crate::metrics::record_await_schedule_cache("rebuild");
         *cache = Some(AwaitSchedule {
             built_at: now,
             etas: store
@@ -96,6 +308,8 @@ fn cached_eta(
                 .map(|(entry, eta)| (entry.id, eta))
                 .collect(),
         });
+    } else {
+        crate::metrics::record_await_schedule_cache("hit");
     }
     Ok(cache
         .as_ref()

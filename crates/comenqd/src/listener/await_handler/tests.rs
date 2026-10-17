@@ -63,7 +63,7 @@ async fn frame(client: &mut BufReader<UnixStream>) -> anyhow::Result<AwaitEvent>
 
 #[rstest::rstest]
 #[case::unknown("deadbeef", "unknown comment identifier")]
-#[case::invalid("../badid", "queue lookup failed: unsafe_identifier")]
+#[case::invalid("../badid", "eight hexadecimal characters")]
 #[tokio::test]
 async fn first_frame_rejects_unknown_or_invalid_id(#[case] id: &str, #[case] message: &str) {
     let dir = TempDir::new().expect("tempdir");
@@ -151,24 +151,24 @@ async fn release_claim_updates_waiters_without_consuming_worker_wakeup() {
     let queue = queue(&dir).expect("queue");
     let mut state = queue.subscribe_state();
     let id = put(&queue).await.expect("put");
-    state.changed().await.expect("put state");
+    state.changed().await;
     tokio::time::timeout(Duration::from_secs(1), queue.changed())
         .await
         .expect("worker permit remains");
     let (claimed, _) = queue.claim_next_due().await.expect("claim").expect("entry");
-    state.changed().await.expect("claim state");
+    state.changed().await;
     queue
         .release_claim(&id, claimed.claim_token.as_deref().expect("token"))
         .await
         .expect("release");
-    state.changed().await.expect("release state");
+    state.changed().await;
     let outcome = queue.resolve_await(&id, None).await.expect("lookup");
-    assert!(matches!(outcome, AwaitState::Pending { .. }));
+    assert!(matches!(outcome, AwaitOutcome::Pending { .. }));
     queue
         .complete(&claimed, "hash", URL)
         .await
         .expect("complete");
-    state.changed().await.expect("completion state");
+    state.changed().await;
 }
 
 #[tokio::test]
@@ -218,7 +218,7 @@ async fn disconnected_waiter_releases_capacity_after_heartbeat() {
             .resolve_await(&id, None)
             .await
             .expect("queue preserved"),
-        AwaitState::Pending { .. }
+        AwaitOutcome::Pending { .. }
     ));
 }
 
@@ -246,7 +246,7 @@ async fn already_posted_id_returns_url_immediately() {
 }
 
 #[rstest::rstest]
-#[case::storage_fault(false, "invalid_json", "queue lookup failed: invalid_json")]
+#[case::storage_fault(false, "invalid_json", "await lookup failed (invalid_json)")]
 #[case::oversized_url(
     true,
     "posted_url_too_large",

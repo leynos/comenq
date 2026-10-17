@@ -215,14 +215,17 @@ The stable metric names and labels are:
   `failed`, `rejected`, or `unknown` for ordinary operations. Await terminal
   outcomes are `posted`, `unknown_identifier`, `removed`, `rejected_capacity`,
   `shutdown`, `client_gone`, `posted_without_url`, and `posted_url_too_large`,
-  plus bounded store-error categories. `error_kind` uses fixed classifications
-  and is `none` on success.
+  plus bounded store-error categories such as `invalid_identifier`.
+  `error_kind` uses fixed classifications and is `none` on success.
 - `comenqd_queue_store_operation_duration_seconds` measures queue-store
   operations. Its bounded `operation` labels are `put`, `list`, `bump`, `bust`,
   `del`, `hist`, `history`, `append_history`, `latest_history_token`,
   `next_due`, `claim`, `complete`, `resolve_await`, `release`, `recover`,
   `metrics`, and `unknown`; `outcome` is `success`, `failure`, or `unknown`.
   `error_kind` uses fixed classifications and is `none` on success.
+- `comenqd_await_schedule_cache_total{outcome=hit|rebuild|invalidation}` counts
+  reuse, rebuild, and invalidation of the cached `list` scheduling projection
+  used to report `await` countdowns.
 - These histograms never use request values, paths, identifiers, payloads,
   tokens, or raw errors as labels.
 - `comenqd_queue_entries` for the current pending-entry count, without labels.

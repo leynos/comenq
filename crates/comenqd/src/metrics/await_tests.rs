@@ -17,6 +17,7 @@ use std::time::Duration;
 #[case("client_gone", "client_gone")]
 #[case("posted_without_url", "posted_without_url")]
 #[case("posted_url_too_large", "posted_url_too_large")]
+#[case("invalid_identifier", "invalid_identifier")]
 #[case("invalid_json", "invalid_json")]
 #[case("unsafe_identifier", "unsafe_identifier")]
 #[case("io_error", "io_error")]

@@ -70,7 +70,9 @@ impl SharedQueue {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let result = work(&mut state);
             if result.is_ok() && is_state_mutation(operation) {
-                state.await_schedule = None;
+                if state.await_schedule.take().is_some() {
+                    metrics::record_await_schedule_cache("invalidation");
+                }
                 // Publish under the same lock even if the calling future was dropped.
                 state_version.send_modify(|version| *version = version.wrapping_add(1));
             }

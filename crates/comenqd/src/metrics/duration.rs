@@ -107,6 +107,7 @@ fn bounded_outcome_label(outcome: &'static str) -> &'static str {
         | "invalid_data"
         | "io_error"
         | "invalid_json"
+        | "invalid_identifier"
         | "unsafe_identifier"
         | "invalid_repository_component"
         | "invalid_last_post"

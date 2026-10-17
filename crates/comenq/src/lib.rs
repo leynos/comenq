@@ -176,6 +176,8 @@ pub enum Command {
     },
 }
 
+/// Validate an await identifier and normalize hexadecimal letters to lowercase.
+/// For example, `1A2B3C4D` becomes `1a2b3c4d` for daemon lookup.
 fn parse_await_id(id: &str) -> Result<String, String> {
     if id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(id.to_ascii_lowercase())

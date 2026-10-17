@@ -54,19 +54,50 @@ impl QueueStore {
     }
 
     /// Resolve one entry, invoking the projection only for a matching pending lifetime.
+    #[cfg(test)]
     pub(crate) fn resolve_await_with_eta(
         &self,
         id: &str,
         cursor: Option<&AwaitCursor>,
         eta: impl FnOnce(&Self, &StoredEntry) -> Result<u64>,
     ) -> Result<AwaitState> {
+        if let Some(pending) = self.resolve_await_pending_with_eta(id, cursor, eta)? {
+            return Ok(pending);
+        }
+        self.resolve_await_completion(id, cursor)
+    }
+
+    /// Resolve a matching queued lifetime without consulting the history log.
+    pub(crate) fn resolve_await_pending_with_eta(
+        &self,
+        id: &str,
+        cursor: Option<&AwaitCursor>,
+        eta: impl FnOnce(&Self, &StoredEntry) -> Result<u64>,
+    ) -> Result<Option<AwaitState>> {
         match self.find(id) {
             Ok(entry) if cursor.is_none_or(|cursor| cursor.incarnation == entry.incarnation) => {
                 let eta_seconds = eta(self, &entry)?;
-                return self.pending_await_state(entry, cursor, eta_seconds);
+                return self
+                    .pending_await_state(entry, cursor, eta_seconds)
+                    .map(Some);
             }
             Ok(_) | Err(StoreError::UnknownId(_)) => {}
             Err(error) => return Err(error),
+        }
+        Ok(None)
+    }
+
+    /// Resolve durable completion without requiring the queue-state mutex.
+    pub(crate) fn resolve_await_completion(
+        &self,
+        id: &str,
+        cursor: Option<&AwaitCursor>,
+    ) -> Result<AwaitState> {
+        // A successful post clears this marker in the same journal recovery
+        // transaction. Without a matching pending entry, it means a reused
+        // identifier was deleted and older URLs must stay hidden.
+        if cursor.is_none() && self.await_lifetime_was_deleted(id)? {
+            return Ok(AwaitState::Unknown);
         }
         let record = history::latest_completion(&self.history_path, id, cursor)?;
         Ok(
@@ -97,6 +128,7 @@ impl QueueStore {
         })
     }
 
+    /// Capture the current history length as the start boundary for a new wait.
     fn history_end(&self) -> Result<u64> {
         match fs::metadata(&self.history_path) {
             Ok(metadata) => Ok(metadata.len()),
