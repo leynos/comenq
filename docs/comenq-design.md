@@ -421,7 +421,9 @@ uses the streaming protocol described in §5.3.
 
 **Await countdown.** The first `waiting` frame produces a countdown report
 immediately on stderr. Later reports are newline-terminated and follow this
-cadence, capped at the current remaining ETA with a one-second minimum:
+cadence, capped at the current non-zero remaining ETA with a one-second
+minimum. At zero ETA the client reports `due now` no more than once per minute
+while it waits for a terminal frame:
 
 | Remaining ETA     | Report interval |
 | ----------------- | --------------- |

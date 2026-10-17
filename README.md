@@ -60,7 +60,8 @@ comenq hist -n 20    # the twenty most recent posting attempts
 Use `await` when a script needs the full GitHub comment URL. It writes only
 that URL to stdout, so it can be captured directly; newline-terminated ETA
 countdowns go to stderr. Reports use the usual ETA format followed by
-`remaining`, or `due now` at zero, and use a bounded cadence. A zero exit
+`remaining`, or `due now` at zero. While still waiting at zero ETA, that line
+repeats at most once per minute. Reports use a bounded cadence. A zero exit
 status means the daemon confirmed the post; a closed stdout pipe does not
 change that status. Capture the URL with:
 

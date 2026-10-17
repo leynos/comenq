@@ -61,13 +61,22 @@ impl QueueStore {
 
     /// Clear a deletion marker left before a crash that did not remove its entry.
     pub(super) fn reconcile_await_deletions(&self) -> Result<()> {
+        let mut removed_marker = false;
         for entry in self.entries()? {
             let path = self.await_deletion_path(&entry.id)?;
             match fs::read(&path) {
-                Ok(_) => fs::remove_file(path)?,
+                Ok(_) => {
+                    fs::remove_file(path)?;
+                    removed_marker = true;
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
+        }
+        if removed_marker {
+            // Persist reconciliation before a later completion can outlive the
+            // entry while a resurrected tombstone still hides its URL.
+            fs::File::open(&self.await_deletions_dir)?.sync_all()?;
         }
         Ok(())
     }

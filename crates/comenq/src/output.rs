@@ -60,18 +60,25 @@ pub fn format_eta(seconds: u64) -> String {
     }
 }
 
-/// Choose a countdown cadence, capped at the remaining wait and at least one second.
+/// Choose a countdown cadence, using one minute once the wait is already due.
+///
+/// For non-zero waits the interval is capped at the remaining time and at
+/// least one second.
 ///
 /// # Examples
 ///
 /// ```rust
 /// assert_eq!(comenq::report_interval(45), 10);
 /// assert_eq!(comenq::report_interval(3), 3);
+/// assert_eq!(comenq::report_interval(0), 60);
 /// ```
 #[must_use]
 pub fn report_interval(seconds: u64) -> u64 {
+    if seconds == 0 {
+        return 60;
+    }
     let cadence = match seconds {
-        0..=60 => 10,
+        1..=60 => 10,
         61..=600 => 30,
         601..=3_600 => 120,
         3_601..=21_600 => 600,

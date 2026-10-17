@@ -1,7 +1,7 @@
 //! Read-only posting outcome queries serialized with queue mutations.
 
 use super::{SharedQueue, store_access::QueueState};
-use crate::store::{AwaitCursor, AwaitState, Result, StoreError};
+use crate::store::{AwaitCursor, AwaitState, QueueStore, Result, StoreError};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -100,6 +100,12 @@ pub(super) struct AwaitSchedule {
     etas: HashMap<String, u64>,
 }
 
+struct AwaitSnapshot {
+    generation: u64,
+    pending: Option<AwaitState>,
+    store: QueueStore,
+}
+
 impl SharedQueue {
     /// Subscribe to queue-state versions without consuming worker wakeups.
     pub(crate) fn subscribe_state(&self) -> StateSubscription {
@@ -162,84 +168,85 @@ impl SharedQueue {
         let id = id.to_owned();
         let cooldown = self.cfg.cooldown_period_seconds;
         loop {
-            let now = self.clock.unix_now();
-            let state_version = Arc::clone(&self.state_version);
-            let pending_id = id.clone();
-            let pending_cursor = cursor.clone();
-            let (observed_version, pending, store) = self
-                .with_state("resolve_await", move |state| {
-                    let version = *state_version.borrow();
-                    let pending = resolve_pending(
-                        state,
-                        &pending_id,
-                        pending_cursor.as_ref(),
-                        cooldown,
-                        now,
-                    )?;
-                    Ok((version, pending, state.store.clone()))
-                })
+            let observed = self
+                .observe_await_state(id.clone(), cursor.clone(), cooldown)
                 .await?;
-            if let Some(pending) = pending {
+            if let Some(pending) = observed.pending {
                 return Ok(pending);
             }
 
-            let history_id = id.clone();
-            let history_cursor = cursor.clone();
-            let lookup = history_lookup.clone();
-            let history_started = Instant::now();
-            let history_result =
-                tokio::task::spawn_blocking(move || lookup(store, history_id, history_cursor))
-                    .await
-                    .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
-            let duration = history_started.elapsed();
-            let (outcome, error_kind) = match &history_result {
-                Ok(_) => ("success", None),
-                Err(error) => ("failure", Some(error.category())),
-            };
-            crate::metrics::record_queue_store_duration(
-                "resolve_await",
-                outcome,
-                error_kind,
-                duration,
-            );
-            if let Err(error) = &history_result
-                && error.is_unexpected()
-            {
-                tracing::warn!(
-                    operation = "resolve_await",
-                    error_kind = error.category(),
-                    "Queue history lookup failed"
-                );
-            }
-            let completed = history_result;
+            let completed = scan_await_history(
+                observed.store,
+                id.clone(),
+                cursor.clone(),
+                history_lookup.clone(),
+            )
+            .await;
 
             // Recheck pending state and the generation after the unlocked scan.
             // A concurrent put/completion invalidates the history snapshot.
-            let current_version = Arc::clone(&self.state_version);
-            let pending_id = id.clone();
-            let pending_cursor = cursor.clone();
-            let now = self.clock.unix_now();
-            let (current_version, pending) = self
-                .with_state("resolve_await", move |state| {
-                    let version = *current_version.borrow();
-                    let pending = resolve_pending(
-                        state,
-                        &pending_id,
-                        pending_cursor.as_ref(),
-                        cooldown,
-                        now,
-                    )?;
-                    Ok((version, pending))
-                })
+            let current = self
+                .observe_await_state(id.clone(), cursor.clone(), cooldown)
                 .await?;
-            if let Some(pending) = pending {
+            if let Some(pending) = current.pending {
                 return Ok(pending);
             }
-            if current_version == observed_version {
+            if current.generation == observed.generation {
                 return completed;
             }
         }
     }
+
+    async fn observe_await_state(
+        &self,
+        id: String,
+        cursor: Option<AwaitCursor>,
+        cooldown: u64,
+    ) -> Result<AwaitSnapshot> {
+        let now = self.clock.unix_now();
+        let state_version = Arc::clone(&self.state_version);
+        self.with_state("resolve_await", move |state| {
+            let generation = *state_version.borrow();
+            let pending = resolve_pending(state, &id, cursor.as_ref(), cooldown, now)?;
+            Ok(AwaitSnapshot {
+                generation,
+                pending,
+                store: state.store.clone(),
+            })
+        })
+        .await
+    }
+}
+
+async fn scan_await_history<F>(
+    store: QueueStore,
+    id: String,
+    cursor: Option<AwaitCursor>,
+    history_lookup: F,
+) -> Result<AwaitState>
+where
+    F: Fn(QueueStore, String, Option<AwaitCursor>) -> Result<AwaitState> + Send + Sync + 'static,
+{
+    let history_started = Instant::now();
+    let history_result = tokio::task::spawn_blocking(move || history_lookup(store, id, cursor))
+        .await
+        .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
+    let duration = history_started.elapsed();
+    let (outcome, error_kind) = match &history_result {
+        Ok(_) => ("success", None),
+        Err(error) => ("failure", Some(error.category())),
+    };
+    crate::metrics::record_queue_store_duration("resolve_await", outcome, error_kind, duration);
+    if let Err(error) = &history_result
+        && error.is_unexpected()
+    {
+        tracing::warn!(
+            operation = "resolve_await",
+            error_kind = error.category(),
+            "Queue history lookup failed"
+        );
+    }
+    history_result
 }
 
 /// Resolve only the selected pending lifetime while the shared queue is locked.

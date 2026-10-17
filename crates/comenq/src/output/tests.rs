@@ -148,7 +148,7 @@ fn escapes_untrusted_reply_target_fields() {
 }
 
 #[rstest]
-#[case(0, 1)]
+#[case(0, 60)]
 #[case(1, 1)]
 #[case(9, 9)]
 #[case(10, 10)]

@@ -165,9 +165,10 @@ printf '%s\n' "$URL"
 ```
 
 The command reports the first ETA immediately, using the same duration format as
-`put` and `list` followed by `remaining`. A zero ETA is `due now`. It updates
-the countdown on a bounded cadence, shortened to the remaining ETA and never
-less than one second:
+`put` and `list` followed by `remaining`. A zero ETA is `due now`; while it is
+still waiting for the daemon, that report repeats no more than once per minute.
+For non-zero ETAs, the countdown cadence is capped at the remaining time and
+never less than one second:
 
 | Remaining ETA                 | Countdown interval |
 | ----------------------------- | ------------------ |

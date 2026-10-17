@@ -88,10 +88,12 @@ followed by
 .BR remaining ;
 zero is printed as
 .BR "due now" .
+While it is still waiting at zero ETA, that report repeats no more than once
+per minute.
 The report interval is 10 seconds through 60 seconds remaining, 30 seconds
 through 10 minutes, 2 minutes through 1 hour, 10 minutes through 6 hours, and
-30 minutes for longer waits. Each interval is capped at the remaining wait,
-with a one-second minimum.
+30 minutes for longer waits. For non-zero waits, each interval is capped at the
+remaining wait, with a one-second minimum.
 .TP
 .B hist
 Print the posting-history log, oldest first: identifier, age, status (
