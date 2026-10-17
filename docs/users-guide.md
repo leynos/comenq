@@ -249,6 +249,6 @@ only lengthens its cooldown-derived ETA; zero disables it. Configure flutter in
 the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
-[Comenq design](comenq-design.md). For an existing deployment, see
-[Migrate to 0.1.0](migration-0.1.0.md) and
-[Migrate to 0.2.0](migration-0.2.0.md).
+[Comenq design](comenq-design.md). For an existing deployment, see the
+migration guides for [0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md),
+and [0.3.0](migration-0.3.0.md).

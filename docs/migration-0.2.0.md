@@ -1,8 +1,8 @@
 # Migrate to 0.2.0
 
-This guide covers the optional GitHub token pool and the foreground `await`
-command introduced in 0.2.0. Existing single-token configuration remains
-supported, so deployments do not need to change their token settings to upgrade.
+This guide covers the optional GitHub token pool introduced in 0.2.0. Existing
+single-token configuration remains supported, so deployments do not need to
+change their token settings to upgrade.
 
 ## Configure token rotation
 
@@ -32,26 +32,6 @@ in the pool, posting starts with the first token.
 No queue or history conversion is required. New history records include a
 SHA-256 token hash, and `comenq hist` shows its first eight characters. Older
 history records without a hash remain readable and display `--------`.
-
-## Wait for a posted comment URL
-
-Upgrade `comenq` and `comenqd` together to use the new streaming `await`
-request. Pass the eight-character identifier printed by `put` or `list`:
-
-```bash
-comenq await 1a2b3c4d
-```
-
-The command waits through posting retries, writes countdown reports to stderr,
-and prints the full GitHub comment URL to stdout after the daemon records a
-successful post. Existing queue entries and history need no conversion. Older
-successful history records without a comment URL remain readable, but `await`
-reports an explicit error for those records because their comment URL cannot be
-reconstructed.
-
-The daemon stores deletion markers alongside the queue so a reused identifier
-cannot resolve to an older post after the newer entry is deleted. These markers
-are maintained automatically and are not part of `comenq hist` output.
 
 For service setup and the complete precedence rules, see the
 [users' guide](users-guide.md).
