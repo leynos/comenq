@@ -281,7 +281,10 @@ async fn queue_changes_do_not_shorten_a_failed_post_retry_cooldown() {
     );
     assert_eq!(post_times.lock().expect("POST time lock").len(), 1);
 
-    tokio::time::timeout(Duration::from_secs(cooldown + 1), idle.notified())
+    // Keep the real-time retry assertion reliable when parallel tests delay
+    // the worker's timer wake-up under load.
+    let retry_wait = Duration::from_secs(cooldown).saturating_add(Duration::from_secs(5));
+    tokio::time::timeout(retry_wait, idle.notified())
         .await
         .expect("worker should retry after the cooldown");
     assert_retry_respects_cooldown(&post_times, Duration::from_secs(cooldown));

@@ -1,6 +1,7 @@
 //! Streaming await transport, output separation, and deadline regressions.
 
-use super::super::{ClientError, await_stream::receive, await_with_writers};
+use super::super::{ClientError, await_stream::receive, await_with_writers, run_with_writer};
+use crate::{Args, Command};
 use comenq_lib::protocol::{AwaitEvent, MAX_AWAIT_FRAME_BYTES, Request};
 use rstest::rstest;
 use std::io::{self, Write};
@@ -51,6 +52,43 @@ async fn sends_request_and_separates_countdown_from_url() -> Result<(), ClientEr
     );
     assert_eq!(stdout, format!("{URL}\n").as_bytes());
     assert_eq!(stderr, b"2m 30s remaining\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_dispatches_await_to_streaming_transport() -> Result<(), ClientError> {
+    let directory = tempfile::tempdir()?;
+    let socket = directory.path().join("socket");
+    let listener = UnixListener::bind(&socket)?;
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        stream.read_to_end(&mut request).await?;
+        let request = serde_json::from_slice::<Request>(&request)?;
+        stream
+            .write_all(&frames(&[AwaitEvent::Posted {
+                comment_url: URL.into(),
+            }])?)
+            .await?;
+        Ok::<_, ClientError>(request)
+    });
+    let args = Args {
+        socket: Some(socket),
+        command: Command::Await {
+            id: "1a2b3c4d".into(),
+        },
+    };
+    let mut stdout = Vec::new();
+
+    run_with_writer(args, &mut stdout).await?;
+
+    assert_eq!(
+        server.await.expect("server completes")?,
+        Request::Await {
+            id: "1a2b3c4d".into()
+        }
+    );
+    assert_eq!(stdout, format!("{URL}\n").as_bytes());
     Ok(())
 }
 
