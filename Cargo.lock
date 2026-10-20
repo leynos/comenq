@@ -414,7 +414,6 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
- "serial_test",
  "tempfile",
  "test-support",
  "thiserror 1.0.69",

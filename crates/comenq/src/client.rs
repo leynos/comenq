@@ -8,6 +8,7 @@
 use comenq_lib::protocol::{
     HistoryEntry, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Request, Response,
 };
+use mockable::{DefaultEnv, Env};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -187,7 +188,31 @@ async fn transact_with_timeout(
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    let candidates = args.socket_candidates();
+    run_with_env(args, &DefaultEnv).await
+}
+
+/// Execute a parsed command using the supplied environment provider.
+///
+/// Resolve socket candidates before the first asynchronous operation so the
+/// environment provider is only needed during configuration.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use comenq::{Args, Command, run_with_env};
+/// # use mockable::DefaultEnv;
+/// # use std::path::PathBuf;
+/// # async fn try_run() -> Result<(), comenq::ClientError> {
+/// let args = Args {
+///     socket: Some(PathBuf::from("/tmp/comenq.sock")),
+///     command: Command::List,
+/// };
+/// run_with_env(args, &DefaultEnv).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn run_with_env(args: Args, env: &dyn Env) -> Result<(), ClientError> {
+    let candidates = args.socket_candidates_with_env(env);
     if let Command::Await { id } = &args.command {
         return await_with_writers(
             &candidates,

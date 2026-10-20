@@ -1,11 +1,11 @@
 //! CLI parsing and command-conversion tests.
 
 use super::{Args, Command, RepoSlug, RepoSlugParseError};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use comenq_lib::protocol::Request;
 use rstest::rstest;
 use std::path::PathBuf;
-use test_support::EnvVarGuard;
+use test_support::mock_env;
 
 #[rstest]
 #[case("octocat/hello-world", 1, "Hi")]
@@ -142,34 +142,28 @@ fn trims_whitespace() {
     assert_eq!(slug.repo(), "hello-world");
 }
 
-#[serial_test::serial]
 #[test]
 fn socket_defaults_to_system_path_without_runtime_dir() {
-    let _socket_guard = EnvVarGuard::remove("COMENQ_SOCKET");
-    let _xdg_guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
+    let env = mock_env([] as [(&str, &str); 0]);
     let args = Args::try_parse_from(["comenq", "put", "octocat/hello-world", "1", "Hi"])
         .expect("valid arguments should parse");
     assert_eq!(args.socket, None);
     assert_eq!(
-        args.socket_candidates(),
+        args.socket_candidates_with_env(&env),
         vec![PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)]
     );
 }
 
-#[serial_test::serial]
 #[test]
 fn socket_candidates_prefer_the_user_runtime_path() {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let _socket_guard = EnvVarGuard::remove("COMENQ_SOCKET");
-    let _xdg_guard = EnvVarGuard::set(
-        "XDG_RUNTIME_DIR",
-        dir.path().to_str().expect("tempdir path is UTF-8"),
-    );
+    let runtime_dir = dir.path().to_str().expect("tempdir path is UTF-8");
+    let env = mock_env([("XDG_RUNTIME_DIR", runtime_dir)]);
     let args = Args::try_parse_from(["comenq", "put", "octocat/hello-world", "1", "Hi"])
         .expect("valid arguments should parse");
     assert_eq!(args.socket, None);
     assert_eq!(
-        args.socket_candidates(),
+        args.socket_candidates_with_env(&env),
         vec![
             dir.path().join("comenq/comenq.sock"),
             PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH),
@@ -177,22 +171,20 @@ fn socket_candidates_prefer_the_user_runtime_path() {
     );
 }
 
-#[serial_test::serial]
 #[test]
-fn socket_env_var_overrides_default() {
-    let _socket_guard = EnvVarGuard::set("COMENQ_SOCKET", "/tmp/custom.sock");
+fn socket_env_var_is_resolved_after_argument_parsing() {
+    let env = mock_env([("COMENQ_SOCKET", "/tmp/custom.sock")]);
     let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
-    assert_eq!(args.socket, Some(PathBuf::from("/tmp/custom.sock")));
+    assert_eq!(args.socket, None);
     assert_eq!(
-        args.socket_candidates(),
+        args.socket_candidates_with_env(&env),
         vec![PathBuf::from("/tmp/custom.sock")]
     );
 }
 
-#[serial_test::serial]
 #[test]
 fn socket_flag_overrides_env_var() {
-    let _socket_guard = EnvVarGuard::set("COMENQ_SOCKET", "/tmp/env.sock");
+    let env = mock_env([("COMENQ_SOCKET", "/tmp/env.sock")]);
     let args = Args::try_parse_from([
         "comenq",
         "put",
@@ -204,6 +196,27 @@ fn socket_flag_overrides_env_var() {
     ])
     .expect("valid arguments should parse");
     assert_eq!(args.socket, Some(PathBuf::from("/tmp/flag.sock")));
+    assert_eq!(
+        args.socket_candidates_with_env(&env),
+        vec![PathBuf::from("/tmp/flag.sock")]
+    );
+}
+
+#[test]
+fn empty_socket_env_var_uses_discovery() {
+    let env = mock_env([("COMENQ_SOCKET", "")]);
+    let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
+    assert_eq!(
+        args.socket_candidates_with_env(&env),
+        vec![PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)]
+    );
+}
+
+#[test]
+fn socket_env_var_is_described_without_a_clap_env_binding() {
+    let help = Args::command().render_help().to_string();
+    assert!(help.contains("COMENQ_SOCKET"));
+    assert!(!help.contains("[env: COMENQ_SOCKET]"));
 }
 
 #[rstest]
