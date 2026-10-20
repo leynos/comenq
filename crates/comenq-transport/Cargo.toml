@@ -6,8 +6,11 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+mockable = { workspace = true }
+
 [dev-dependencies]
-serial_test = "3"
+rstest = { workspace = true }
 tempfile = { workspace = true }
 test-support = { workspace = true }
 

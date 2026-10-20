@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 tokio = { workspace = true }
 clap = { workspace = true }
+mockable = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 octocrab = { workspace = true }

@@ -49,6 +49,7 @@ missing_docs = "deny"
 [workspace.dependencies]
 tokio = { version = "1.35", features = ["full"] }
 clap = { version = "4.4", features = ["derive", "env"] }
+mockable = { version = "3", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
   octocrab = "0.38"

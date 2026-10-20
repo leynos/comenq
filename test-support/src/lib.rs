@@ -1,6 +1,7 @@
 //! Test support utilities.
 
 pub mod daemon;
+pub mod env;
 pub mod env_guard;
 pub mod logging;
 pub mod util;
@@ -9,6 +10,7 @@ pub use workflow::uses_shared_release_actions;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{TestConfig, octocrab_for, octocrab_with_token, temp_config};
+pub use env::mock_env;
 pub use env_guard::EnvVarGuard;
 
 // Re-exports from util module with documentation (from your branch)
