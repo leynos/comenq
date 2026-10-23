@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup Rust
-        uses: leynos/shared-actions/.github/actions/setup-rust@2aed718022775671809f8c85a2c10547dfb1ae13
+        uses: leynos/shared-actions/.github/actions/setup-rust@48fb12fc10bd4e821adab564db95dce51e16f58a
         with:
           install-mold: 'true'
       - name: Install nextest
@@ -26,7 +26,7 @@ jobs:
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check --git`; 0.6.0 is the
         # first release with `--check` and `--git`.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@2aed718022775671809f8c85a2c10547dfb1ae13
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@48fb12fc10bd4e821adab564db95dce51e16f58a
         with:
           version: "0.6.1"
 
@@ -43,7 +43,7 @@ jobs:
         with:
           globs: '**/*.md'
       - name: Install Whitaker Dylint suite
-        uses: leynos/shared-actions/.github/actions/install-whitaker@2aed718022775671809f8c85a2c10547dfb1ae13
+        uses: leynos/shared-actions/.github/actions/install-whitaker@48fb12fc10bd4e821adab564db95dce51e16f58a
         env:
           # The prebuilt dylint-link binary aborts its post-install
           # verification when RUSTUP_TOOLCHAIN is unset, and the source
@@ -86,7 +86,7 @@ jobs:
           # linker. Assigning RUSTFLAGS displaces every `rustflags` table in
           # .cargo/config.toml.
           RUSTFLAGS: -D warnings
-        uses: leynos/shared-actions/.github/actions/generate-coverage@2aed718022775671809f8c85a2c10547dfb1ae13
+        uses: leynos/shared-actions/.github/actions/generate-coverage@48fb12fc10bd4e821adab564db95dce51e16f58a
         with:
           output-path: lcov.info
           format: lcov
