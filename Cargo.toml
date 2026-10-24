@@ -72,6 +72,10 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 metrics-util = "0.20"
 
+[profile.dev]
+incremental = false
+debug = 0
+
 [lints.rust]
 missing_docs = "deny"
 
