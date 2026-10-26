@@ -251,14 +251,14 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-26T15:20Z) **Milestone EP-M3 complete**: migrated
       `tests/steps/config_steps.rs` to `ortho_config::OrthoResult<Config>`
       (its `ConfigWorld` field type), added
-      `crates/comenqd/src/config/tests/precedence.rs` (11 cases: a four-row
-      table over the tiers, the restated-default defect, and the environment
-      parsing behaviours), added `error_when_path_is_a_directory` to
-      `config/tests/configuration.rs` to pin v0.10.0's non-regular-file
+      `crates/comenqd/src/config/tests/precedence.rs` (9 runtime cases: a
+      four-row table over the tiers, the restated-default defect, and the
+      environment parsing behaviours), added `error_when_path_is_a_directory`
+      to `config/tests/configuration.rs` to pin v0.10.0's non-regular-file
       rejection, and added `crates/comenqd/tests/startup_contract.rs` (3 cases
       running the real binary to pin exit status and stream placement).
       Evidence: `cargo nextest run -p comenqd --all-features` — 53 configuration
-      and contract tests pass, including all 11 precedence cases and all 3
+      and contract tests pass, including all 9 precedence cases and all 3
       process-level cases; `cargo check --workspace --all-targets
       --all-features` is clean apart from the pre-existing unused
       `vendor/filetime` patch notice. Note: an earlier `git checkout --` used to
