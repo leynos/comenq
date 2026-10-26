@@ -74,9 +74,11 @@ Hard invariants that must hold throughout implementation.
   written to standard output. `--help` and `--version` handling stays with
   `clap::Parser::parse()`, which exits 0 without returning.
 - **Imported upstream documents stay byte-for-byte identical.** The twelve
-  files listed in `docs/third-party-docs-provenance.md` are copies; local
-  migration notes go in this plan and in this repository's own documents.
-  `docs/ortho-config-*` files must never be edited.
+  files listed in `docs/third-party-docs-provenance.md` are copies, stored
+  beneath `docs/ortho-config/` at their upstream relative paths so their
+  relative links resolve without editing them. Local migration notes go in this
+  plan and in this repository's own documents; files under `docs/ortho-config/`
+  must never be edited.
 - **`ortho_config` default features stay enabled.**
   `default-features = false` does not build in v0.10.0
   (leynos/ortho-config#627), and `serde_json` must remain available.
@@ -295,8 +297,32 @@ Thresholds that trigger escalation when breached.
       notice; there were no `[build-limits]` drain faults and no refusal or
       connection error. Three "panic" grep matches are `PASS` lines for a test
       whose name contains `panicked`, not failures.
-- [ ] Then `coderabbit review --agent` against this tree, and clear all
-      concerns before proceeding.
+- [x] (2026-10-26T15:02Z) `coderabbit review --agent` over `origin/main`
+      returned four findings, all `minor`, all against
+      `docs/third-party-docs-provenance.md`, and all correct. Deduplicated they
+      are two defects, both mine and both in prose I wrote rather than in
+      imported text. **(a)** The re-fetch recipe said
+      `show 38812c56:examples/hello_world/<path>`, but every entry in the
+      listing already starts with `examples/hello_world/`, so the prefix would
+      be doubled and `git show` would fail. **(b)** The flat
+      `docs/ortho-config-<name>.md` placement broke the imports' relative
+      links; CodeRabbit named one example, and checking the whole set showed
+      the damage was wider — of the eleven links out of `users-guide.md`, six
+      missed outright and two more resolved *falsely* onto this repository's
+      own `docs/users-guide.md` and `docs/README.md`. A mapping table cannot
+      fix that, because Markdown resolves links by path arithmetic, not by
+      documentation.
+- [x] (2026-10-26T15:05Z) Fixed both findings by moving the imports to
+      `docs/ortho-config/` at their **upstream relative paths** (`git mv`, so
+      history follows), importing `examples/hello_world/README.md` so the
+      directory link lands on a real page, and rewriting the provenance
+      document to describe the mirrored layout, the reason for it, and the
+      corrected re-fetch command. Twelve hashes re-verified after the move and
+      again after `make fmt`: every one still matches the recorded value, so
+      the byte-for-byte obligation survives. Every relative link out of the
+      five authoritative documents now resolves. `make check-fmt` reports
+      "32 files left unchanged"; `make markdownlint` reports 30 files, zero
+      issues.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
