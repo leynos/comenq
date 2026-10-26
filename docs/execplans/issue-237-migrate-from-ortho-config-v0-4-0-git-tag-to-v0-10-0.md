@@ -276,8 +276,27 @@ Thresholds that trigger escalation when breached.
       (14:29) and while `make test` was finishing, so the run did not cover the
       final tree. Recorded here because the baseline-to-migrated count
       comparison it establishes is still valid and still useful.
-- [ ] Milestone EP-M4: re-run every gate sequentially against the final tree,
-      then `coderabbit review --agent`, and clear all concerns.
+- [x] (2026-10-26T14:45Z) **Authoritative gate pass at `386142e`**
+      (`scrutineer`): all ten gates exited 0 with HEAD verified identical and
+      `git status --short` empty before the first gate, after `make fmt`,
+      after `make spelling`, and after the last gate, so the run covers the
+      complete final tree — the defect that invalidated the earlier run
+      cannot apply here. Logs are
+      `/tmp/rerun-<action>-issue-237-…-v0-10-0.out`, one per gate, written in
+      strict sequence (fmt 14:41:56 → check-fmt 14:42:00 → lint 14:43:01 →
+      typecheck 14:43:04 → test 14:43:46 → test-cucumber 14:44:08 →
+      markdownlint 14:44:14 → spelling 14:44:18 → nixie 14:44:20 →
+      test-workflow-contracts 14:44:29). nextest **494/494 passed, 0 skipped**
+      (baseline 481, +13 new); cucumber **11 features / 55 scenarios /
+      211 steps**, identical to baseline; workflow contracts **198 passed**;
+      clippy and the Whitaker dylint both clean; markdownlint 30 files, zero
+      issues; nixie "All diagrams validated successfully". Every `^warning:`
+      line in every log is the pre-existing unused `vendor/filetime` patch
+      notice; there were no `[build-limits]` drain faults and no refusal or
+      connection error. Three "panic" grep matches are `PASS` lines for a test
+      whose name contains `panicked`, not failures.
+- [ ] Then `coderabbit review --agent` against this tree, and clear all
+      concerns before proceeding.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
