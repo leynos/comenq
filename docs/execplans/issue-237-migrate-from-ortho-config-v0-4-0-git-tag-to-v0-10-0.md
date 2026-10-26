@@ -579,13 +579,13 @@ and in the inventory of `Progress`.
 ## Conformance basis
 
 The authoritative upstream artefacts for this work are the twelve imported
-documents under `docs/ortho-config-*`, pinned to commit
-`38812c563e3953a490e3efc202609f37e21a0517` of `leynos/ortho-config` and
-recorded with checksums in `docs/third-party-docs-provenance.md`. There is no
-in-repository Terms of Reference or technical design for this migration; the
-governing requirement set is issue #237
-(<https://github.com/leynos/comenq/issues/237>), sections 1–7, and the
-repository's own policy in `AGENTS.md`.
+documents under `docs/ortho-config/`, laid out at their upstream relative
+paths, pinned to commit `38812c563e3953a490e3efc202609f37e21a0517` of
+`leynos/ortho-config` and recorded with checksums in
+`docs/third-party-docs-provenance.md`. There is no in-repository Terms of
+Reference or technical design for this migration; the governing requirement set
+is issue #237 (<https://github.com/leynos/comenq/issues/237>), sections 1–7,
+and the repository's own policy in `AGENTS.md`.
 
 Trace links:
 
@@ -981,6 +981,15 @@ controls here were caught being untested. And scoping a commit with
 `git checkout --` discards work silently: the one-line `config_steps.rs`
 migration vanished that way and was only recovered because the next compile
 failed. Scope with the index, and compile immediately after.
+
+One more lesson, from review rather than from the build. A test named for a
+contract must assert the contract and not merely its neighbours. The
+missing-token process test checked a non-zero exit, an empty standard output
+and a non-empty standard error — all true of every other startup failure too —
+so it would have stayed green if token validation had been removed entirely.
+Asserting the identifying text is what makes the name honest. The same review
+caught first-person narration in this plan, which is worth noting because the
+document describes the work and should not assume who performed it.
 
 Not done, deliberately: no `rust-version` key was added (the pin already
 exceeds the floor, and adding one would narrow the supported range without
