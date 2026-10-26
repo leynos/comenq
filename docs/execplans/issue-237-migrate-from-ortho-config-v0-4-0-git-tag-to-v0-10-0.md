@@ -209,14 +209,16 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-26T14:05Z) Fixed the mdtablefix drift in
       `docs/third-party-docs-provenance.md`; `make check-fmt` now reports
       "31 files left unchanged" and `make markdownlint` reports
-      "0 issues in 0 files". The drift was self-inflicted by my own untracked
-      provenance document and ExecPlan, not a pre-existing defect.
+      "0 issues in 0 files". The drift came from the untracked provenance
+      document and ExecPlan added by this work, not from a pre-existing
+      defect.
 - [x] (2026-10-26T14:05Z) Collected the `scrutineer` baseline report
       (`aca35af63d9fe7b81`), which ran all six gates sequentially against
       `a781258` with zero tracked-file modifications. Results: `make fmt`,
       `make lint` (911s), `make typecheck` (478s), `make test` and
       `make nixie` pass; `make check-fmt` and `make markdownlint` failed only
-      on my then-unformatted untracked Markdown. Baseline inventory:
+      on the then-unformatted untracked Markdown added by this work.
+      Baseline inventory:
       **481/481 nextest tests passed** (17 binaries; the cucumber binary is
       filtered out of nextest by profile, as designed), and **11 features /
       55 scenarios / 211 steps**, all passing, under `make test-cucumber`.
@@ -262,8 +264,8 @@ Thresholds that trigger escalation when breached.
       process-level cases; `cargo check --workspace --all-targets
       --all-features` is clean apart from the pre-existing unused
       `vendor/filetime` patch notice. Note: an earlier `git checkout --` used to
-      keep a docs commit clean discarded this one-line change without my
-      noticing it, so the first compile attempt after compaction failed with
+      keep a docs commit clean discarded this one-line change unnoticed, so
+      the first compile attempt after compaction failed with
       `E0308` at `config_steps.rs:130`; re-applying the change fixed it. The
       lesson is that discarding a file to scope a commit needs a follow-up
       compile, not just a follow-up `git status`.
@@ -300,7 +302,7 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-26T15:02Z) `coderabbit review --agent` over `origin/main`
       returned four findings, all `minor`, all against
       `docs/third-party-docs-provenance.md`, and all correct. Deduplicated they
-      are two defects, both mine and both in prose I wrote rather than in
+      are two defects, both in the prose added by this work rather than in
       imported text. **(a)** The re-fetch recipe said
       `show 38812c56:examples/hello_world/<path>`, but every entry in the
       listing already starts with `examples/hello_world/`, so the prefix would
@@ -323,6 +325,30 @@ Thresholds that trigger escalation when breached.
       five authoritative documents now resolves. `make check-fmt` reports
       "32 files left unchanged"; `make markdownlint` reports 30 files, zero
       issues.
+- [x] (2026-10-26T21:10Z) Second `coderabbit review --agent` over
+      `origin/main` confirmed both round-one findings cleared and raised two
+      new ones, both correct. **(a)** This ExecPlan narrated the work in the
+      first person ("by my own", "my then-unformatted", "without my
+      noticing", "both mine"). Rewritten as neutral descriptions of the
+      work. **(b)**
+      `missing_token_exits_non_zero_and_reports_on_stderr` asserted only a
+      non-zero exit, an empty stdout and a non-empty stderr, so any unrelated
+      startup failure — a missing socket path, a bad address — would have
+      satisfied it. It now also requires stderr to contain
+      `provide github_token, github_token_file, or github_token_files`, the
+      literal message built in
+      `crates/comenqd/src/config/token_resolution.rs:51-55` and rendered by
+      `OrthoError::Validation` as
+      `Validation failed for '{key}': {message}`. Evidence: the built binary
+      against a token-less configuration prints
+      `Error:\n   0: Validation failed for 'github_token': provide github_token,
+      github_token_file, or github_token_files` on stderr, and
+      `cargo nextest run -p comenqd --features test-support -E
+      'binary(startup_contract)'` reports 3/3 passed. Non-vacuity control: the
+      same binary against a missing `--config` path and against malformed TOML
+      both print zero matches for that string, so the new assertion rejects
+      precisely the failures it is meant to reject rather than passing on any
+      non-empty stderr.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -654,7 +680,11 @@ and non-vacuity argument for each.
   token); for the unterminated-placeholder and empty-token halves, the existing
   in-process cases in `config/tests/token_pool.rs` and `token_file.rs`, where
   `Err` is the observable. Evidence: the child exits non-zero; `stdout` is
-  empty; `stderr` is non-empty. Non-vacuity: the daemon does not exit on
+  empty; `stderr` is non-empty, and for the missing-token case `stderr` also
+  contains the literal
+  `provide github_token, github_token_file, or github_token_files` emitted by
+  `Config::resolve_github_token`, which is what distinguishes this contract
+  from an arbitrary startup failure. Non-vacuity: the daemon does not exit on
   success, so a zero-exit comparison is unavailable. The reachability control
   was run and reverted: inverting the expected status to `success()` in
   `missing_configuration_exits_non_zero_and_reports_on_stderr` made it fail with

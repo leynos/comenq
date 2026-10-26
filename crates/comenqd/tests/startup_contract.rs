@@ -102,8 +102,17 @@ fn missing_token_exits_non_zero_and_reports_on_stderr() {
         "diagnostics belong on stderr, not stdout; got {:?}",
         String::from_utf8_lossy(&output.stdout),
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        !stderr.trim().is_empty(),
         "the failure must be explained on stderr"
+    );
+    // `Config::resolve_github_token` reports an absent credential through this
+    // exact message. Without it, any other startup failure would satisfy the
+    // assertions above and this test would no longer pin the contract it
+    // exists to protect.
+    assert!(
+        stderr.contains("provide github_token, github_token_file, or github_token_files"),
+        "the failure must name the missing credential, not merely fail; got {stderr:?}"
     );
 }
