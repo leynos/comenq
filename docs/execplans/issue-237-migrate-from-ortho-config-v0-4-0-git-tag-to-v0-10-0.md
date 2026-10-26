@@ -249,14 +249,14 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-26T15:20Z) **Milestone EP-M3 complete**: migrated
       `tests/steps/config_steps.rs` to `ortho_config::OrthoResult<Config>`
       (its `ConfigWorld` field type), added
-      `crates/comenqd/src/config/tests/precedence.rs` (9 cases covering the four
-      tiers, the restated-default defect, and the three environment-parsing
-      behaviours), added `error_when_path_is_a_directory` to
+      `crates/comenqd/src/config/tests/precedence.rs` (11 cases: a four-row
+      table over the tiers, the restated-default defect, and the environment
+      parsing behaviours), added `error_when_path_is_a_directory` to
       `config/tests/configuration.rs` to pin v0.10.0's non-regular-file
       rejection, and added `crates/comenqd/tests/startup_contract.rs` (3 cases
       running the real binary to pin exit status and stream placement).
       Evidence: `cargo nextest run -p comenqd --all-features` — 53 configuration
-      and contract tests pass, including all 9 precedence cases and all 3
+      and contract tests pass, including all 11 precedence cases and all 3
       process-level cases; `cargo check --workspace --all-targets
       --all-features` is clean apart from the pre-existing unused
       `vendor/filetime` patch notice. Note: an earlier `git checkout --` used to
@@ -527,26 +527,33 @@ and non-vacuity argument for each.
   file, a value in the environment, and a value on the command line, the
   effective value is the command-line value; without a command-line value it is
   the environment value; without that, the file value; without that, the
-  default. Method: parameterized `rstest` over the four tiers for one
-  representative field per tier, plus the full-tuple test already present in
+  default. Method: one parameterized `rstest` case table with a row per tier,
+  over `socket_path`, plus the full-tuple test already present in
   `apply_cli_overrides_preserves_unset_values_and_applies_set_values`.
   Rationale: the tiers are a finite, explicitly enumerated partition, so a
-  table is exhaustive for the claim. Domain: `socket_path` (a `PathBuf` from a
-  file, an environment variable and a flag), `cooldown_period_seconds` (a `u64`
-  from a file, an environment variable and a flag), and the token fields (whose
-  precedence is not plain layering but ordered resolution). Artefact:
-  `crates/comenqd/src/config/tests/configuration.rs` plus the new
-  `config/tests/precedence.rs` module declared from `config/tests.rs`. Evidence:
-  `cargo nextest run -p comenqd --all-features` passes. Non-vacuity: every
-  case supplies a distinct literal for each tier, so an implementation that
-  reads the wrong tier cannot accidentally pass. The negative control was run
-  and reverted: guarding the cooldown assignment with
-  `if secs != DEFAULT_COOLDOWN` reproduced the v0.10.0 §2 defect, and exactly
-  one case failed — `command_line_value_equal_to_the_default_still_wins`, with
-  `assertion left == right failed, left: 20, right: 960` — that is, it read the
-  environment value instead of the equal-to-default command-line value. The
-  other eight cases stayed green, confirming the mutation was narrowly targeted
-  rather than breaking the harness.
+  table is exhaustive for the claim, and one table makes the rows directly
+  comparable. Domain: `socket_path` (a `PathBuf`), with the other fields
+  covered by the named tests below. Artefact:
+  `socket_path_resolves_to_the_highest_present_tier` in
+  `config/tests/precedence.rs`, with rows `default_when_no_layer_sets_a_value`,
+  `file_overrides_default`, `environment_overrides_file`, and
+  `command_line_overrides_environment_and_file`. Evidence:
+  `cargo nextest run -p comenqd --all-features` passes, 11/11 in that module.
+  Non-vacuity: every row supplies a distinct literal for each present tier, so
+  reading the wrong layer yields a wrong value rather than an accidental match;
+  and because an absent layer must be expressible, an omitted environment
+  variable is explicitly *removed* rather than left to whatever the developer's
+  shell happens to hold. Two negative controls were run and reverted. Removing
+  the `cli.socket_path` assignment entirely failed exactly
+  `case_4_command_line_overrides_environment_and_file` with
+  `left: "/tmp/env.sock", right: "/tmp/cli.sock"` — the environment value
+  leaking through in place of the command-line value, which is the wrong-tier
+  signal the rows exist to catch, with the other ten cases green. Separately,
+  guarding the cooldown assignment with `if secs != DEFAULT_COOLDOWN`
+  reproduced the v0.10.0 §2 defect: exactly one case failed,
+  `command_line_value_equal_to_the_default_still_wins`, with
+  `assertion left == right failed, left: 20, right: 960`. Both mutations were
+  reverted and `config.rs` verified byte-identical.
 
 - Obligation `INV-RESTATED-DEFAULT`: a command-line value equal to the
   built-in default still wins over an environment value. Method: named unit

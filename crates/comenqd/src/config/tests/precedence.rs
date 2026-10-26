@@ -31,72 +31,73 @@ fn cli(args: &[&str]) -> CliArgs {
         .expect("parse daemon CLI options")
 }
 
+/// One row of the precedence truth table.
+///
+/// Each layer is optional so a row can express "this layer is absent" as
+/// opposed to "this layer holds a particular value". `expected` is the only
+/// `PathBuf` that is not optional: every row must resolve to something.
+struct TierCase {
+    file_value: Option<&'static str>,
+    env_value: Option<&'static str>,
+    cli_value: Option<&'static str>,
+    expected: &'static str,
+}
+
 #[rstest]
+#[case::default_when_no_layer_sets_a_value(TierCase {
+    file_value: None,
+    env_value: None,
+    cli_value: None,
+    expected: comenq_transport::DEFAULT_SOCKET_PATH,
+})]
+#[case::file_overrides_default(TierCase {
+    file_value: Some("/tmp/file.sock"),
+    env_value: None,
+    cli_value: None,
+    expected: "/tmp/file.sock",
+})]
+#[case::environment_overrides_file(TierCase {
+    file_value: Some("/tmp/file.sock"),
+    env_value: Some("/tmp/env.sock"),
+    cli_value: None,
+    expected: "/tmp/env.sock",
+})]
+#[case::command_line_overrides_environment_and_file(TierCase {
+    file_value: Some("/tmp/file.sock"),
+    env_value: Some("/tmp/env.sock"),
+    cli_value: Some("/tmp/cli.sock"),
+    expected: "/tmp/cli.sock",
+})]
 #[serial_test::serial]
-fn default_tier_applies_when_no_layer_sets_a_value() {
+fn socket_path_resolves_to_the_highest_present_tier(#[case] case: TierCase) {
+    // Every row supplies a distinct literal per present tier, so reading the
+    // wrong layer shows up as a wrong value rather than an accidental match.
     let dir = tempdir().expect("create tempdir");
-    let path = write_config(&dir, BASE_CONFIG);
-    let _socket_guard = EnvVarGuard::remove("COMENQD_SOCKET_PATH");
+    let contents = match case.file_value {
+        Some(value) => format!("{BASE_CONFIG}\nsocket_path='{value}'"),
+        None => BASE_CONFIG.to_string(),
+    };
+    let path = write_config(&dir, &contents);
+
+    // Always clear both socket-related variables first so a row that omits
+    // `env_value` really has no environment layer.
+    let _socket_guard = match case.env_value {
+        Some(value) => EnvVarGuard::set("COMENQD_SOCKET_PATH", value),
+        None => EnvVarGuard::remove("COMENQD_SOCKET_PATH"),
+    };
     let _xdg_guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
 
-    let cfg = Config::from_file(&path).expect("load config");
+    let cfg = match case.cli_value {
+        Some(value) => {
+            let path_str = path.to_str().expect("temp path is UTF-8");
+            let args = cli(&["--config", path_str, "--socket-path", value]);
+            Config::from_file_with_cli(&args.config, &args)
+        }
+        None => Config::from_file(&path),
+    }
+    .expect("load config");
 
-    assert_eq!(
-        cfg.socket_path,
-        PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)
-    );
-}
-
-#[rstest]
-#[serial_test::serial]
-fn file_tier_overrides_default() {
-    let dir = tempdir().expect("create tempdir");
-    let path = write_config(
-        &dir,
-        &format!("{BASE_CONFIG}\nsocket_path='/tmp/file.sock'"),
-    );
-    let _socket_guard = EnvVarGuard::remove("COMENQD_SOCKET_PATH");
-    let _xdg_guard = EnvVarGuard::remove("XDG_RUNTIME_DIR");
-
-    let cfg = Config::from_file(&path).expect("load config");
-
-    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/file.sock"));
-}
-
-#[rstest]
-#[serial_test::serial]
-fn environment_tier_overrides_file() {
-    let dir = tempdir().expect("create tempdir");
-    let path = write_config(
-        &dir,
-        &format!("{BASE_CONFIG}\nsocket_path='/tmp/file.sock'"),
-    );
-    let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
-
-    let cfg = Config::from_file(&path).expect("load config");
-
-    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/env.sock"));
-}
-
-#[rstest]
-#[serial_test::serial]
-fn command_line_tier_overrides_environment_and_file() {
-    let dir = tempdir().expect("create tempdir");
-    let path = write_config(
-        &dir,
-        &format!("{BASE_CONFIG}\nsocket_path='/tmp/file.sock'"),
-    );
-    let _guard = EnvVarGuard::set("COMENQD_SOCKET_PATH", "/tmp/env.sock");
-    let args = cli(&[
-        "--config",
-        path.to_str().expect("temp path is UTF-8"),
-        "--socket-path",
-        "/tmp/cli.sock",
-    ]);
-
-    let cfg = Config::from_file_with_cli(&args.config, &args).expect("load config");
-
-    assert_eq!(cfg.socket_path, PathBuf::from("/tmp/cli.sock"));
+    assert_eq!(cfg.socket_path, PathBuf::from(case.expected));
 }
 
 #[rstest]
