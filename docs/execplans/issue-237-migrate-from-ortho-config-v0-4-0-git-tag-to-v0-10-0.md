@@ -570,8 +570,10 @@ and non-vacuity argument for each.
   would destroy the comparison the issue asks for. Domain: every path through
   `resolve_github_token`. Artefact: the existing test files, with a diff
   requirement of zero changes except mechanical type adjustments in signatures.
-  Evidence: identical test names and case identifiers before and after, with
-  the baseline inventory recorded in `Progress`. Non-vacuity:
+  Evidence: `git show <rev>:<file>` over `a781258` and `a53f41c` yields the
+  same 8 `token_file.rs` and 14 `token_pool.rs` test function names, in the
+  same spelling, and `git status --short` on both files is empty — the diff is
+  not merely free of renames, it is empty. Non-vacuity:
   `token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens`
   asserts a substring absence, which fails if the message ever embeds a token.
 
@@ -583,12 +585,15 @@ and non-vacuity argument for each.
   `--config` path and asserts the exit status and that standard output is
   empty. Rationale: exit status and stream placement are process-level
   properties that no in-process test can observe. Domain: absent file,
-  malformed TOML, missing token, unterminated placeholder. Artefact:
-  `crates/comenqd/tests/` binary test using `std::process::Command`. Evidence:
-  the child exits non-zero; `stdout` is empty; `stderr` is non-empty.
-  Non-vacuity: the daemon does not exit on success, so a zero-exit comparison
-  is unavailable. The reachability control was run and reverted: inverting the
-  expected status to `success()` in
+  malformed TOML, missing token, unterminated placeholder. Artefact: for the
+  process-level half, `crates/comenqd/tests/startup_contract.rs` runs the built
+  binary with `std::process::Command` (absent file, malformed TOML, missing
+  token); for the unterminated-placeholder and empty-token halves, the existing
+  in-process cases in `config/tests/token_pool.rs` and `token_file.rs`, where
+  `Err` is the observable. Evidence: the child exits non-zero; `stdout` is
+  empty; `stderr` is non-empty. Non-vacuity: the daemon does not exit on
+  success, so a zero-exit comparison is unavailable. The reachability control
+  was run and reverted: inverting the expected status to `success()` in
   `missing_configuration_exits_non_zero_and_reports_on_stderr` made it fail with
   `a missing configuration must fail; stdout was ""`, which is the intended
   reason (the child really exits non-zero), while the other two cases stayed
