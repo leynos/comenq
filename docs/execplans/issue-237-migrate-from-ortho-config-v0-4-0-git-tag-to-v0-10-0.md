@@ -265,8 +265,19 @@ Thresholds that trigger escalation when breached.
       `E0308` at `config_steps.rs:130`; re-applying the change fixed it. The
       lesson is that discarding a file to scope a commit needs a follow-up
       compile, not just a follow-up `git status`.
-- [ ] Milestone EP-M4: run every gate sequentially, then
-      `coderabbit review --agent`, and clear all concerns.
+- [x] (2026-10-26T14:37Z) **First gate pass, at `a53f41c`** (`scrutineer`):
+      all ten gates exited 0 — `fmt`, `check-fmt`, `lint` (368s), `typecheck`
+      (235s), `test` (171s), `test-cucumber`, `markdownlint`, `spelling`,
+      `nixie`, `test-workflow-contracts`. nextest 494/494 passed (baseline 481
+      plus the 13 new tests); cucumber 11 features / 55 scenarios / 211 steps,
+      identical to baseline; workflow contracts 198 passed; zero clippy
+      warnings; `typos.toml` current. **Superseded**, not used as the final
+      evidence: `f312bce` changed `precedence.rs` at 14:36:24, after `make lint`
+      (14:29) and while `make test` was finishing, so the run did not cover the
+      final tree. Recorded here because the baseline-to-migrated count
+      comparison it establishes is still valid and still useful.
+- [ ] Milestone EP-M4: re-run every gate sequentially against the final tree,
+      then `coderabbit review --agent`, and clear all concerns.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -720,10 +731,15 @@ Stage D (EP-M3) migrates the BDD harness. In `tests/steps/config_steps.rs:16`,
 change `result: Option<Result<Config, ortho_config::OrthoError>>` to
 `result: Option<ortho_config::OrthoResult<Config>>`. Nothing else in that file
 names the error type, and the two `match world.result.take()` arms already use
-`Some(Err(_))`. Add the regression tests from `Verification plan` to
-`crates/comenqd/src/config/tests/configuration.rs` (or a sibling module if the
-file would exceed the repository's 400-line limit — it is currently ~340 lines,
-so a sibling `tiers.rs` declared from `config/tests.rs` is the expected home).
+`Some(Err(_))`. Add the regression tests from `Verification plan` to a sibling
+module, `crates/comenqd/src/config/tests/precedence.rs`, declared from
+`config/tests.rs`. This was the expected home because
+`config/tests/configuration.rs` was already ~348 lines against the repository's
+400-line limit: it ends at 362 lines with the one directory-path test added,
+and the new module holds the remaining cases at 192 lines. The process-level
+checks go in a new integration target,
+`crates/comenqd/tests/startup_contract.rs`, so they exercise the real binary
+rather than the library.
 
 Stage E (EP-M4 and EP-M5) runs the gates, requests the review, and delivers.
 
@@ -855,3 +871,46 @@ operation with no Figment involvement, and its `io::Error` is what
 
 `Config`'s nine public fields, its `From` conversions, and
 `apply_cli_overrides`'s signature are unchanged.
+
+## Outcomes & retrospective
+
+Delivered: the dependency moved from `ortho_config` v0.3.0 at Git tag `v0.4.0`
+to v0.10.0 from crates.io, with no Git dependency left in `Cargo.lock`; the
+daemon's configuration API moved to `OrthoResult`/`Arc<OrthoError>`; the
+redundant direct `figment` dependency was removed; and eight
+`clippy::result_large_err` suppressions disappeared because the error is now
+pointer-sized. Behaviour is preserved, and the preservation is argued from
+evidence rather than from the diff: cucumber totals are byte-identical to
+baseline at 11 features / 55 scenarios / 211 steps, nextest went from 481 to
+494 passing tests with the 13 additions accounted for, the 22 token tests were
+carried across with an empty diff, and the real binary still exits 1 with an
+empty standard output and a `color_eyre` report on standard error.
+
+What actually mattered was resisting two tempting edits. Adopting
+`into_ortho_merge` would have relabelled every environment- and file-layer
+failure as a CLI merge, in a pipeline whose CLI is applied after the Figment
+merges — a diagnostic regression invisible to any test that only asserts
+`is_err()`. Adopting `CsvEnv`, the newer and superficially better environment
+provider, would have turned `COMENQD_GITHUB_TOKEN_FILES=/a,/b` from a startup
+error into a silently working two-token pool. Both survived scrutiny only
+because the evidence was read from the dependency's own source and manifest
+rather than inferred from a migration guide.
+
+Lessons worth keeping. A "no behaviour change" claim needs a witness that can
+fail: the restated-default test was vacuous at first (it asserted `960`, which
+is also the default) and became meaningful only after mutation testing showed
+which value a wrong implementation would produce. Verification statements
+written in the future tense ("the mutation must fail") are not evidence; they
+become evidence when the mutation is actually run, which is how two of the
+controls here were caught being untested. And scoping a commit with
+`git checkout --` discards work silently: the one-line `config_steps.rs`
+migration vanished that way and was only recovered because the next compile
+failed. Scope with the index, and compile immediately after.
+
+Not done, deliberately: no `rust-version` key was added (the pin already
+exceeds the floor, and adding one would narrow the supported range without
+evidence); no dated-nightly bump was needed; `serde_yaml` was retained because
+it serves GitHub workflow YAML parsing, not configuration; and no optional
+v0.10.0 capability (derive, profiles, localization, documentation IR) was
+adopted, because each would have changed behaviour rather than replaced code
+the migration already had to touch.
