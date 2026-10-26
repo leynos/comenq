@@ -29,15 +29,13 @@ fn run_daemon(config: &Path, extra: &[&str]) -> Output {
     command
         .arg("--config")
         .arg(config)
-        // Isolate the child from any developer environment so the run is
-        // deterministic and cannot reach a real socket or queue.
-        .env_remove("COMENQD_SOCKET_PATH")
-        .env_remove("COMENQD_QUEUE_PATH")
-        .env_remove("COMENQD_GITHUB_TOKEN")
-        .env_remove("COMENQD_GITHUB_TOKEN_FILE")
-        .env_remove("COMENQD_GITHUB_TOKEN_FILES")
-        .env_remove("COMENQD_COOLDOWN_PERIOD_SECONDS")
-        .env_remove("COMENQD_GITHUB_API_TIMEOUT_SECS")
+        // Rebuild the child's environment from scratch rather than removing
+        // known keys one by one. Any inherited `COMENQD_*` setting — including
+        // ones added to `Config` after this test was written — merges over the
+        // file and could make the child fail for a reason the fixture does not
+        // describe. The binary links only system libraries, so clearing costs
+        // nothing it needs.
+        .env_clear()
         .env("COMENQD_SOCKET_PATH", "/tmp/comenqd-contract-test.sock")
         .env("COMENQD_QUEUE_PATH", "/tmp/comenqd-contract-test-queue");
     command.args(extra);

@@ -392,7 +392,7 @@ Thresholds that trigger escalation when breached.
       `[build-limits]` queueing with the sccache server not serving, so builds
       ran uncached.
 - [x] (2026-10-27T00:15Z) **Corrected an issue-§5 violation found by
-      re-reading my own diff.** The first implementation of the tier tests put
+      re-reading the branch diff.** The first implementation of the tier tests put
       eight new `EnvVarGuard` uses in
       `crates/comenqd/src/config/tests/precedence.rs`, and this plan's trace
       link claimed "no new process-environment mutation". That claim was false:
@@ -452,6 +452,46 @@ Thresholds that trigger escalation when breached.
       an earlier draft said the restated-default control failed with `left:
       20`, which stopped being true when its environment value moved into the
       child harness. The measured value is `10`.
+- [x] (2026-10-27T03:05Z) Third `coderabbit review --agent --base origin/main`
+      pass raised three findings, all environment-isolation defects of the same
+      class the gate failure exposed, and all correct. **(a)**
+      `startup_contract.rs` removed named `COMENQD_*` keys one at a time, so a
+      variable added to `Config` later, or an invalid inherited value such as
+      `COMENQD_RESTART_MIN_DELAY_MS=invalid`, could make the token-less fixture
+      fail before the credential check. Replaced with `env_clear()` on the
+      daemon child, which is safe because the binary links only system
+      libraries. Proven: with that variable exported, the unfixed version fails
+      `missing_token_exits_non_zero_and_reports_on_stderr` and the fixed one
+      passes 3/3. **(b)** The in-process file-tier rows in `precedence.rs` call
+      `Config::from_file`, which merges the real environment, so an exported
+      `COMENQD_SOCKET_PATH` would beat the file value the row expects. **(c)**
+      The same applies to the scalar cases. Both were resolved by restricting
+      `precedence.rs` to the command-line tier, where `apply_cli_overrides` runs
+      last and overwrites every lower layer, and leaving the file tier to
+      `config_environment.rs`.
+- [x] (2026-10-27T03:05Z) **Measured the residual rather than asserting
+      immunity.** With six well-formed `COMENQD_*` variables plus
+      `XDG_RUNTIME_DIR` exported, all five command-line cases pass — the
+      override is genuinely last. With a *malformed* inherited value
+      (`COMENQD_GITHUB_TOKEN_FILES=/tmp/a,/tmp/b`), `fig.extract()` fails before
+      any override, so no tier is reached; ten of the twenty baseline tests in
+      `config/tests/configuration.rs` fail under the same condition, which
+      establishes this as a pre-existing property of the loader rather than
+      something this branch introduced. Closing it would change production
+      behaviour, not test structure. The child harness is immune to both cases
+      (8/8 pass with the malformed variable set), so every tier still has an
+      environment-proof pin.
+- [x] (2026-10-27T04:20Z) **Re-measured both seeded faults once more after the
+      CodeRabbit rework**, because restricting `precedence.rs` to the
+      command-line tier changed the failure set. The 02:10Z entry above was
+      measured against the superseded suite and is kept only as history; the
+      current figures live in `INV-PRECEDENCE`'s non-vacuity paragraph.
+      Dropping the `cli.socket_path` assignment now fails *both* table rows —
+      `left: "/tmp/file.sock"` against `right: "/tmp/cli.sock"` and
+      `right: "/run/comenq/comenq.sock"` respectively — with the other three
+      cases green. `if secs != 960` fails exactly
+      `command_line_cooldown_equal_to_the_default_still_wins` with `left: 10,
+      right: 960`. `config.rs` restored byte-identical after each.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -715,22 +755,26 @@ and non-vacuity argument for each.
   default. The obligation is discharged across two artefacts, split by what a
   process can control.
 
-  In-process (`config/tests/precedence.rs`): the file and command-line tiers,
-  as a two-row `rstest` table
+  In-process (`config/tests/precedence.rs`): only the command-line tier. Five
+  cases: a two-row `rstest` table
   `socket_path_resolves_to_the_highest_present_tier` with rows
-  `file_overrides_the_built_in_default` and `command_line_overrides_file`, plus
-  the full-tuple test already present in
-  `apply_cli_overrides_preserves_unset_values_and_applies_set_values`. The file
-  layer is always present because the daemon's configuration file is mandatory,
-  so only the command-line override is optional.
+  `command_line_overrides_a_differing_file_value` and
+  `command_line_value_equal_to_the_built_in_default_still_wins`, plus three
+  named tests — `command_line_cooldown_equal_to_the_default_still_wins`,
+  `command_line_scalar_values_parse_into_their_fields` and
+  `command_line_comma_separated_token_file_is_not_split_into_a_pool`. The
+  full-tuple check already present in
+  `config/tests/configuration.rs::apply_cli_overrides_preserves_unset_values_and_applies_set_values`
+  complements them. Every case supplies a command-line value because
+  `apply_cli_overrides` runs last and overwrites every lower layer, which is
+  what makes the verdict independent of a *well-formed* inherited variable.
 
-  In a child process (`tests/config_environment.rs`): the environment tier and
-  the built-in-default tier. Neither can be reached in-process — Figment reads
-  the real environment, and the default is only observable when no layer
-  supplies a value, which a process whose `XDG_RUNTIME_DIR` is set cannot
-  promise. Rows: `defaults_apply_when_no_layer_sets_a_value`,
-  `file_overrides_default`, `environment_overrides_file`,
-  `environment_overrides_an_absent_file_value`.
+  In a child process (`tests/config_environment.rs`): the file, environment and
+  built-in-default tiers. A file-tier assertion cannot live in-process either,
+  because `Config::from_file` merges the real environment over the file, so an
+  exported `COMENQD_SOCKET_PATH` would beat the value the row expects. Rows:
+  `defaults_apply_when_no_layer_sets_a_value`, `file_overrides_default`,
+  `environment_overrides_file`, `environment_overrides_an_absent_file_value`.
 
   Rationale: the tiers are a finite, explicitly enumerated partition, so a
   table is exhaustive for the claim, and one table per environment makes the
@@ -739,19 +783,31 @@ and non-vacuity argument for each.
 
   Evidence: `make test` passes, including all five in-process cases and all
   eight child cases. The in-process table was re-run with
-  `XDG_RUNTIME_DIR=/run/user/1000` exported, the condition that originally
-  failed it, and still passes; the child cases clear the environment outright,
-  so they are host-independent by construction.
+  `XDG_RUNTIME_DIR=/run/user/1000` and six well-formed `COMENQD_*` variables
+  exported, and still passes; the child cases clear the environment outright
+  and pass 8/8 even with a malformed inherited variable set, so they are
+  host-independent by construction.
+
+  Known residual, measured rather than assumed: a *malformed* inherited
+  `COMENQD_*` variable makes extraction fail before any override, so no tier is
+  reached and the in-process cases fail. Ten of the twenty baseline tests in
+  `config/tests/configuration.rs` fail identically under the same condition, so
+  this is a pre-existing property of the loader, not of this branch; closing it
+  would change production behaviour.
 
   Non-vacuity: every row supplies a distinct literal for each present tier, so
   reading the wrong layer yields a wrong value rather than an accidental match.
-  Two negative controls were run and reverted. Removing the `cli.socket_path`
-  assignment entirely failed exactly `case_2_command_line_overrides_file` with
-  `left: "/tmp/file.sock", right: "/tmp/cli.sock"` — the file value leaking
-  through in place of the command-line value, which is the wrong-tier signal
-  the rows exist to catch. Separately, guarding the cooldown assignment with
-  `if secs != 960` reproduced the v0.10.0 §2 defect: exactly one case failed,
-  `command_line_value_equal_to_the_default_still_wins`, with
+  Two negative controls were run against this exact suite and reverted.
+  Removing the `cli.socket_path` assignment entirely failed both table rows —
+  `command_line_overrides_a_differing_file_value` with
+  `left: "/tmp/file.sock", right: "/tmp/cli.sock"` and
+  `command_line_value_equal_to_the_built_in_default_still_wins` with
+  `left: "/tmp/file.sock", right: "/run/comenq/comenq.sock"` — leaving the
+  other three in-process cases green. That is the file value leaking through in
+  place of the command-line value, the wrong-tier signal the rows exist to
+  catch. Separately, guarding the cooldown assignment with `if secs != 960`
+  reproduced the v0.10.0 §2 defect: exactly one case failed,
+  `command_line_cooldown_equal_to_the_default_still_wins`, with
   `assertion left == right failed, left: 10, right: 960` — the file value
   surviving because the guard suppressed the restated default. Both mutations
   were reverted and `config.rs` verified byte-identical with `git diff --quiet`.
@@ -764,7 +820,7 @@ and non-vacuity argument for each.
   `960` is exactly `DEFAULT_COOLDOWN`, expecting `960`. The environment value
   the original scenario paired with it now lives in the child harness instead,
   since setting it here would be the mutation §5 forbids. Artefact:
-  `command_line_value_equal_to_the_default_still_wins` in
+  `command_line_cooldown_equal_to_the_default_still_wins` in
   `config/tests/precedence.rs`. Evidence: passes; it would fail if CLI
   overrides were conditioned on the value differing from the default, which the
   negative control confirmed. Non-vacuity: the two candidate values are distinct
