@@ -1,8 +1,10 @@
 //! Shared token-file reading and path expansion for GitHub credentials.
 
+use ortho_config::OrthoResult;
 use std::io;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Largest credential file accepted at daemon startup, in bytes.
 pub(super) const MAX_GITHUB_TOKEN_FILE_BYTES: usize = 64 * 1024;
@@ -55,21 +57,20 @@ pub(super) fn expand_token_path(path: &Path) -> Result<PathBuf, TokenPathError> 
 }
 
 /// Read a GitHub credential without allowing an unbounded startup allocation.
-#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-pub(super) fn read_github_token_file(path: &Path) -> Result<String, ortho_config::OrthoError> {
+pub(super) fn read_github_token_file(path: &Path) -> OrthoResult<String> {
     match read_token_file(path) {
         Ok(contents) => Ok(contents),
-        Err(TokenFileReadError::Io(source)) => Err(ortho_config::OrthoError::File {
+        Err(TokenFileReadError::Io(source)) => Err(Arc::new(ortho_config::OrthoError::File {
             path: path.to_path_buf(),
             source: Box::new(source),
-        }),
-        Err(TokenFileReadError::TooLarge) => Err(ortho_config::OrthoError::Validation {
+        })),
+        Err(TokenFileReadError::TooLarge) => Err(Arc::new(ortho_config::OrthoError::Validation {
             key: "github_token_file".into(),
             message: format!(
                 "token file {} exceeds {MAX_GITHUB_TOKEN_FILE_BYTES} bytes",
                 path.display()
             ),
-        }),
+        })),
     }
 }
 
@@ -78,8 +79,7 @@ pub(super) fn read_github_token_file(path: &Path) -> Result<String, ortho_config
 /// Only a placeholder at the very start of the path is expanded; paths
 /// without one are returned unchanged. An unset variable or a malformed
 /// placeholder is an error so misconfiguration fails loudly at startup.
-#[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
-pub(super) fn expand_env_prefix(path: &Path) -> Result<PathBuf, ortho_config::OrthoError> {
+pub(super) fn expand_env_prefix(path: &Path) -> OrthoResult<PathBuf> {
     expand_token_path(path).map_err(|error| {
         let message = match error {
             TokenPathError::Malformed(text) => {
@@ -89,9 +89,9 @@ pub(super) fn expand_env_prefix(path: &Path) -> Result<PathBuf, ortho_config::Or
                 format!("environment variable '{variable}' is not set")
             }
         };
-        ortho_config::OrthoError::Validation {
+        Arc::new(ortho_config::OrthoError::Validation {
             key: "github_token_file".into(),
             message,
-        }
+        })
     })
 }

@@ -4,10 +4,12 @@
 //! overridden by environment variables using the `COMENQD_` prefix.
 
 use clap::Parser;
-use figment::providers::Env;
+use ortho_config::OrthoResult;
+use ortho_config::figment::providers::Env;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 mod single_token;
 mod token_resolution;
@@ -229,8 +231,7 @@ impl Config {
     /// let cfg = Config::load().expect("load config");
     /// println!("{}", cfg.socket_path.display());
     /// ```
-    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
-    pub fn load() -> Result<Self, ortho_config::OrthoError> {
+    pub fn load() -> OrthoResult<Self> {
         let args = CliArgs::parse();
         Self::from_file_with_cli(&args.config, &args)
     }
@@ -248,8 +249,7 @@ impl Config {
     /// assert!(!tokens.is_empty());
     /// println!("{}", config.socket_path.display());
     /// ```
-    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
-    pub fn load_with_tokens() -> Result<(Self, Vec<NamedToken>), ortho_config::OrthoError> {
+    pub fn load_with_tokens() -> OrthoResult<(Self, Vec<NamedToken>)> {
         let args = CliArgs::parse();
         Self::from_file_with_cli_and_tokens(&args.config, &args)
     }
@@ -273,29 +273,26 @@ impl Config {
         all(not(test), not(feature = "test-support")),
         expect(dead_code, reason = "test-only helper")
     )]
-    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
-    pub fn from_file(path: &Path) -> Result<Self, ortho_config::OrthoError> {
+    pub fn from_file(path: &Path) -> OrthoResult<Self> {
         Self::from_file_with_cli(path, &CliArgs::default())
     }
 
-    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
-    fn from_file_with_cli(path: &Path, cli: &CliArgs) -> Result<Self, ortho_config::OrthoError> {
+    fn from_file_with_cli(path: &Path, cli: &CliArgs) -> OrthoResult<Self> {
         Self::from_file_with_cli_and_tokens(path, cli).map(|(config, _)| config)
     }
 
-    #[expect(clippy::result_large_err, reason = "propagate figment errors")]
     fn from_file_with_cli_and_tokens(
         path: &Path,
         cli: &CliArgs,
-    ) -> Result<(Self, Vec<NamedToken>), ortho_config::OrthoError> {
+    ) -> OrthoResult<(Self, Vec<NamedToken>)> {
         let mut fig = ortho_config::load_config_file(path)?.ok_or_else(|| {
-            ortho_config::OrthoError::File {
+            Arc::new(ortho_config::OrthoError::File {
                 path: path.to_path_buf(),
                 source: Box::new(io::Error::new(
                     io::ErrorKind::NotFound,
                     "Configuration file not found",
                 )),
-            }
+            })
         })?;
 
         fig = fig.merge(Env::prefixed("COMENQD_").split("__"));

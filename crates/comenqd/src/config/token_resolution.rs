@@ -3,17 +3,18 @@
 use super::single_token::{expand_env_prefix, read_github_token_file};
 use super::tokens;
 use super::{Config, NamedToken};
+use ortho_config::OrthoResult;
 use std::io;
+use std::sync::Arc;
 
 impl Config {
     /// Resolve the effective GitHub token, reading `github_token_file` when
     /// set and validating that a non-empty token is available.
-    #[expect(clippy::result_large_err, reason = "propagate ortho_config errors")]
     #[tracing::instrument(skip(self))]
     pub(super) fn resolve_github_token(
         &mut self,
         has_cli_token: bool,
-    ) -> Result<Vec<NamedToken>, ortho_config::OrthoError> {
+    ) -> OrthoResult<Vec<NamedToken>> {
         if has_cli_token {
             // An explicit command-line token is the strongest credential
             // override, including over a configured token pool.
@@ -23,10 +24,7 @@ impl Config {
         } else if !self.github_token_files.is_empty() {
             return self
                 .github_tokens()
-                .map_err(|error| ortho_config::OrthoError::Validation {
-                    key: "github_token_files".into(),
-                    message: error.to_string(),
-                });
+                .map_err(|error| validation("github_token_files", error.to_string()));
         } else if let Some(file) = &self.github_token_file {
             let path = expand_env_prefix(file)?;
             tracing::debug!(
@@ -37,10 +35,10 @@ impl Config {
             let token = read_github_token_file(&path)?;
             let token = token.trim();
             if token.is_empty() {
-                return Err(ortho_config::OrthoError::Validation {
-                    key: "github_token_file".into(),
-                    message: format!("token file {} is empty", path.display()),
-                });
+                return Err(validation(
+                    "github_token_file",
+                    format!("token file {} is empty", path.display()),
+                ));
             }
             self.github_token = token.to_owned();
         } else {
@@ -50,16 +48,13 @@ impl Config {
             );
         }
         if self.github_token.trim().is_empty() {
-            return Err(ortho_config::OrthoError::Validation {
-                key: "github_token".into(),
-                message: "provide github_token, github_token_file, or github_token_files".into(),
-            });
+            return Err(validation(
+                "github_token",
+                "provide github_token, github_token_file, or github_token_files".to_owned(),
+            ));
         }
         self.github_tokens()
-            .map_err(|error| ortho_config::OrthoError::Validation {
-                key: "github_token".into(),
-                message: error.to_string(),
-            })
+            .map_err(|error| validation("github_token", error.to_string()))
     }
 
     /// Resolve the ordered rotation pool, falling back to the single token.
@@ -84,4 +79,12 @@ impl Config {
         }
         tokens::resolve_pool(&self.github_token_files, &self.github_token)
     }
+}
+
+/// Build a shared [`OrthoError::Validation`] for a credential setting.
+fn validation(key: &str, message: String) -> Arc<ortho_config::OrthoError> {
+    Arc::new(ortho_config::OrthoError::Validation {
+        key: key.into(),
+        message,
+    })
 }
