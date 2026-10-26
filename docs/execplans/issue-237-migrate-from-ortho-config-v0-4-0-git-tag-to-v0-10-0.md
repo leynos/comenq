@@ -349,6 +349,26 @@ Thresholds that trigger escalation when breached.
       both print zero matches for that string, so the new assertion rejects
       precisely the failures it is meant to reject rather than passing on any
       non-empty stderr.
+- [x] (2026-10-26T23:05Z) Third `coderabbit review --agent` cleared the
+      child-wait finding and raised three more, all correct.
+      **(a)** `error_when_path_is_a_directory` asserted only `res.is_err()`.
+      Both the v0.3.0 `Ok(None)` path and the v0.10.0 directory rejection end
+      in an error once `from_file`'s `ok_or_else` runs, so the test could not
+      detect the very behaviour change it documents. It now asserts
+      `io::ErrorKind::InvalidInput` via `file_error_kind`, which reaches the
+      `io::Error` source inside `OrthoError::File`. **(b)** The missing-file
+      and malformed-TOML process tests asserted only non-empty stderr, so a
+      loader that treated either as absent configuration would have failed
+      later for the missing token and left both tests green. They now require
+      `Configuration file error in` plus, respectively, `not found` and
+      `TOML parse error`. **(c)** Eight documents linked from the imported
+      copies were not imported, so those links could not resolve. Imported
+      and recorded; see the provenance document for the boundary argument.
+      Mutation evidence for (a) and (b): replacing
+      `ortho_config::load_config_file(path)?` with `None` — the old
+      `Ok(None)` behaviour — made all three tests fail with exactly the
+      intended messages, and reverting restored 4/4 green with
+      `crates/comenqd/src/config.rs` byte-identical.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
