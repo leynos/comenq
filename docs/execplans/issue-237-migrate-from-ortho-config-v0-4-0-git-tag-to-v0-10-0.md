@@ -1,0 +1,738 @@
+# Migrate `comenqd` configuration to `ortho_config` v0.10.0
+
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision log`,
+`Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
+be kept up to date as work proceeds.
+
+Status: APPROVED
+
+## Purpose / big picture
+
+This repository loads the daemon's configuration through `ortho_config`
+declared as a Git tag (`v0.4.0`, whose crate version resolves as `0.3.0`). That
+tag is not a published release: it is a moving target pinned by a mutable
+reference, it duplicates a dependency graph that upstream now maintains and
+re-exports, and it keeps the workspace on an API generation two major versions
+behind the published crate.
+
+After this change the workspace builds against the crates.io release
+`ortho_config` 0.10.0, with the same observable behaviour for an operator: the
+same `/etc/comenqd/config.toml` path, the same `COMENQD_*` environment overlay,
+the same command-line overrides, the same token-resolution rules, the same
+error stream and exit status for a bad configuration, and the same test
+coverage. Someone can see this working by running
+
+```console
+make check-fmt && make lint && make typecheck && make test
+```
+
+and observing every gate pass, and by running the daemon against a deliberately
+broken configuration and observing the same diagnostic and non-zero exit status
+as before the migration.
+
+The migration is not a version-string edit. The two API generations differ in
+ways that touch this repository's source: `load_config_file` now returns
+`OrthoResult<Option<Figment>>` where `OrthoResult<T>` is
+`Result<T, Arc<OrthoError>>`; `OrthoError` gained variants and is still
+`#[non_exhaustive]`; the error-conversion helpers became traits; and the crate
+now re-exports `figment`, `serde_json`, `toml`, `uncased`, `xdg`, and
+`serde_saphyr`. Each of those facts is addressed explicitly below.
+
+## Constraints
+
+Hard invariants that must hold throughout implementation.
+
+- **Configuration precedence must not change.** The effective order is
+  built-in `serde` defaults < `/etc/comenqd/config.toml` (or the `--config`
+  path) < `COMENQD_*` environment variables < command-line flags. The
+  environment layer keeps the exact semantics of
+  `figment::providers::Env::prefixed("COMENQD_").split("__")`: a case-
+  insensitive `COMENQD_` prefix strip, `__` mapped to the Figment key
+  separator, and `figment`'s own `Value::from_str` scalar parsing.
+- **The configuration file is mandatory.** `Config::from_file`,
+  `Config::load`, and `Config::load_with_tokens` treat an absent file as an
+  error and never fall back to defaults. OrthoConfig v0.10.0's discovery treats
+  an absent candidate as `Ok(None)`; that difference is why the hand-built
+  loader stays.
+- **Token resolution must be byte-identical in behaviour.** Selection order is
+  CLI `--github-token` > `--github-token-file` > `github_token_files` pool >
+  `github_token_file` > inline `github_token`; a CLI token clears both file
+  settings; a CLI token file clears the pool; the 64 KiB bound, the
+  leading-`${VAR}` expansion, duplicate-token rejection (which must not
+  disclose token values), and the exact messages for an empty token, an
+  unterminated placeholder and an unset placeholder all stay as they are. The
+  single asserted message substring, `unterminated environment placeholder`, is
+  produced by this repository, not by OrthoConfig.
+- **The public shape of `comenqd::config::Config` must not change.**
+  `tests/public_api.rs` constructs it with all nine fields as a struct literal
+  and is compiler-checked; adding, removing, or renaming a field is out of
+  scope.
+- **Exit-status and stream contracts must not change.** `main.rs` uses
+  `color_eyre`; a configuration failure must still propagate as an `Err` from
+  `main`, printing to standard error and exiting non-zero. Errors are never
+  written to standard output. `--help` and `--version` handling stays with
+  `clap::Parser::parse()`, which exits 0 without returning.
+- **Imported upstream documents stay byte-for-byte identical.** The twelve
+  files listed in `docs/third-party-docs-provenance.md` are copies; local
+  migration notes go in this plan and in this repository's own documents.
+  `docs/ortho-config-*` files must never be edited.
+- **`ortho_config` default features stay enabled.**
+  `default-features = false` does not build in v0.10.0
+  (leynos/ortho-config#627), and `serde_json` must remain available.
+- **No suppressions.** No new `#[allow]`, no `--ignore-rust-version`, no
+  warning suppression, and no claim that an unavailable check passed. The
+  repository denies `allow_attributes` and `allow_attributes_without_reason` in
+  `[workspace.lints.clippy]`, and lints are silenced only as a last resort with
+  a tightly scoped, reasoned `#[expect]`.
+- **Compile admission is never bypassed.** `RUSTC_WRAPPER` and `RUSTDOC` are
+  not unset or overridden, `rustc` is never invoked directly to skip the queue,
+  and the `build-limits` supervisor and the managed sccache service are never
+  signalled, stopped, restarted, or "recovered".
+- **Other agents' processes are not killed, and the shared Cargo cache is not
+  isolated.** Wait for the package-cache lock rather than working around it.
+- **Gates run sequentially for this worktree**, and sub-agents do not run full
+  repository gates; `scrutineer` is the exclusive gate-runner for this
+  candidate. Formatting, format checking, lint, and tests are not overlapped.
+- **`/tmp` is scratch, not a build target.** Logs and checkouts go there; build
+  output stays in the worktree's `target/`.
+- **Work is confined to this worktree.** No `cd` to the original repository
+  root, and never a bare `git stash` / `git stash pop`, because the stash stack
+  is shared with other sessions.
+- **No merge, no release, no publishing.** The deliverable is a branch and a
+  draft pull request.
+
+If satisfying an objective requires violating one of these, stop and escalate
+instead of working around it.
+
+## Tolerances (exception triggers)
+
+Thresholds that trigger escalation when breached.
+
+- Scope: if the implementation needs to change more than 20 files or more than
+  600 net lines, stop and escalate. The expected footprint is 8–10 files and
+  well under 300 net lines.
+- Interface: if a `pub` item's signature must change beyond swapping
+  `Result<T, ortho_config::OrthoError>` for `ortho_config::OrthoResult<T>`,
+  stop and escalate. That return-type change is required by the dependency, not
+  chosen, and is recorded in the decision log.
+- Dependencies: if a new external crate must be added, stop and escalate. The
+  expected change is removing nothing, adding nothing, and repointing one
+  existing requirement. Adopting `ortho_l10n` is explicitly not wanted: no code
+  here uses the localization runtime without the facade.
+- MSRV: if the build fails on the pinned `nightly-2025-07-22` for a reason
+  attributable to the v0.10.0 floor, a dated-pin bump is authorised by the
+  issue; record the old and new identities and the reason. If the pin must
+  move, do not exceed a nightly the reproducer actually proves necessary.
+- Iterations: if a single gate still fails after three fix-and-rerun attempts,
+  stop and escalate with the captured log.
+- Behaviour: if any baseline test must be deleted, weakened, or marked
+  ignored to make the migration pass, stop and escalate. Adding a regression
+  test is always in scope.
+- Ambiguity: if the migration guide admits two readings that would produce
+  materially different behaviour, stop and present the options.
+
+## Risks
+
+- Risk: `ortho_config` 0.10.0 pulls a substantially different transitive graph
+  (thiserror 2, cap-std, camino, dirs, xdg, uncased, tracing, clap with the
+  `string` feature, and `ortho_config_macros`), and that graph may raise
+  effective minimum versions or add a `link`-conflicting crate. Severity:
+  medium. Likelihood: medium. Mitigation: a targeted
+  `cargo update -p ortho_config --precise 0.10.0`, then
+  `cargo tree -i ortho_config` and `cargo tree -i figment` compared with the
+  baseline trees recorded below. Any unrelated churn in `Cargo.lock` is
+  explained commit-by-commit rather than accepted silently.
+- Risk: two `figment` versions could end up in the graph, one from
+  `ortho_config` and one direct, producing a type-identity mismatch on
+  `Figment`, `figment::Error`, and `figment::providers::Env`. Severity: high.
+  Likelihood: low, because both require `^0.10`. Mitigation: after the update,
+  `cargo tree -i figment` must show exactly one `figment 0.10.19` node
+  reachable from both, and the code imports `Env` through
+  `ortho_config::figment` so that identity cannot drift.
+- Risk: dropping the `#[expect(clippy::result_large_err)]` attributes could
+  leave an unused `#[expect]`, and `unfulfilled_lint_expectations` is denied by
+  the workspace lints. Severity: low. Likelihood: high if done carelessly.
+  Mitigation: remove the attributes in the same edit that changes the return
+  type; `make lint` proves the outcome.
+- Risk: changing `Result<_, OrthoError>` to `OrthoResult<_>` breaks the `??`
+  in `main.rs` or `.map_err(ortho_config::OrthoError::from)` call sites, because
+  `Arc<OrthoError>` must still satisfy `Into<color_eyre::Report>`. Severity:
+  low. Likelihood: low. Mitigation: the existing `??` already compiles against
+  `Arc` today through `OrthoError`'s `Error` impl; the follow-up
+  `make typecheck` proves it, and the planned `main.rs` test invokes the binary
+  rather than reasoning about it.
+- Risk: the behavioural `config.feature` suite mutates the process environment
+  (`EnvVarGuard`) and is `@serial`. Adding process-environment mutation is
+  forbidden by the issue, so new tier tests must not widen that surface.
+  Severity: medium. Likelihood: medium. Mitigation: new coverage is written as
+  in-process unit tests that pass explicit `CliArgs` and, where an environment
+  value is genuinely the subject, reuse the existing single `EnvVarGuard` +
+  `#[serial_test::serial]` pattern rather than inventing a second mechanism.
+  This is a migration of an existing consumer, not a rewrite of its test
+  harness.
+- Risk: `figment`'s `Env` provider and `ortho_config`'s `CsvEnv` parse the same
+  string differently, so a silent swap would change what
+  `COMENQD_COOLDOWN_PERIOD_SECONDS=960.0` or `=960` means. Severity: high.
+  Likelihood: low after this decision is recorded. Mitigation: keep `figment`'s
+  `Env`, with the two concrete behavioural differences recorded in the decision
+  log, and add a test pinning integer and boolean environment parsing.
+
+## Progress
+
+- [x] (2026-10-26T12:00Z) Resolved the upstream tag independently: annotated
+      tag object `996e5a1c9f22ace4f55bf5dcc196d2c0524262bf`, peeled commit
+      `38812c563e3953a490e3efc202609f37e21a0517`; both matched issue #237
+      exactly.
+- [x] (2026-10-26T12:05Z) Imported the five authoritative documents plus their
+      six relative-link targets and one directory listing, from the peeled
+      commit only, and verified every SHA-256 byte-for-byte.
+- [x] (2026-10-26T12:10Z) Wrote `docs/third-party-docs-provenance.md` with the
+      repository, tag, commit, original and destination paths, both checksum
+      tables, the link mapping, and a reproduction recipe.
+- [x] (2026-10-26T12:15Z) Read the v0.10.0, v0.9.0, v0.7.0 and v0.6.0
+      migration guides and the CHANGELOG before touching manifests or tests.
+- [x] (2026-10-26T12:20Z) Inventoried the workspace: six manifests, one
+      lockfile, two Git-tag `ortho_config` declarations, one direct `figment`,
+      one direct `serde_yaml`; zero `OrthoConfig` derives, zero
+      `figment::Jail`, zero `cargo-orthohelp`, zero `[package.metadata
+      .ortho_config]`, zero localizers or Fluent catalogues, zero
+      `DocMetadata`/`AgentContext` literals.
+- [x] (2026-10-26T12:25Z) Captured the baseline commit
+      `a781258549c157e38dfaaf1482ccbc01f32d2ccd` and compiler identity
+      `rustc 1.90.0-nightly (9748d87dc 2025-07-21)`, cargo
+      `1.90.0-nightly (6833aa715 2025-07-13)`, LLVM 20.1.8, on the pin
+      `nightly-2025-07-22`.
+- [x] (2026-10-26T13:45Z) Created `docs/execplans/` and wrote this plan.
+- [x] (2026-10-26T14:05Z) Fixed the mdtablefix drift in
+      `docs/third-party-docs-provenance.md`; `make check-fmt` now reports
+      "31 files left unchanged" and `make markdownlint` reports
+      "0 issues in 0 files". The drift was self-inflicted by my own untracked
+      provenance document and ExecPlan, not a pre-existing defect.
+- [x] (2026-10-26T14:05Z) Collected the `scrutineer` baseline report
+      (`aca35af63d9fe7b81`), which ran all six gates sequentially against
+      `a781258` with zero tracked-file modifications. Results: `make fmt`,
+      `make lint` (911s), `make typecheck` (478s), `make test` and
+      `make nixie` pass; `make check-fmt` and `make markdownlint` failed only
+      on my then-unformatted untracked Markdown. Baseline inventory:
+      **481/481 nextest tests passed** (17 binaries; the cucumber binary is
+      filtered out of nextest by profile, as designed), and **11 features /
+      55 scenarios / 211 steps**, all passing, under `make test-cucumber`.
+      Zero clippy warnings and zero `#[ignore]` attributes. The only cargo
+      warning is the pre-existing unused `vendor/filetime` patch notice.
+      Note: `make test`'s exit code was not recoverable from disk for the
+      combined target, so the two halves were re-run with in-log status
+      (`baseline-test-2` nextest exit 0 at 39s, `baseline-test-cucumber`
+      exit 0 at 6s). Both green.
+- [x] (2026-10-26T14:10Z) Revised the error-helper decision after reading
+      `OrthoError::Merge`'s Display string at `error/types.rs:47`: it reads
+      "Failed to merge CLI with configuration", which names a CLI merge this
+      Figment does not perform. `map_err(OrthoError::from)` therefore stays.
+- [ ] Milestone EP-M1: repoint the dependency and prove the graph.
+- [ ] Milestone EP-M2: migrate `crates/comenqd/src/config.rs` and
+      `config/{single_token,token_resolution}.rs` to the v0.10.0 APIs.
+- [ ] Milestone EP-M3: migrate `tests/steps/config_steps.rs` and add the
+      regression tests for each precedence tier and each unhappy path.
+- [ ] Milestone EP-M4: run every gate sequentially, then
+      `coderabbit review --agent`, and clear all concerns.
+- [ ] Milestone EP-M5: push over SSH, open the draft pull request.
+- [ ] Refresh `docs/comenq-design.md`'s configuration section if any statement
+      in it becomes inaccurate (it currently describes the precedence order,
+      which does not change).
+
+## Surprises & discoveries
+
+- Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
+  configuration path is hand-built Figment layering plus a post-load token
+  step. Evidence: `grep -rn "OrthoConfig" crates/ test-support/ src/` returns
+  only the `ortho_config::` type paths in `config.rs`, `single_token.rs` and
+  `token_resolution.rs`. Impact: the v0.10.0 guide's derive-focused sections
+  (Fluent identifiers, `cli_default_as_absent`, profiles, behaviour metadata,
+  stacked scopes) have no caller to change. This shrinks the applicable set
+  considerably and is recorded row-by-row in the applicability matrix.
+
+- Observation: `ortho_config` v0.3.0's `load_config_file` returned
+  `Result<Option<Figment>, OrthoError>` and v0.10.0 returns
+  `OrthoResult<Option<Figment>>` = `Result<Option<Figment>, Arc<OrthoError>>`,
+  but the `Ok(None)`-for-absent-file contract is unchanged. Evidence:
+  `git show 5c27310a:ortho_config/src/file.rs` versus
+  `ortho_config/src/file/loader.rs` at `38812c56`. Impact:
+  `ortho_config::load_config_file(path)?` keeps working unchanged; only the
+  error arm's type moves, and the repository's own `ok_or_else` that turns
+  `None` into a `NotFound` error must build an `Arc<OrthoError>`.
+
+- Observation: v0.10.0's file loader rejects a non-regular file (a directory, a
+  FIFO) with `InvalidInput` where v0.3.0 silently returned `Ok(None)` for any
+  path that was not `is_file()`. Evidence: `file_exists_and_is_regular` in
+  `ortho_config/src/file/loader.rs`. Impact: strictly better and still an
+  error, so the existing `error_when_missing_file` test keeps passing; no test
+  asserts the old silent behaviour. Worth noting because it is a genuine
+  behaviour change that is nevertheless compatible with every documented
+  contract here.
+
+- Observation: v0.10.0 also gained `extends` chain support, cycle detection
+  (`OrthoError::CyclicExtends`), and canonical-path resolution inside
+  `load_config_file`. Evidence: `with_cycle_detection` and `process_extends` in
+  `ortho_config/src/file/loader.rs`. Impact: no `extends` key exists in any
+  fixture here, so `process_extends` is a no-op on this repository's files. It
+  does mean a malformed `extends` would now error where v0.3.0 ignored the key;
+  that is acceptable and undocumented in this repository's contract.
+
+- Observation: `OrthoError::Merge` and `OrthoError::Gathering` both hold
+  `Box<figment::Error>`, and `From<figment::Error> for OrthoError` produces
+  `Gathering`, while `OrthoMergeExt::into_ortho_merge` produces `Merge`, whose
+  Display text is `Failed to merge CLI with configuration: {source}`. Evidence:
+  `ortho_config/src/error/conversions.rs`, `result_ext.rs`, and
+  `error/types.rs:47`. Impact: the two helpers are not interchangeable for this
+  repository. `Merge` names a CLI merge that never happens in this Figment, so
+  the existing `map_err(OrthoError::from)` stays; see the decision log.
+
+- Observation: `Arc<E>` where `E: Error + Send + Sync + 'static` itself
+  satisfies `Error + Send + Sync`, so it coerces to `&dyn Error` and can be
+  boxed into `OrthoError::File { source }`, and `color_eyre::eyre::Context`
+  accepts it. Evidence: standalone `rustc` compile of a minimal reproduction,
+  exit 0. Impact: the `?` propagation in `main.rs` and the wrapping in
+  `single_token.rs` keep compiling without an adapter.
+
+## Decision log
+
+- Decision: keep the hand-built Figment layering on the v0.10.0 APIs rather
+  than converting `Config` to `#[derive(OrthoConfig)]`. Rationale: the derive
+  cannot express this repository's policy without changing behaviour. (a) The
+  configuration path is a mandatory positional input defaulting to
+  `/etc/comenqd/config.toml`, and an absent file is a hard error; the derive's
+  `load()` treats an absent candidate as `Ok(None)` and proceeds to defaults.
+  (b) The CLI is parsed with `clap::Parser::parse()` with no `ArgMatches`
+  retained, so the derive's match-aware loaders and `cli_default_as_absent` are
+  unavailable. (c) Token resolution mutates the loaded `Config` afterwards
+  (`resolve_github_token(&mut self)`), which a derive does not model. Issue
+  #237 explicitly asks for this determination and authorises keeping the
+  hand-built layering when the derive does not express the same policy.
+  Date/Author: 2026-10-26, migration agent.
+
+- Decision: keep `figment`'s `Env` provider, imported as
+  `ortho_config::figment::providers::Env`, rather than switching to
+  `ortho_config::CsvEnv`. Rationale: `CsvEnv` is a different parser with
+  different defaults. It enables `csv` by default, so a comma-separated value
+  becomes a list where figment yields a string; it forces lowercase keys in
+  `split()`; and its `parse_scalar` recognises `true`/`false`
+  case-insensitively and then falls back to `FromStr` and finally to a string,
+  with no `f64`, `usize`, or `isize` branches. `figment`'s `Value::from_str`
+  does the opposite: it parses `true`/`false`, a `-`-or-`u`-signed integer via
+  `usize`/`isize`, and a float only when the text contains `.`. Swapping would
+  silently change what `COMENQD_COOLDOWN_PERIOD_SECONDS=960` and a
+  comma-containing value mean. Importing through the re-export keeps one
+  `figment` identity and satisfies the v0.9.0 guide's "use the re-exports"
+  advice. Date/Author: 2026-10-26, migration agent.
+
+- Decision: **remove** the direct `figment` dependency from
+  `crates/comenqd/Cargo.toml` (it declared
+  `version = "0.10", default-features = false, features = ["env", "toml"]`).
+  Rationale: v0.9.0 §9 says to keep a direct dependency only when application
+  source imports that crate itself or needs a different feature set.
+  `crates/comenqd/src/config.rs` previously imported `figment::providers::Env`
+  directly; after EP-M2 it imports `ortho_config::figment::providers::Env`, so
+  there is no direct import left. On the feature side, both features this
+  dependency asked for are supplied unconditionally or by the default set:
+  `ortho_config`'s registry manifest declares
+  `[dependencies.figment] features = ["env", "test"], default-features = false`
+  (so `env` is always on) and `toml = ["figment/toml", "dep:toml"]` in its
+  default feature set, which issue #237 requires keeping. Verified empirically:
+  after deleting the dependency,
+  `cargo check --workspace --all-targets --all-features` succeeds and
+  `cargo tree -e features -i figment` still shows both `figment feature "env"`
+  and `figment feature "toml"`. Date/Author: 2026-10-26, migration agent.
+
+- Decision: keep the direct `serde_yaml` dependency.
+  Rationale: `serde_yaml` here parses GitHub Actions workflow YAML in
+  `test-support/src/workflow.rs`, `tests/steps/packaging_steps.rs` and
+  `tests/steps/release_steps.rs`. It is not configuration parsing, so
+  OrthoConfig's `yaml` feature (which now means `serde_saphyr`) does not
+  replace it, and enabling `ortho_config/yaml` purely for this would add a
+  dependency for no behaviour. Issue #237 says to remove a direct configuration
+  dependency only when OrthoConfig provides the same behaviour and tests prove
+  it; this one is not a configuration dependency. Date/Author: 2026-10-26,
+  migration agent.
+
+- Decision: adopt `OrthoResult<T>` and `Arc<OrthoError>` in the repository's
+  own configuration API, removing every `#[expect(clippy::result_large_err)]`
+  attached to those signatures. Rationale: a `Result` whose error is a pointer
+  is small enough that the lint does not fire, so keeping the `#[expect]` would
+  trip `unfulfilled_lint_expectations`, which the workspace denies. Using the
+  crate's alias also keeps this repository consistent with the dependency it
+  exposes in its public API. Date/Author: 2026-10-26, migration agent.
+
+- Decision: report a failed `fig.extract()` as `OrthoError::Gathering`, keeping
+  today's rendered prefix `Failed to gather configuration: ...`; do not adopt
+  `OrthoMergeExt::into_ortho_merge` at this call site. Rationale: the Merge
+  variant's Display string is
+  `Failed to merge CLI with configuration: {source}`, and there is no CLI layer
+  in this Figment — the composed layers are the file and the environment, and
+  command-line values are applied afterwards by `apply_cli_overrides`. Adopting
+  it would attribute an environment or file failure to a CLI merge that did not
+  happen, which is a diagnostic regression, not an improvement. Issue #237
+  requires preserving the exit-status and stream contract; keeping the message
+  also keeps that contract literally unchanged. `map_err` with
+  `OrthoError::from` stays, which is exactly what produces `Gathering` from a
+  `figment::Error`. The v0.7.0 guide's `into_ortho_merge` advice is therefore
+  recorded as *not applied*, with this reason, rather than silently skipped.
+  Date/Author: 2026-10-26, migration agent.
+
+- Decision: do not change the `rust-toolchain.toml` pin
+  (`nightly-2025-07-22`) unless a build proves it necessary. Rationale: the pin
+  is `rustc 1.90.0-nightly`, which is above the v0.10.0 floor of `1.89.0`.
+  Issue #237 says a nightly date alone does not establish that a bump is
+  necessary, and the issue authorises a bump only if needed. Date/Author:
+  2026-10-26, migration agent.
+
+- Decision: do not add a `rust-version` key anywhere yet.
+  Rationale: no manifest in this repository declares one today, and the issue
+  says to retain any already-higher floor. Introducing
+  `rust-version = "1.89.0"` would be a policy change beyond the migration and
+  is not needed to make the build work; it is noted as a follow-up rather than
+  done here. Date/Author: 2026-10-26, migration agent.
+
+## Applicability matrix
+
+Every row of the v0.10.0 migration guide's "Impact at a glance" table plus
+every section, with its disposition for this repository. "Not applicable" rows
+are verified by the grep evidence already recorded in `Surprises & discoveries`
+and in the inventory of `Progress`.
+
+| Guide item                                    | Disposition    | Reason and evidence                                                                                                                                                                                                                        |
+| --------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| §1 Dependency versions                        | **Required**   | Two Git-tag declarations, both replaced with `0.10.0`; no `ortho_config_macros` direct dependency; no `cargo-orthohelp`.                                                                                                                   |
+| §2 Explicit CLI values win                    | **Review**     | The repository already applies CLI overrides by hand in `Config::apply_cli_overrides`, so an explicit flag always wins. A test will pin the restate-the-default case that the guide names, because that is the case the old defect masked. |
+| §3 Fluent catalogues / IR 2.0                 | Not applicable | No Fluent catalogue, no `Localizer`, no `ORTHO_DOCS_IR_VERSION` reference, no generated message identifiers: zero derives.                                                                                                                 |
+| §4 `AgentContext`/`DocMetadata` literals      | Not applicable | Neither type is constructed anywhere; no documentation IR consumer exists in this repository.                                                                                                                                              |
+| §5 Boolean flag spellings                     | Not applicable | Every `CliArgs` field is `Option<T>` or a `PathBuf` with a string default; there is no boolean flag, generated or hand-written, in the daemon CLI.                                                                                         |
+| §6 Named profiles                             | Not applicable | Opt-in derive capability; the repository has no derive. Profiles would also add a precedence tier that would change behaviour.                                                                                                             |
+| §6 Stacked configuration scopes               | Not applicable | Opt-in derive/`ConfigFilePolicy` capability; discovery here is a single explicit path, not scoped discovery.                                                                                                                               |
+| §6 Injected environment sources               | Not applicable | `MapEnv` and the `_with_sources` entry points serve derived configurations. This repository layers Figment by hand; see the test-isolation note in `Verification plan`.                                                                    |
+| §6 `cli_default_as_absent`                    | Not applicable | Requires the derive and `ArgMatches`. The one clap default here (`--config`) is consumed as a plain path before any merge and has no OrthoConfig layer.                                                                                    |
+| §6 Agent-native behaviour metadata            | Not applicable | Requires the derive plus `cargo-orthohelp`; neither exists here.                                                                                                                                                                           |
+| §6 Cargo external-subcommand helper           | Not applicable | `comenq` and `comenqd` are not `cargo` subcommands; nothing invokes `cargo comenq`.                                                                                                                                                        |
+| §6 Standalone `ortho_l10n` runtime            | Not applicable | No Fluent lookup anywhere; adding it would be a new dependency with no consumer.                                                                                                                                                           |
+| Intermediate guide: v0.6.0 re-exports         | **Applied**    | `figment` is imported via `ortho_config::figment`, so a second `figment` identity cannot appear.                                                                                                                                           |
+| Intermediate guide: v0.6.0 discovery policy   | Not applicable | `ConfigDiscovery` is not used; the file path is explicit.                                                                                                                                                                                  |
+| Intermediate guide: v0.6.0/v0.9.0 YAML        | Not applicable | Configuration files here are TOML only; `serde_yaml` is workflow parsing, not configuration.                                                                                                                                               |
+| Intermediate guide: v0.7.0 layer composition  | Not applicable | `compose_layers*` is derive API; layering is two `Figment::merge` calls.                                                                                                                                                                   |
+| Intermediate guide: v0.7.0 post-merge hooks   | Not applicable | Requires the derive. The token step is application logic after load, not a merge hook.                                                                                                                                                     |
+| Intermediate guide: v0.7.0 localization       | Not applicable | No localizer.                                                                                                                                                                                                                              |
+| Intermediate guide: v0.7.0 error helpers      | **Reviewed**   | `into_ortho_merge` is deliberately not used: its `Merge` text names a CLI merge that does not happen here. `map_err(OrthoError::from)` stays, yielding `Gathering` and preserving the message. See the decision log.                       |
+| Intermediate guide: v0.9.0 discovery errors   | Not applicable | `load_first` is not called. The explicit `load_config_file` path already distinguishes absent (`Ok(None)` turned into a `NotFound` error) from malformed (`Err`).                                                                          |
+| Intermediate guide: v0.9.0 `OrthoError` shape | **Applied**    | `OrthoError` is `#[non_exhaustive]` with new variants; this repository constructs only `File`, `Validation` and (newly) `Merge`, and matches on none.                                                                                      |
+| Intermediate guide: v0.9.0 tracing/metrics    | Not applicable | Emitted by discovery and derive paths this repository does not use; no subscriber changes required.                                                                                                                                        |
+| Intermediate guide: v0.9.0 agent context      | Not applicable | Nothing constructs it.                                                                                                                                                                                                                     |
+
+## Conformance basis
+
+The authoritative upstream artefacts for this work are the twelve imported
+documents under `docs/ortho-config-*`, pinned to commit
+`38812c563e3953a490e3efc202609f37e21a0517` of `leynos/ortho-config` and
+recorded with checksums in `docs/third-party-docs-provenance.md`. There is no
+in-repository Terms of Reference or technical design for this migration; the
+governing requirement set is issue #237
+(<https://github.com/leynos/comenq/issues/237>), sections 1–7, and the
+repository's own policy in `AGENTS.md`.
+
+Trace links:
+
+```plaintext
+issue-237 §3  ->  EP-M1  ->  `cargo tree -i ortho_config` shows 0.10.0 from crates.io
+issue-237 §4  ->  EP-M2  ->  `config.rs` compiles on OrthoResult; `result_large_err` expectations removed
+issue-237 §5  ->  EP-M3  ->  new tier tests; no new process-environment mutation
+issue-237 §6  ->  EP-M4  ->  full sequential gate run; baseline/migrated inventory comparison
+issue-237 §7  ->  EP-M5  ->  draft PR body with provenance, versions, applicability, results
+issue-237 §1  ->  EP-M0  ->  `docs/third-party-docs-provenance.md` checksum tables
+```
+
+## Verification plan
+
+The migration introduces no new algorithm and no new persisted format, so the
+obligations are behavioural-equivalence obligations over the configuration
+pipeline. They are stated as invariants, with the method, artefact, evidence,
+and non-vacuity argument for each.
+
+- Obligation `INV-PRECEDENCE`: for any field `f` with a default, a value in the
+  file, a value in the environment, and a value on the command line, the
+  effective value is the command-line value; without a command-line value it is
+  the environment value; without that, the file value; without that, the
+  default. Method: parameterized `rstest` over the four tiers for one
+  representative field per tier, plus the full-tuple test already present in
+  `apply_cli_overrides_preserves_unset_values_and_applies_set_values`.
+  Rationale: the tiers are a finite, explicitly enumerated partition, so a
+  table is exhaustive for the claim. Domain: `socket_path` (a `PathBuf` from a
+  file, an environment variable and a flag), `cooldown_period_seconds` (a `u64`
+  from a file, an environment variable and a flag), and the token fields (whose
+  precedence is not plain layering but ordered resolution). Artefact:
+  `crates/comenqd/src/config/tests/configuration.rs` plus a new `tiers` module
+  of cases. Evidence: `cargo nextest run -p comenqd --all-features` passes;
+  each new case fails against a deliberately mutated `apply_cli_overrides`
+  (negative control, run once locally and reverted before commit). Non-vacuity:
+  every case supplies a distinct literal for each tier, so an implementation
+  that reads the wrong tier cannot accidentally pass; the mutation removes one
+  `if let` arm and the corresponding case must fail.
+
+- Obligation `INV-RESTATED-DEFAULT`: a command-line value equal to the
+  built-in default still wins over an environment value. Method: named unit
+  test. Rationale: this is precisely the v0.10.0 §2 defect, and it is one
+  concrete scenario, so a named test states the requirement better than a
+  table. Domain: `--cooldown-period-seconds 960` with
+  `COMENQD_COOLDOWN_PERIOD_SECONDS=10`, expecting `960`. Artefact: a new case in
+  `configuration.rs`. Evidence: passes; it would fail if CLI overrides were
+  conditioned on the value differing from the default. Non-vacuity: the two
+  candidate values differ (`960` versus `10`), so a wrong tier choice is
+  observable.
+
+- Obligation `INV-TOKENS`: the token selection order, the clearing rules, the
+  64 KiB bound, the `${VAR}` expansion, and the duplicate rejection with no
+  token disclosure are unchanged. Method: the existing parameterized and named
+  tests in `config/tests/token_file.rs` and `config/tests/token_pool.rs` are
+  the specification; the migration must keep them passing unmodified.
+  Rationale: the behaviour is already partitioned into cases; rewriting them
+  would destroy the comparison the issue asks for. Domain: every path through
+  `resolve_github_token`. Artefact: the existing test files, with a diff
+  requirement of zero changes except mechanical type adjustments in signatures.
+  Evidence: identical test names and case identifiers before and after, with
+  the baseline inventory recorded in `Progress`. Non-vacuity:
+  `token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens`
+  asserts a substring absence, which fails if the message ever embeds a token.
+
+- Obligation `INV-ERROR-CONTRACT`: an absent file, a malformed file, a missing
+  token, and an empty token each produce `Err`; a failed load exits non-zero
+  with a message on standard error and nothing on standard output. Method: the
+  existing `error_when_missing_file` and `invalid_configuration_errors` table
+  plus a binary-level test that runs the built `comenqd` against a bad
+  `--config` path and asserts the exit status and that standard output is
+  empty. Rationale: exit status and stream placement are process-level
+  properties that no in-process test can observe. Domain: absent file,
+  malformed TOML, missing token, unterminated placeholder. Artefact:
+  `crates/comenqd/tests/` binary test using `std::process::Command`. Evidence:
+  the child exits non-zero; `stdout` is empty; `stderr` is non-empty.
+  Non-vacuity: the daemon does not exit on success, so a zero-exit comparison
+  is unavailable. The reachability control is a local mutation instead: invert
+  the expected status to `success()` in a scratch copy of the test, observe it
+  fail for the intended reason, then restore. The `stdout`-is-empty assertion
+  is reachable because the failure path writes through `color_eyre` to standard
+  error.
+
+- Obligation `INV-ENV-PARSING`: the environment layer keeps `figment`'s scalar
+  parsing, so `COMENQD_COOLDOWN_PERIOD_SECONDS=960` yields an integer and a
+  comma-bearing value stays one string. Method: named unit tests over the
+  resolved `Config`. Rationale: the `Env`-versus-`CsvEnv` choice is the one
+  place where a plausible "modernize" edit would silently change behaviour, so
+  it gets a pinning test. Domain: `cooldown_period_seconds`, a `u64` that fails
+  to deserialize from a string, and one value containing a comma. Artefact: two
+  new cases in `configuration.rs`. Evidence: the integer case passes as a
+  `u64`; the comma case yields the whole comma-bearing string, not a split
+  list. Non-vacuity: the integer case alone does not discriminate, because
+  figment's `from_str` parses `960` as a `usize` and `CsvEnv`'s `FromStr`
+  fallback would also parse `960` for a `u64` field; the comma case is the true
+  discriminator, and it must assert on a field whose type distinguishes one
+  string from a list, otherwise it too is vacuous.
+
+- Obligation `INV-NO-SUPPRESSION`: no new `#[allow]`, no
+  `--ignore-rust-version`, no `#[ignore]`, and no increase in the number of
+  `#[expect]` attributes. Method: `make lint` with `-D warnings` plus a diff
+  audit. Artefact: the commit diff. Evidence: `git diff` shows a net reduction
+  in `#[expect]` counts.
+
+- Obligation `INV-GRAPH`: exactly one `ortho_config` version and exactly one
+  `figment` version are reachable, and no Git dependency remains. Method:
+  `cargo tree -i ortho_config`, `cargo tree -i figment`, and
+  `grep -c 'git+' Cargo.lock` restricted to the `ortho_config` package entry.
+  Artefact: transcripts in this plan. Evidence: `ortho_config v0.10.0` from
+  `registry+https://...crates.io-index`; `figment v0.10.19` with a single node.
+
+- Axioms relied on (not verified here, treated as documented third-party
+  contracts): `ortho_config` 0.10.0's `load_config_file` returns `Ok(None)`
+  only for an absent file; `OrthoResult<T> = Result<T, Arc<OrthoError>>`;
+  `OrthoError` is `#[non_exhaustive]`; `figment` 0.10.19's `Env` semantics as
+  read from its source; `Arc<E>: Error` for `E: Error + Send + Sync`.
+
+- Red-Green-Refactor: the red step is the new tier and restate-the-default
+  tests applied to the *migrated* code being written to fail first. Because the
+  behaviour under test already exists, the honest sequencing is: add the tests,
+  confirm they pass on the pre-migration tree (they must, since the behaviour
+  is meant to be preserved), then confirm they still pass after the dependency
+  change. A test that passes only after the migration would mean the migration
+  changed behaviour and is a finding, not a success. The `INV-RESTATED-DEFAULT`
+  case is the exception to check carefully: it passes before *and* after here,
+  because this repository never had the derive defect.
+
+## Plan of work
+
+Stage A is complete: the guides are read, the inventory is recorded, and the
+decisions above are settled.
+
+Stage B (EP-M1) repoints the dependency. Edit the root `Cargo.toml` twice, at
+`Cargo.toml:21` and `Cargo.toml:60`, replacing
+
+```toml
+ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4.0" }
+```
+
+with the workspace's existing caret convention, `ortho_config = "0.10.0"`.
+`crates/comenqd/Cargo.toml:26` inherits via `workspace = true` and needs no
+change. Then run `cargo update -p ortho_config --precise 0.10.0` and inspect
+the lockfile delta. Commit the manifests and the lockfile together, and record
+the before/after trees in this plan.
+
+Stage C (EP-M2) migrates the source. In `crates/comenqd/src/config.rs`: replace
+the five `Result<_, ortho_config::OrthoError>` signatures with
+`ortho_config::OrthoResult<_>`; delete the five
+`#[expect(clippy::result_large_err, ...)]` attributes on them; change
+`use figment::providers::Env;` to `use ortho_config::figment::providers::Env;`;
+and turn the `ok_or_else` that reports a missing file into one that builds
+`Arc::new(OrthoError::File { ... })`. Keep
+`fig.extract().map_err(ortho_config::OrthoError::from)`: the `From` conversion
+does not change between versions and yields the `Gathering` variant whose text
+is the published contract here; see the decision log for why `into_ortho_merge`
+is deliberately not used. In `config/single_token.rs`, return
+`OrthoResult<String>` and `OrthoResult<PathBuf>`, wrap the two constructed
+errors in `Arc::new`, and drop the two `#[expect]` attributes. In
+`config/token_resolution.rs`, return `OrthoResult<Vec<NamedToken>>`, wrap the
+four constructed `Validation` errors in `Arc::new`, and drop the attribute.
+Leave `config/tokens.rs` untouched: it works in `io::Error` and the mapping
+happens in the caller. Build with `cargo check -p comenqd --all-features`.
+
+Stage D (EP-M3) migrates the BDD harness. In `tests/steps/config_steps.rs:16`,
+change `result: Option<Result<Config, ortho_config::OrthoError>>` to
+`result: Option<ortho_config::OrthoResult<Config>>`. Nothing else in that file
+names the error type, and the two `match world.result.take()` arms already use
+`Some(Err(_))`. Add the regression tests from `Verification plan` to
+`crates/comenqd/src/config/tests/configuration.rs` (or a sibling module if the
+file would exceed the repository's 400-line limit — it is currently ~340 lines,
+so a sibling `tiers.rs` declared from `config/tests.rs` is the expected home).
+
+Stage E (EP-M4 and EP-M5) runs the gates, requests the review, and delivers.
+
+## Concrete steps
+
+Run every command from the worktree root.
+
+1. Format, then check, then lint, then typecheck, then test — sequentially,
+   each with a `tee` log:
+
+```console
+make fmt
+make check-fmt 2>&1 | tee /tmp/check-fmt-$(git branch --show-current).out
+make lint 2>&1 | tee /tmp/lint-$(git branch --show-current).out
+make typecheck 2>&1 | tee /tmp/typecheck-$(git branch --show-current).out
+make test 2>&1 | tee /tmp/test-$(git branch --show-current).out
+```
+
+1. Markdown-specific gates, which the migration also touches through the
+   ExecPlan and provenance documents:
+
+```console
+make spelling 2>&1 | tee /tmp/spelling-$(git branch --show-current).out
+make markdownlint 2>&1 | tee /tmp/markdownlint-$(git branch --show-current).out
+make nixie 2>&1 | tee /tmp/nixie-$(git branch --show-current).out
+```
+
+1. Dependency evidence:
+
+```console
+cargo tree -i ortho_config
+cargo tree -i figment
+grep -n -A3 'name = "ortho_config"' Cargo.lock
+```
+
+1. Review, then delivery:
+
+```console
+coderabbit review --agent
+/usr/bin/ssh -T git@github.com
+```
+
+The SSH probe must report `Hi leynos!` before any push. If the CodeRabbit rate
+limit is hit, sleep `$(shuf -i 45-90 -n 1)` minutes with `vsleep` and retry in
+the foreground.
+
+## Idempotence and recovery
+
+Every step here is re-runnable. `cargo update -p ortho_config --precise 0.10.0`
+is idempotent once applied; if the graph needs to be undone,
+`git checkout Cargo.lock Cargo.toml` restores the baseline because both are
+tracked. The provenance document and the imported documents are add-only; a
+mistaken edit to an imported file is detected by re-running the SHA-256 table
+and restored with `git checkout --` of the upstream content re-fetched from
+`38812c56`.
+
+If a gate fails, read the cited `/tmp` log rather than re-running the gate.
+Re-run only after a fix. If the compile queue is deep, wait: a queued build
+printing `[build-limits] CRATE: waiting for a compile slot` is not hung.
+
+## Artefacts and notes
+
+Baseline identities to compare against:
+
+```plaintext
+commit          a781258549c157e38dfaaf1482ccbc01f32d2ccd
+branch          issue-237-migrate-from-ortho-config-v0-4-0-git-tag-to-v0-10-0
+toolchain       nightly-2025-07-22
+rustc           1.90.0-nightly (9748d87dc 2025-07-21)
+cargo           1.90.0-nightly (6833aa715 2025-07-13)
+LLVM            20.1.8
+```
+
+Baseline dependency resolution:
+
+```plaintext
+ortho_config 0.3.0  git+https://github.com/leynos/ortho-config.git?tag=v0.4.0#5c27310a915795b9e7c7749c8e38111291aa6976
+figment      0.10.19 registry+https://github.com/rust-lang/crates.io-index
+serde_yaml   0.9.34+deprecated
+clap         4.6.6
+```
+
+Baseline pre-existing condition: `cargo` reports
+`warning: Patch filetime v0.2.25 (vendor/filetime) was not used in the crate
+graph`.
+This is unrelated to the migration and is recorded so it is not mistaken for a
+new regression.
+
+## Interfaces and dependencies
+
+At the end of EP-M2 the following must hold in `crates/comenqd/src/config.rs`:
+
+```rust
+use ortho_config::figment::providers::Env;
+
+impl Config {
+    pub const DEFAULT_PATH: &'static str = "/etc/comenqd/config.toml";
+    pub fn load() -> ortho_config::OrthoResult<Self>;
+    pub fn load_with_tokens()
+        -> ortho_config::OrthoResult<(Self, Vec<NamedToken>)>;
+    pub fn from_file(path: &Path) -> ortho_config::OrthoResult<Self>;
+    fn from_file_with_cli(path: &Path, cli: &CliArgs)
+        -> ortho_config::OrthoResult<Self>;
+    fn from_file_with_cli_and_tokens(path: &Path, cli: &CliArgs)
+        -> ortho_config::OrthoResult<(Self, Vec<NamedToken>)>;
+}
+```
+
+In `crates/comenqd/src/config/single_token.rs`:
+
+```rust
+pub(super) fn read_github_token_file(path: &Path)
+    -> ortho_config::OrthoResult<String>;
+pub(super) fn expand_env_prefix(path: &Path)
+    -> ortho_config::OrthoResult<PathBuf>;
+```
+
+In `crates/comenqd/src/config/token_resolution.rs`:
+
+```rust
+pub(super) fn resolve_github_token(&mut self, has_cli_token: bool)
+    -> ortho_config::OrthoResult<Vec<NamedToken>>;
+pub fn github_tokens(&self) -> std::io::Result<Vec<NamedToken>>;
+```
+
+`github_tokens` keeps `io::Result` deliberately: it is a pure filesystem
+operation with no Figment involvement, and its `io::Error` is what
+`resolve_github_token` maps into `OrthoError::Validation`.
+
+`Config`'s nine public fields, its `From` conversions, and
+`apply_cli_overrides`'s signature are unchanged.
