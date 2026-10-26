@@ -185,6 +185,20 @@ fn error_when_missing_file() {
 
 #[rstest]
 #[serial_test::serial]
+fn error_when_path_is_a_directory() {
+    // ortho_config v0.3.0 returned `Ok(None)` for any path that was not a
+    // file; v0.10.0 rejects a non-regular entry outright. Both are errors
+    // once the missing-file `ok_or_else` runs, so the observable contract is
+    // unchanged, but pinning the directory case guards the new behaviour.
+    let dir = tempdir().expect("create tempdir");
+
+    let res = Config::from_file(dir.path());
+
+    assert!(res.is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
 fn env_vars_override_file() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");

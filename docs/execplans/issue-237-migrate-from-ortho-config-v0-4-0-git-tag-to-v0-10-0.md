@@ -121,7 +121,7 @@ Thresholds that trigger escalation when breached.
   existing requirement. Adopting `ortho_l10n` is explicitly not wanted: no code
   here uses the localization runtime without the facade.
 - MSRV: if the build fails on the pinned `nightly-2025-07-22` for a reason
-  attributable to the v0.10.0 floor, a dated-pin bump is authorised by the
+  attributable to the v0.10.0 floor, a dated-pin bump is authorized by the
   issue; record the old and new identities and the reason. If the pin must
   move, do not exceed a nightly the reproducer actually proves necessary.
 - Iterations: if a single gate still fails after three fix-and-rerun attempts,
@@ -228,11 +228,43 @@ Thresholds that trigger escalation when breached.
       `OrthoError::Merge`'s Display string at `error/types.rs:47`: it reads
       "Failed to merge CLI with configuration", which names a CLI merge this
       Figment does not perform. `map_err(OrthoError::from)` therefore stays.
-- [ ] Milestone EP-M1: repoint the dependency and prove the graph.
-- [ ] Milestone EP-M2: migrate `crates/comenqd/src/config.rs` and
-      `config/{single_token,token_resolution}.rs` to the v0.10.0 APIs.
-- [ ] Milestone EP-M3: migrate `tests/steps/config_steps.rs` and add the
-      regression tests for each precedence tier and each unhappy path.
+- [x] (2026-10-26T14:09Z) **Milestone EP-M1 complete** (`9a975be`): repointed
+      the dependency to `ortho_config = "0.10.0"` from crates.io, removed the
+      direct `figment` entry from `crates/comenqd/Cargo.toml`, and refreshed
+      `Cargo.lock`. `serde_yaml = "0.9"` was deliberately retained: it has no
+      relationship to `ortho_config` and issue #237 does not ask for its
+      removal. Plain `cargo update -p ortho_config` was required: the lockfile
+      still keyed the package to the Git source, so `--precise 0.10.0` failed
+      with `revspec '0.10.0' not found`. Graph proof: one `ortho_config v0.10.0`
+      from the registry index, zero `source = "git+` entries, one
+      `figment 0.10.19` reachable from both `comenqd` and `ortho_config`.
+- [x] (2026-10-26T14:09Z) **Milestone EP-M2 complete** (`44cba89`): migrated
+      `crates/comenqd/src/config.rs`, `config/single_token.rs` and
+      `config/token_resolution.rs` to `OrthoResult`, `ortho_config::figment`,
+      `Arc<OrthoError>`, and v0.10.0's `load_config_file`. All five
+      `#[expect(clippy::result_large_err, …)]` attributes in those files were
+      removed because the error is now pointer-sized; the unrelated Octocrab
+      one in `worker/tokens.rs` remains. `cargo check --workspace
+      --all-targets --all-features` passes.
+- [x] (2026-10-26T15:20Z) **Milestone EP-M3 complete**: migrated
+      `tests/steps/config_steps.rs` to `ortho_config::OrthoResult<Config>`
+      (its `ConfigWorld` field type), added
+      `crates/comenqd/src/config/tests/precedence.rs` (9 cases covering the four
+      tiers, the restated-default defect, and the three environment-parsing
+      behaviours), added `error_when_path_is_a_directory` to
+      `config/tests/configuration.rs` to pin v0.10.0's non-regular-file
+      rejection, and added `crates/comenqd/tests/startup_contract.rs` (3 cases
+      running the real binary to pin exit status and stream placement).
+      Evidence: `cargo nextest run -p comenqd --all-features` — 53 configuration
+      and contract tests pass, including all 9 precedence cases and all 3
+      process-level cases; `cargo check --workspace --all-targets
+      --all-features` is clean apart from the pre-existing unused
+      `vendor/filetime` patch notice. Note: an earlier `git checkout --` used to
+      keep a docs commit clean discarded this one-line change without my
+      noticing it, so the first compile attempt after compaction failed with
+      `E0308` at `config_steps.rs:130`; re-applying the change fixed it. The
+      lesson is that discarding a file to scope a commit needs a follow-up
+      compile, not just a follow-up `git status`.
 - [ ] Milestone EP-M4: run every gate sequentially, then
       `coderabbit review --agent`, and clear all concerns.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
@@ -294,6 +326,36 @@ Thresholds that trigger escalation when breached.
   exit 0. Impact: the `?` propagation in `main.rs` and the wrapping in
   `single_token.rs` keep compiling without an adapter.
 
+- Observation: Figment's `Env` does **not** split a comma-bearing value, and a
+  `Vec<PathBuf>` field therefore *rejects* `COMENQD_GITHUB_TOKEN_FILES=/a,/b`
+  rather than reading it as two paths. Evidence: a first draft of the comma
+  test asserted a one-element vector and failed with
+  `InvalidType(Str("/tmp/…/first.token,/tmp/…/second.token"), "a sequence")`
+  from `Gathering`. `ortho_config::CsvEnv` enables comma splitting by default,
+  so under `CsvEnv` the same input would have produced a two-token pool.
+  Impact: this is a sharper argument for keeping `Env` than the scalar-parsing
+  difference alone, because it changes a startup **error** into a working
+  configuration. The regression test now pins the rejection, and a companion
+  test pins the supported spelling — a TOML-style array literal, which Figment
+  does parse into a sequence.
+
+- Observation: the daemon's failure contract is exactly as required, measured
+  on the real binary rather than inferred: a malformed config exits `1` with
+  zero bytes on standard output and a `color_eyre` report on standard error; a
+  missing file and a token-less file behave the same way; a valid config keeps
+  running (observed as `timeout` reporting `124`), so the assertions are not
+  vacuous. Evidence: `target/debug/comenqd --config /tmp/badcfg.toml` →
+  `exit=1`, `stdout` 0 bytes.
+
+- Observation: removing the direct `figment` dependency from
+  `crates/comenqd/Cargo.toml` does not drop the `env` or `toml` features.
+  Evidence: `ortho_config`'s registry manifest declares
+  `features = ["env", "test"]` unconditionally on its `figment` dependency, and
+  maps its default `toml` feature to `figment/toml`;
+  `cargo tree -e features -i figment` after removal still lists both. Impact:
+  the dependency is genuinely redundant and was removed rather than retained
+  "for safety", which keeps the manifest honest.
+
 ## Decision log
 
 - Decision: keep the hand-built Figment layering on the v0.10.0 APIs rather
@@ -306,7 +368,7 @@ Thresholds that trigger escalation when breached.
   retained, so the derive's match-aware loaders and `cli_default_as_absent` are
   unavailable. (c) Token resolution mutates the loaded `Config` afterwards
   (`resolve_github_token(&mut self)`), which a derive does not model. Issue
-  #237 explicitly asks for this determination and authorises keeping the
+  #237 explicitly asks for this determination and authorizes keeping the
   hand-built layering when the derive does not express the same policy.
   Date/Author: 2026-10-26, migration agent.
 
@@ -315,7 +377,7 @@ Thresholds that trigger escalation when breached.
   `ortho_config::CsvEnv`. Rationale: `CsvEnv` is a different parser with
   different defaults. It enables `csv` by default, so a comma-separated value
   becomes a list where figment yields a string; it forces lowercase keys in
-  `split()`; and its `parse_scalar` recognises `true`/`false`
+  `split()`; and its `parse_scalar` recognizes `true`/`false`
   case-insensitively and then falls back to `FromStr` and finally to a string,
   with no `f64`, `usize`, or `isize` branches. `figment`'s `Value::from_str`
   does the opposite: it parses `true`/`false`, a `-`-or-`u`-signed integer via
@@ -382,7 +444,7 @@ Thresholds that trigger escalation when breached.
   (`nightly-2025-07-22`) unless a build proves it necessary. Rationale: the pin
   is `rustc 1.90.0-nightly`, which is above the v0.10.0 floor of `1.89.0`.
   Issue #237 says a nightly date alone does not establish that a bump is
-  necessary, and the issue authorises a bump only if needed. Date/Author:
+  necessary, and the issue authorizes a bump only if needed. Date/Author:
   2026-10-26, migration agent.
 
 - Decision: do not add a `rust-version` key anywhere yet.
@@ -405,7 +467,7 @@ and in the inventory of `Progress`.
 | §2 Explicit CLI values win                    | **Review**     | The repository already applies CLI overrides by hand in `Config::apply_cli_overrides`, so an explicit flag always wins. A test will pin the restate-the-default case that the guide names, because that is the case the old defect masked. |
 | §3 Fluent catalogues / IR 2.0                 | Not applicable | No Fluent catalogue, no `Localizer`, no `ORTHO_DOCS_IR_VERSION` reference, no generated message identifiers: zero derives.                                                                                                                 |
 | §4 `AgentContext`/`DocMetadata` literals      | Not applicable | Neither type is constructed anywhere; no documentation IR consumer exists in this repository.                                                                                                                                              |
-| §5 Boolean flag spellings                     | Not applicable | Every `CliArgs` field is `Option<T>` or a `PathBuf` with a string default; there is no boolean flag, generated or hand-written, in the daemon CLI.                                                                                         |
+| §5 Boolean flag spellings                     | Not applicable | Every `CliArgs` field is `Option<T>` or a `PathBuf` with a string default; there is no boolean flag, generated or handwritten, in the daemon CLI.                                                                                          |
 | §6 Named profiles                             | Not applicable | Opt-in derive capability; the repository has no derive. Profiles would also add a precedence tier that would change behaviour.                                                                                                             |
 | §6 Stacked configuration scopes               | Not applicable | Opt-in derive/`ConfigFilePolicy` capability; discovery here is a single explicit path, not scoped discovery.                                                                                                                               |
 | §6 Injected environment sources               | Not applicable | `MapEnv` and the `_with_sources` entry points serve derived configurations. This repository layers Figment by hand; see the test-isolation note in `Verification plan`.                                                                    |
@@ -466,24 +528,31 @@ and non-vacuity argument for each.
   file, an environment variable and a flag), `cooldown_period_seconds` (a `u64`
   from a file, an environment variable and a flag), and the token fields (whose
   precedence is not plain layering but ordered resolution). Artefact:
-  `crates/comenqd/src/config/tests/configuration.rs` plus a new `tiers` module
-  of cases. Evidence: `cargo nextest run -p comenqd --all-features` passes;
-  each new case fails against a deliberately mutated `apply_cli_overrides`
-  (negative control, run once locally and reverted before commit). Non-vacuity:
-  every case supplies a distinct literal for each tier, so an implementation
-  that reads the wrong tier cannot accidentally pass; the mutation removes one
-  `if let` arm and the corresponding case must fail.
+  `crates/comenqd/src/config/tests/configuration.rs` plus the new
+  `config/tests/precedence.rs` module declared from `config/tests.rs`. Evidence:
+  `cargo nextest run -p comenqd --all-features` passes. Non-vacuity: every
+  case supplies a distinct literal for each tier, so an implementation that
+  reads the wrong tier cannot accidentally pass. The negative control was run
+  and reverted: guarding the cooldown assignment with
+  `if secs != DEFAULT_COOLDOWN` reproduced the v0.10.0 §2 defect, and exactly
+  one case failed — `command_line_value_equal_to_the_default_still_wins`, with
+  `assertion left == right failed, left: 20, right: 960` — that is, it read the
+  environment value instead of the equal-to-default command-line value. The
+  other eight cases stayed green, confirming the mutation was narrowly targeted
+  rather than breaking the harness.
 
 - Obligation `INV-RESTATED-DEFAULT`: a command-line value equal to the
   built-in default still wins over an environment value. Method: named unit
   test. Rationale: this is precisely the v0.10.0 §2 defect, and it is one
   concrete scenario, so a named test states the requirement better than a
-  table. Domain: `--cooldown-period-seconds 960` with
-  `COMENQD_COOLDOWN_PERIOD_SECONDS=10`, expecting `960`. Artefact: a new case in
-  `configuration.rs`. Evidence: passes; it would fail if CLI overrides were
-  conditioned on the value differing from the default. Non-vacuity: the two
-  candidate values differ (`960` versus `10`), so a wrong tier choice is
-  observable.
+  table. Domain: file `cooldown_period_seconds=10`, environment
+  `COMENQD_COOLDOWN_PERIOD_SECONDS=20`, and `--cooldown-period-seconds 960`,
+  where `960` is exactly `DEFAULT_COOLDOWN`, expecting `960`. Artefact:
+  `command_line_value_equal_to_the_default_still_wins` in
+  `config/tests/precedence.rs`. Evidence: passes; it would fail if CLI
+  overrides were conditioned on the value differing from the default, which the
+  negative control confirmed. Non-vacuity: the three candidate values are
+  mutually distinct (`960`, `20`, `10`), so a wrong tier choice is observable.
 
 - Obligation `INV-TOKENS`: the token selection order, the clearing rules, the
   64 KiB bound, the `${VAR}` expansion, and the duplicate rejection with no
@@ -511,26 +580,41 @@ and non-vacuity argument for each.
   `crates/comenqd/tests/` binary test using `std::process::Command`. Evidence:
   the child exits non-zero; `stdout` is empty; `stderr` is non-empty.
   Non-vacuity: the daemon does not exit on success, so a zero-exit comparison
-  is unavailable. The reachability control is a local mutation instead: invert
-  the expected status to `success()` in a scratch copy of the test, observe it
-  fail for the intended reason, then restore. The `stdout`-is-empty assertion
-  is reachable because the failure path writes through `color_eyre` to standard
-  error.
+  is unavailable. The reachability control was run and reverted: inverting the
+  expected status to `success()` in
+  `missing_configuration_exits_non_zero_and_reports_on_stderr` made it fail with
+  `a missing configuration must fail; stdout was ""`, which is the intended
+  reason (the child really exits non-zero), while the other two cases stayed
+  green. The file was restored byte-identically and re-run green. The
+  `stdout`-is-empty assertion is reachable because the failure path writes
+  through `color_eyre` to standard error.
 
-- Obligation `INV-ENV-PARSING`: the environment layer keeps `figment`'s scalar
-  parsing, so `COMENQD_COOLDOWN_PERIOD_SECONDS=960` yields an integer and a
-  comma-bearing value stays one string. Method: named unit tests over the
-  resolved `Config`. Rationale: the `Env`-versus-`CsvEnv` choice is the one
-  place where a plausible "modernize" edit would silently change behaviour, so
-  it gets a pinning test. Domain: `cooldown_period_seconds`, a `u64` that fails
-  to deserialize from a string, and one value containing a comma. Artefact: two
-  new cases in `configuration.rs`. Evidence: the integer case passes as a
-  `u64`; the comma case yields the whole comma-bearing string, not a split
-  list. Non-vacuity: the integer case alone does not discriminate, because
-  figment's `from_str` parses `960` as a `usize` and `CsvEnv`'s `FromStr`
-  fallback would also parse `960` for a `u64` field; the comma case is the true
-  discriminator, and it must assert on a field whose type distinguishes one
-  string from a list, otherwise it too is vacuous.
+- Obligation `INV-ENV-PARSING`: the environment layer keeps `figment`'s
+  parsing, so `COMENQD_COOLDOWN_PERIOD_SECONDS=420` resolves as an integer and
+  `COMENQD_GITHUB_TOKEN_FILES=/a,/b` is a *rejected* startup configuration
+  rather than a two-element pool. Method: named unit tests over the resolved
+  `Config`. Rationale: the `Env`-versus-`CsvEnv` choice is the one place where
+  a plausible "modernize" edit would silently change behaviour, so it gets a
+  pinning test. Domain: `cooldown_period_seconds` (a `u64`) and
+  `github_token_files` (a `Vec<PathBuf>`). Artefact: the three environment
+  cases in `crates/comenqd/src/config/tests/precedence.rs`. Evidence: the
+  integer case resolves to `420` (deliberately not the `960` default, so the
+  assertion cannot be satisfied by the default tier); the comma case returns
+  `Err`; the companion array-literal case (`["/a","/b"]`) resolves to a
+  two-element vector, proving the rejection is about the separator and not a
+  general inability to set the field from the environment. Non-vacuity: the
+  integer case alone does not discriminate, because figment's `from_str` parses
+  `960` as a `usize` and `CsvEnv`'s `FromStr` fallback could also satisfy a
+  `u64` field; the comma case is the true discriminator, and it asserts
+  `is_err()` on a field whose declared type distinguishes one string from a
+  list. The measured failure is
+  `Gathering(Error { path: ["github_token_files"], kind:
+  InvalidType(Str("…/first.token,…/second.token"), "a sequence") })`,
+  whereas `CsvEnv` would have split the value and produced a working pool — so
+  the observed difference is an error becoming a success, not a cosmetic change
+  to a scalar. The array-literal case is the negative control that keeps the
+  comma case honest: if the field could never be populated from the
+  environment, the rejection would prove nothing about separators.
 
 - Obligation `INV-NO-SUPPRESSION`: no new `#[allow]`, no
   `--ignore-rust-version`, no `#[ignore]`, and no increase in the number of
