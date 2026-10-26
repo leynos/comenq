@@ -268,9 +268,16 @@ Thresholds that trigger escalation when breached.
 - [ ] Milestone EP-M4: run every gate sequentially, then
       `coderabbit review --agent`, and clear all concerns.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
-- [ ] Refresh `docs/comenq-design.md`'s configuration section if any statement
-      in it becomes inaccurate (it currently describes the precedence order,
-      which does not change).
+- [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
+      that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
+      environment variables and CLI arguments, with CLI highest, then
+      environment, then file, then defaults; and that the token pool outranks
+      the single-token settings. Every clause still holds after the migration,
+      and the section names no version, so it needs no edit. `serde_yaml`
+      retention was confirmed separately: its only users are
+      `test-support/src/workflow.rs` and the release and packaging BDD steps,
+      which parse GitHub workflow YAML and have nothing to do with
+      `ortho_config`.
 
 ## Surprises & discoveries
 
@@ -619,15 +626,31 @@ and non-vacuity argument for each.
 - Obligation `INV-NO-SUPPRESSION`: no new `#[allow]`, no
   `--ignore-rust-version`, no `#[ignore]`, and no increase in the number of
   `#[expect]` attributes. Method: `make lint` with `-D warnings` plus a diff
-  audit. Artefact: the commit diff. Evidence: `git diff` shows a net reduction
-  in `#[expect]` counts.
+  audit. Artefact: the commit diff. Evidence, counted with
+  `git grep -o '#\[expect' <rev> -- '*.rs'` and grouped by file: 30 at baseline
+  `a781258` versus 22 at `a53f41c`, a net **reduction** of 8. The removed
+  attributes are exactly the five `clippy::result_large_err` suppressions in
+  `crates/comenqd/src/config.rs`, the two in `config/single_token.rs`, and the
+  one in `config/token_resolution.rs`; `vendor/filetime`, `test-support`,
+  `tests/steps/config_steps.rs`, `worker.rs`, `worker/tokens.rs` and
+  `comenq-transport` are unchanged. The remaining `result_large_err` in
+  `worker/tokens.rs` is unrelated to OrthoConfig (it propagates Octocrab
+  errors) and was correctly left alone. Non-vacuity: the counts came from `git`
+  object contents at fixed revisions, not from a dirty working tree, so the
+  comparison cannot be distorted by formatting or partial staging.
 
 - Obligation `INV-GRAPH`: exactly one `ortho_config` version and exactly one
   `figment` version are reachable, and no Git dependency remains. Method:
   `cargo tree -i ortho_config`, `cargo tree -i figment`, and
-  `grep -c 'git+' Cargo.lock` restricted to the `ortho_config` package entry.
-  Artefact: transcripts in this plan. Evidence: `ortho_config v0.10.0` from
-  `registry+https://...crates.io-index`; `figment v0.10.19` with a single node.
+  `grep -c 'source = "git+' Cargo.lock`. Artefact: the transcripts below.
+  Evidence, measured at `a53f41c`: `cargo tree -i ortho_config` shows exactly
+  one node, `ortho_config v0.10.0`, reached from `comenqd` and (as a
+  dev-dependency) from `comenq-lib`; `cargo tree -i figment` shows exactly one
+  node, `figment v0.10.19`, reached only through `ortho_config v0.10.0`; and
+  `grep -c 'source = "git+' Cargo.lock` returns `0`. Non-vacuity: the same
+  commands against the pre-migration lockfile would have reported the
+  `git+https://github.com/leynos/ortho-config.git?tag=v0.4.0` source, so the
+  zero is a change in state, not an artefact of the pattern.
 
 - Axioms relied on (not verified here, treated as documented third-party
   contracts): `ortho_config` 0.10.0's `load_config_file` returns `Ok(None)`
