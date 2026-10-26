@@ -168,11 +168,17 @@ Thresholds that trigger escalation when breached.
   (`EnvVarGuard`) and is `@serial`. Adding process-environment mutation is
   forbidden by the issue, so new tier tests must not widen that surface.
   Severity: medium. Likelihood: medium. Mitigation: new coverage is written as
-  in-process unit tests that pass explicit `CliArgs` and, where an environment
-  value is genuinely the subject, reuse the existing single `EnvVarGuard` +
-  `#[serial_test::serial]` pattern rather than inventing a second mechanism.
-  This is a migration of an existing consumer, not a rewrite of its test
-  harness.
+  in-process unit tests that pass explicit `CliArgs`, and every case whose
+  subject is an environment value runs in an isolated child process with a
+  controlled environment, which §5 names as the sanctioned alternative. That is
+  not a matter of taste: `figment`'s `Env::iter` calls `std::env::vars_os()`
+  directly, `Env::new()` is private, and no constructor or builder method
+  accepts an environment source, so the merge-layer environment tier cannot be
+  exercised in-process without mutating the test process. `ortho_config`'s
+  `MapEnv` and `_with_sources` entry points serve *discovery*, not this
+  repository's hand-built merge, so they are not a substitute. The earlier
+  draft of this plan claimed the in-process `EnvVarGuard` route; that was wrong
+  and the implementation was reworked.
 - Risk: `figment`'s `Env` provider and `ortho_config`'s `CsvEnv` parse the same
   string differently, so a silent swap would change what
   `COMENQD_COOLDOWN_PERIOD_SECONDS=960.0` or `=960` means. Severity: high.
@@ -384,6 +390,36 @@ Thresholds that trigger escalation when breached.
       earlier — the unused `vendor/filetime` patch notice and normal
       `[build-limits]` queueing with the sccache server not serving, so builds
       ran uncached.
+- [x] (2026-10-27T00:15Z) **Corrected an issue-§5 violation found by
+      re-reading my own diff.** The first implementation of the tier tests put
+      eight new `EnvVarGuard` uses in
+      `crates/comenqd/src/config/tests/precedence.rs`, and this plan's trace
+      link claimed "no new process-environment mutation". That claim was false:
+      `git diff origin/main...HEAD` showed eight added `EnvVarGuard::` lines,
+      all in that one file. Investigation established that the merge-layer
+      environment tier *cannot* be exercised in-process — `figment`'s
+      `Env::iter` calls `std::env::vars_os()`, `Env::new()` is private, and
+      `ortho_config`'s `MapEnv`/`_with_sources` inject only the discovery
+      environment — so §5's own alternative, isolated child processes with
+      controlled environments, is the only compliant route.
+- [x] (2026-10-27T00:15Z) Reworked the tests accordingly.
+      `crates/comenqd/src/config/tests/precedence.rs` now holds only
+      file-and-default tiers with no environment mutation;
+      `crates/comenqd/tests/config_environment.rs` (new) runs every
+      environment case in a child that re-executes the test binary with
+      `--exact` on one child body and a cleared, rebuilt environment. Dropped
+      one redundant case (`array_literal_sequence_populates_the_pool`) after
+      confirming `token_pool.rs::token_files_form_the_rotation_pool` already
+      pins array-literal ordering from the file layer, and removed an
+      `LD_LIBRARY_PATH` restoration that `ldd` proved unnecessary (the binary
+      links only system libraries).
+- [x] (2026-10-27T00:15Z) **Non-vacuity, measured with two seeded faults.**
+      Deleting the `figment` merge line fails 5 of the 8 new cases — exactly
+      the environment ones — while the three file/default cases still pass.
+      Swapping `Env` for `ortho_config::CsvEnv` fails exactly one:
+      `comma_separated_token_files_are_not_split`, the error-becomes-a-working-
+      pool regression the obligation exists for. `config.rs` was restored
+      byte-identical to HEAD (`git diff --quiet`) after each mutation.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -585,31 +621,31 @@ every section, with its disposition for this repository. "Not applicable" rows
 are verified by the grep evidence already recorded in `Surprises & discoveries`
 and in the inventory of `Progress`.
 
-| Guide item                                    | Disposition    | Reason and evidence                                                                                                                                                                                                                        |
-| --------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| §1 Dependency versions                        | **Required**   | Two Git-tag declarations, both replaced with `0.10.0`; no `ortho_config_macros` direct dependency; no `cargo-orthohelp`.                                                                                                                   |
-| §2 Explicit CLI values win                    | **Review**     | The repository already applies CLI overrides by hand in `Config::apply_cli_overrides`, so an explicit flag always wins. A test will pin the restate-the-default case that the guide names, because that is the case the old defect masked. |
-| §3 Fluent catalogues / IR 2.0                 | Not applicable | No Fluent catalogue, no `Localizer`, no `ORTHO_DOCS_IR_VERSION` reference, no generated message identifiers: zero derives.                                                                                                                 |
-| §4 `AgentContext`/`DocMetadata` literals      | Not applicable | Neither type is constructed anywhere; no documentation IR consumer exists in this repository.                                                                                                                                              |
-| §5 Boolean flag spellings                     | Not applicable | Every `CliArgs` field is `Option<T>` or a `PathBuf` with a string default; there is no boolean flag, generated or handwritten, in the daemon CLI.                                                                                          |
-| §6 Named profiles                             | Not applicable | Opt-in derive capability; the repository has no derive. Profiles would also add a precedence tier that would change behaviour.                                                                                                             |
-| §6 Stacked configuration scopes               | Not applicable | Opt-in derive/`ConfigFilePolicy` capability; discovery here is a single explicit path, not scoped discovery.                                                                                                                               |
-| §6 Injected environment sources               | Not applicable | `MapEnv` and the `_with_sources` entry points serve derived configurations. This repository layers Figment by hand; see the test-isolation note in `Verification plan`.                                                                    |
-| §6 `cli_default_as_absent`                    | Not applicable | Requires the derive and `ArgMatches`. The one clap default here (`--config`) is consumed as a plain path before any merge and has no OrthoConfig layer.                                                                                    |
-| §6 Agent-native behaviour metadata            | Not applicable | Requires the derive plus `cargo-orthohelp`; neither exists here.                                                                                                                                                                           |
-| §6 Cargo external-subcommand helper           | Not applicable | `comenq` and `comenqd` are not `cargo` subcommands; nothing invokes `cargo comenq`.                                                                                                                                                        |
-| §6 Standalone `ortho_l10n` runtime            | Not applicable | No Fluent lookup anywhere; adding it would be a new dependency with no consumer.                                                                                                                                                           |
-| Intermediate guide: v0.6.0 re-exports         | **Applied**    | `figment` is imported via `ortho_config::figment`, so a second `figment` identity cannot appear.                                                                                                                                           |
-| Intermediate guide: v0.6.0 discovery policy   | Not applicable | `ConfigDiscovery` is not used; the file path is explicit.                                                                                                                                                                                  |
-| Intermediate guide: v0.6.0/v0.9.0 YAML        | Not applicable | Configuration files here are TOML only; `serde_yaml` is workflow parsing, not configuration.                                                                                                                                               |
-| Intermediate guide: v0.7.0 layer composition  | Not applicable | `compose_layers*` is derive API; layering is two `Figment::merge` calls.                                                                                                                                                                   |
-| Intermediate guide: v0.7.0 post-merge hooks   | Not applicable | Requires the derive. The token step is application logic after load, not a merge hook.                                                                                                                                                     |
-| Intermediate guide: v0.7.0 localization       | Not applicable | No localizer.                                                                                                                                                                                                                              |
-| Intermediate guide: v0.7.0 error helpers      | **Reviewed**   | `into_ortho_merge` is deliberately not used: its `Merge` text names a CLI merge that does not happen here. `map_err(OrthoError::from)` stays, yielding `Gathering` and preserving the message. See the decision log.                       |
-| Intermediate guide: v0.9.0 discovery errors   | Not applicable | `load_first` is not called. The explicit `load_config_file` path already distinguishes absent (`Ok(None)` turned into a `NotFound` error) from malformed (`Err`).                                                                          |
-| Intermediate guide: v0.9.0 `OrthoError` shape | **Applied**    | `OrthoError` is `#[non_exhaustive]` with new variants; this repository constructs only `File`, `Validation` and (newly) `Merge`, and matches on none.                                                                                      |
-| Intermediate guide: v0.9.0 tracing/metrics    | Not applicable | Emitted by discovery and derive paths this repository does not use; no subscriber changes required.                                                                                                                                        |
-| Intermediate guide: v0.9.0 agent context      | Not applicable | Nothing constructs it.                                                                                                                                                                                                                     |
+| Guide item                                    | Disposition    | Reason and evidence                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| §1 Dependency versions                        | **Required**   | Two Git-tag declarations, both replaced with `0.10.0`; no `ortho_config_macros` direct dependency; no `cargo-orthohelp`.                                                                                                                                                                                                             |
+| §2 Explicit CLI values win                    | **Review**     | The repository already applies CLI overrides by hand in `Config::apply_cli_overrides`, so an explicit flag always wins. A test will pin the restate-the-default case that the guide names, because that is the case the old defect masked.                                                                                           |
+| §3 Fluent catalogues / IR 2.0                 | Not applicable | No Fluent catalogue, no `Localizer`, no `ORTHO_DOCS_IR_VERSION` reference, no generated message identifiers: zero derives.                                                                                                                                                                                                           |
+| §4 `AgentContext`/`DocMetadata` literals      | Not applicable | Neither type is constructed anywhere; no documentation IR consumer exists in this repository.                                                                                                                                                                                                                                        |
+| §5 Boolean flag spellings                     | Not applicable | Every `CliArgs` field is `Option<T>` or a `PathBuf` with a string default; there is no boolean flag, generated or handwritten, in the daemon CLI.                                                                                                                                                                                    |
+| §6 Named profiles                             | Not applicable | Opt-in derive capability; the repository has no derive. Profiles would also add a precedence tier that would change behaviour.                                                                                                                                                                                                       |
+| §6 Stacked configuration scopes               | Not applicable | Opt-in derive/`ConfigFilePolicy` capability; discovery here is a single explicit path, not scoped discovery.                                                                                                                                                                                                                         |
+| §6 Injected environment sources               | Not applicable | `MapEnv` and the `_with_sources` entry points inject the *discovery* environment (XDG paths, the config-path selector, the home directory). This repository lays out its own merge with `figment::providers::Env` over a single explicit path, and nothing here calls discovery. See the test-isolation note in `Verification plan`. |
+| §6 `cli_default_as_absent`                    | Not applicable | Requires the derive and `ArgMatches`. The one clap default here (`--config`) is consumed as a plain path before any merge and has no OrthoConfig layer.                                                                                                                                                                              |
+| §6 Agent-native behaviour metadata            | Not applicable | Requires the derive plus `cargo-orthohelp`; neither exists here.                                                                                                                                                                                                                                                                     |
+| §6 Cargo external-subcommand helper           | Not applicable | `comenq` and `comenqd` are not `cargo` subcommands; nothing invokes `cargo comenq`.                                                                                                                                                                                                                                                  |
+| §6 Standalone `ortho_l10n` runtime            | Not applicable | No Fluent lookup anywhere; adding it would be a new dependency with no consumer.                                                                                                                                                                                                                                                     |
+| Intermediate guide: v0.6.0 re-exports         | **Applied**    | `figment` is imported via `ortho_config::figment`, so a second `figment` identity cannot appear.                                                                                                                                                                                                                                     |
+| Intermediate guide: v0.6.0 discovery policy   | Not applicable | `ConfigDiscovery` is not used; the file path is explicit.                                                                                                                                                                                                                                                                            |
+| Intermediate guide: v0.6.0/v0.9.0 YAML        | Not applicable | Configuration files here are TOML only; `serde_yaml` is workflow parsing, not configuration.                                                                                                                                                                                                                                         |
+| Intermediate guide: v0.7.0 layer composition  | Not applicable | `compose_layers*` is derive API; layering is two `Figment::merge` calls.                                                                                                                                                                                                                                                             |
+| Intermediate guide: v0.7.0 post-merge hooks   | Not applicable | Requires the derive. The token step is application logic after load, not a merge hook.                                                                                                                                                                                                                                               |
+| Intermediate guide: v0.7.0 localization       | Not applicable | No localizer.                                                                                                                                                                                                                                                                                                                        |
+| Intermediate guide: v0.7.0 error helpers      | **Reviewed**   | `into_ortho_merge` is deliberately not used: its `Merge` text names a CLI merge that does not happen here. `map_err(OrthoError::from)` stays, yielding `Gathering` and preserving the message. See the decision log.                                                                                                                 |
+| Intermediate guide: v0.9.0 discovery errors   | Not applicable | `load_first` is not called. The explicit `load_config_file` path already distinguishes absent (`Ok(None)` turned into a `NotFound` error) from malformed (`Err`).                                                                                                                                                                    |
+| Intermediate guide: v0.9.0 `OrthoError` shape | **Applied**    | `OrthoError` is `#[non_exhaustive]` with new variants; this repository constructs only `File`, `Validation` and (newly) `Merge`, and matches on none.                                                                                                                                                                                |
+| Intermediate guide: v0.9.0 tracing/metrics    | Not applicable | Emitted by discovery and derive paths this repository does not use; no subscriber changes required.                                                                                                                                                                                                                                  |
+| Intermediate guide: v0.9.0 agent context      | Not applicable | Nothing constructs it.                                                                                                                                                                                                                                                                                                               |
 
 ## Conformance basis
 
@@ -627,7 +663,7 @@ Trace links:
 ```plaintext
 issue-237 §3  ->  EP-M1  ->  `cargo tree -i ortho_config` shows 0.10.0 from crates.io
 issue-237 §4  ->  EP-M2  ->  `config.rs` compiles on OrthoResult; `result_large_err` expectations removed
-issue-237 §5  ->  EP-M3  ->  new tier tests; no new process-environment mutation
+issue-237 §5  ->  EP-M3  ->  file/default tiers in-process; environment tiers in an isolated child process
 issue-237 §6  ->  EP-M4  ->  full sequential gate run; baseline/migrated inventory comparison
 issue-237 §7  ->  EP-M5  ->  draft PR body with provenance, versions, applicability, results
 issue-237 §1  ->  EP-M0  ->  `docs/third-party-docs-provenance.md` checksum tables
@@ -745,29 +781,50 @@ and non-vacuity argument for each.
 - Obligation `INV-ENV-PARSING`: the environment layer keeps `figment`'s
   parsing, so `COMENQD_COOLDOWN_PERIOD_SECONDS=420` resolves as an integer and
   `COMENQD_GITHUB_TOKEN_FILES=/a,/b` is a *rejected* startup configuration
-  rather than a two-element pool. Method: named unit tests over the resolved
-  `Config`. Rationale: the `Env`-versus-`CsvEnv` choice is the one place where
-  a plausible "modernize" edit would silently change behaviour, so it gets a
-  pinning test. Domain: `cooldown_period_seconds` (a `u64`) and
-  `github_token_files` (a `Vec<PathBuf>`). Artefact: the three environment
-  cases in `crates/comenqd/src/config/tests/precedence.rs`. Evidence: the
-  integer case resolves to `420` (deliberately not the `960` default, so the
-  assertion cannot be satisfied by the default tier); the comma case returns
-  `Err`; the companion array-literal case (`["/a","/b"]`) resolves to a
-  two-element vector, proving the rejection is about the separator and not a
-  general inability to set the field from the environment. Non-vacuity: the
-  integer case alone does not discriminate, because figment's `from_str` parses
-  `960` as a `usize` and `CsvEnv`'s `FromStr` fallback could also satisfy a
-  `u64` field; the comma case is the true discriminator, and it asserts
-  `is_err()` on a field whose declared type distinguishes one string from a
-  list. The measured failure is
-  `Gathering(Error { path: ["github_token_files"], kind:
-  InvalidType(Str("…/first.token,…/second.token"), "a sequence") })`,
-  whereas `CsvEnv` would have split the value and produced a working pool — so
-  the observed difference is an error becoming a success, not a cosmetic change
-  to a scalar. The array-literal case is the negative control that keeps the
-  comma case honest: if the field could never be populated from the
-  environment, the rejection would prove nothing about separators.
+  rather than a two-element pool. Rationale: the `Env`-versus-`CsvEnv` choice
+  is the one place where a plausible "modernize" edit would silently change
+  behaviour, so it gets a pinning test. Domain: `cooldown_period_seconds` (a
+  `u64`) and `github_token_files` (a `Vec<PathBuf>`).
+
+  Method: named tests that run the real configuration loader in an isolated
+  child process with a controlled environment, in
+  `crates/comenqd/tests/config_environment.rs`. In-process tests cannot do this:
+  `figment`'s `Env::iter` calls `std::env::vars_os()` directly, `Env::new()`
+  is private, and no constructor or builder method accepts an environment
+  source, so the only in-process route would be mutating the test binary's own
+  environment — which issue #237 §5 forbids. `ortho_config`'s `MapEnv` and
+  `_with_sources` entry points are not a substitute: they inject the
+  *discovery* environment, and this repository's loader merges by hand over a
+  single explicit path.
+
+  Test isolation: the child is this test binary re-executed via
+  `std::env::current_exe()` with `--exact` selecting one child body and
+  `--nocapture` for diagnosability. Its environment is cleared and rebuilt, so
+  the only `COMENQD_*` variables present are the ones a case sets; the child
+  body returns immediately when the marker is absent, so an ordinary run pays
+  one no-op test per child rather than a second suite. The result travels on a
+  file path passed by the parent, not on standard output, because libtest
+  writes its own `running 1 test` banner there. The child's token comes from
+  the fixture file, so token resolution cannot mask a merge failure. A bounded
+  wait kills and reaps an overrunning child rather than blocking the suite.
+
+  Evidence: the integer case resolves to `420` (deliberately not the `960`
+  default, so the assertion cannot be satisfied by the default tier) and its
+  untouched neighbour still reads `30`; the comma case exits non-zero and its
+  stderr carries `Failed to gather configuration`, which names the merge
+  failure rather than accepting any panic; the companion array-literal case
+  resolves to a two-element vector, proving the rejection is about the
+  separator and not a general inability to set the field from the environment.
+
+  Non-vacuity, measured with two seeded faults. First, deleting the `figment`
+  merge line altogether makes 5 of the 8 cases fail — precisely the environment
+  cases — while the three file/default cases still pass, which is the correct
+  partition. Second, swapping `Env::prefixed(...).split("__")` for
+  `ortho_config::CsvEnv::prefixed(...).split("__")` makes exactly one case fail:
+  `comma_separated_token_files_are_not_split`. That is the discriminator the
+  obligation exists for — an error becoming a working two-token pool — and the
+  scalar cases are unaffected by it, which is why the comma case rather than
+  the integer case carries the obligation.
 
 - Obligation `INV-NO-SUPPRESSION`: no new `#[allow]`, no
   `--ignore-rust-version`, no `#[ignore]`, and no increase in the number of
