@@ -694,6 +694,19 @@ and non-vacuity argument for each.
   `stdout`-is-empty assertion is reachable because the failure path writes
   through `color_eyre` to standard error.
 
+  Liveness of the observation itself: the success path of these three tests is
+  the child *exiting*, and a daemon that accepts its configuration does not
+  exit. `Command::output()` therefore turns the exact regression
+  `missing_token_exits_non_zero_and_reports_on_stderr` guards — token
+  validation ceasing to reject — into an indefinite hang rather than a failure,
+  which is the worst possible outcome for a suite. `run_daemon` now spawns the
+  child and polls `try_wait` against a ten-second `STARTUP_DEADLINE`; on expiry
+  it kills and reaps the child and panics with the child's own streams, so the
+  failure is reported and nothing is left running. Non-vacuity of the deadline:
+  a standalone probe driving the same loop against `/bin/sleep 300` with a
+  two-second deadline panicked after 2.0 s and left zero `sleep` processes
+  behind.
+
 - Obligation `INV-ENV-PARSING`: the environment layer keeps `figment`'s
   parsing, so `COMENQD_COOLDOWN_PERIOD_SECONDS=420` resolves as an integer and
   `COMENQD_GITHUB_TOKEN_FILES=/a,/b` is a *rejected* startup configuration

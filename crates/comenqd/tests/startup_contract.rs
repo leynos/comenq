@@ -10,9 +10,18 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
+
+/// How long a startup-failure run may take before the test calls it hung.
+///
+/// The success path here is an *exit*, so the daemon finishing its work is the
+/// signal. A daemon that accepts its configuration instead keeps running, and
+/// an unbounded wait would then block the whole suite rather than fail it —
+/// which is exactly what a regression in token validation would cause.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Run `comenqd` with `--config` pointing at `config`, plus `extra` arguments.
 fn run_daemon(config: &Path, extra: &[&str]) -> Output {
@@ -32,7 +41,36 @@ fn run_daemon(config: &Path, extra: &[&str]) -> Output {
         .env("COMENQD_SOCKET_PATH", "/tmp/comenqd-contract-test.sock")
         .env("COMENQD_QUEUE_PATH", "/tmp/comenqd-contract-test-queue");
     command.args(extra);
-    command.output().expect("run comenqd")
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn comenqd");
+    wait_with_deadline(child)
+}
+
+/// Wait for `child` to exit, failing the test if it outlives the deadline.
+///
+/// An overrunning child is killed and reaped before the panic so the failure
+/// reports the child's own diagnostics and leaves no stray daemon behind.
+fn wait_with_deadline(mut child: Child) -> Output {
+    let deadline = Instant::now() + STARTUP_DEADLINE;
+    loop {
+        match child.try_wait().expect("poll comenqd") {
+            Some(_) => break,
+            None if Instant::now() >= deadline => {
+                child.kill().expect("kill overrunning comenqd");
+                let output = child.wait_with_output().expect("reap overrunning comenqd");
+                panic!(
+                    "comenqd did not exit within {STARTUP_DEADLINE:?}; stdout was {:?}, stderr was {:?}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    child.wait_with_output().expect("collect comenqd output")
 }
 
 #[test]
