@@ -369,6 +369,21 @@ Thresholds that trigger escalation when breached.
       `Ok(None)` behaviour — made all three tests fail with exactly the
       intended messages, and reverting restored 4/4 green with
       `crates/comenqd/src/config.rs` byte-identical.
+- [x] (2026-10-26T23:29Z) **Fourth gate pass, at `e49ad2b`** (`scrutineer`,
+      ten gates, strictly sequential, one exclusive occupant of the worktree):
+      every gate exited 0 with HEAD and the working tree byte-identical before
+      and after. lint 226s, typecheck 11s, test 114s (nextest **494/494**, 0
+      skipped), test-cucumber 8s (1 feature / 10 scenarios / 33 steps), just
+      under `make test`'s own embedded cucumber totals of 11 features / 55
+      scenarios / 211 steps across the whole workspace; markdownlint 39 files
+      with 0 issues, `typos.toml` regenerated identically, nixie scanned 42
+      Markdown files, workflow contracts 198 passed in 30s. The two previously
+      repaired behaviours are pinned in the log: `error_when_path_is_a_directory`
+      at 233/494 and all three startup-contract tests at 457, 458 and 461/494.
+      Both non-failure conditions in the logs are the ones already recorded
+      earlier — the unused `vendor/filetime` patch notice and normal
+      `[build-limits]` queueing with the sccache server not serving, so builds
+      ran uncached.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
