@@ -95,6 +95,14 @@ fn missing_configuration_exits_non_zero_and_reports_on_stderr() {
         !stderr.trim().is_empty(),
         "the failure must be explained on stderr"
     );
+    // The fixture supplies no token, so a loader that silently treated an
+    // absent path as empty configuration would fail here anyway, for the wrong
+    // reason. Require the file-specific diagnostic.
+    assert!(
+        stderr.contains("Configuration file error in") && stderr.contains("not found"),
+        "the failure must be the missing configuration file, not a later token \
+         error; got {stderr:?}"
+    );
 }
 
 #[test]
@@ -115,9 +123,16 @@ fn malformed_configuration_exits_non_zero_and_reports_on_stderr() {
         "diagnostics belong on stderr, not stdout; got {:?}",
         String::from_utf8_lossy(&output.stdout),
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        !stderr.trim().is_empty(),
         "the failure must be explained on stderr"
+    );
+    // As above: treat malformed TOML falling back to an empty configuration as
+    // a defect, not as an acceptable route to some later failure.
+    assert!(
+        stderr.contains("Configuration file error in") && stderr.contains("TOML parse error"),
+        "the failure must be the TOML parse error, not a later token error; got {stderr:?}"
     );
 }
 

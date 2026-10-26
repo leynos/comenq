@@ -79,6 +79,47 @@ listing of the remaining files at this commit is recorded in
 repository's own generated record, not an upstream copy, so it is exempt from
 the byte-for-byte rule; it exists to describe the tree at the pinned commit.
 
+### Second-level link targets
+
+The files above link onward to further documents. Those links are followed one
+level, so that every link out of the twelve files imported so far resolves.
+
+| Upstream path                                                              | Destination in this repository                                                               | SHA-256                                                            |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `docs/adrs/adr-0003-define-schema-ownership-for-agent-native-contracts.md` | `docs/ortho-config/docs/adrs/adr-0003-define-schema-ownership-for-agent-native-contracts.md` | `a899e178cea626329caeb99776503da4b6eff5b0b285a8daf6d3bcebc9ebf87c` |
+| `docs/adrs/adr-0007-downstream-context-command-naming.md`                  | `docs/ortho-config/docs/adrs/adr-0007-downstream-context-command-naming.md`                  | `c5e2a0d87617e5c47885ce2b4df0ebc8cefd1170cdcb3ede446cbf8138495f41` |
+| `docs/adrs/adr-0014-documentation-build-ownership.md`                      | `docs/ortho-config/docs/adrs/adr-0014-documentation-build-ownership.md`                      | `3bb79df6c2741928095e6d132480e8be9ba13d13e0e12918406d66be01f4de85` |
+| `docs/agent-native-cli-design.md`                                          | `docs/ortho-config/docs/agent-native-cli-design.md`                                          | `26ee326f7a682b8953b8628d1cc1770471f3ebc613ca05fced98a21d0e2e8baf` |
+| `docs/clap-mangen-cargo-orthohelp-migration-guide.md`                      | `docs/ortho-config/docs/clap-mangen-cargo-orthohelp-migration-guide.md`                      | `239da92dcc8e7b3e20e183c986048b80de1e991f5f5b59059b474aa2fed95cbe` |
+| `docs/developers-guide.md`                                                 | `docs/ortho-config/docs/developers-guide.md`                                                 | `891839e596b3efd9fd95ba95c72a67e2992e136b2f920fd2f23c64b620b1fb25` |
+| `docs/rstest-bdd-doc-provenance.md`                                        | `docs/ortho-config/docs/rstest-bdd-doc-provenance.md`                                        | `55266ba7e6010d76bcf2f0c53a7a08c95e5c5a8daca0bbe87d1bc3e545c5eca3` |
+| `docs/rstest-bdd-v0-6-0-migration-guide.md`                                | `docs/ortho-config/docs/rstest-bdd-v0-6-0-migration-guide.md`                                | `6e76c10028f9962134f6158732cf1645ae1b0beba3018bccd3bc3e88b2c38985` |
+
+The boundary is drawn here on purpose. Closing the link graph fully is not
+achievable: computing the transitive closure from the five authoritative
+documents reaches 48 files over five rounds, and even then seven of the targets
+do not exist at the pinned commit at all — `docs/adr-006-…`, `docs/adr-007-…`,
+`docs/adr-009-…`, `docs/rstest-bdd-design.md` and
+`docs/docs/{design,roadmap,subcommand-refinements}.md` are dangling links
+upstream. Vendoring those 36 extra files would also mean vendoring a document
+that fails this repository's spelling gate (see below), and the result would
+still contain broken links. One level of link-target import is therefore the
+practical stopping point: it makes every link out of the twelve imported
+documents resolve, and it leaves the deeper references inside the imported
+copies linking to documents this repository does not carry — which is the same
+state those references are in upstream.
+
+| Level                             | Files | Gate result                                                        |
+| --------------------------------- | ----- | ------------------------------------------------------------------ |
+| Five authoritative documents      | 5     | pass all Markdown gates                                            |
+| Direct link targets (both tables) | 12    | pass all Markdown gates                                            |
+| Second-level targets added here   | 8     | pass `make markdownlint` and `make spelling`                       |
+| Full closure (not imported)       | 48    | one spelling failure in `docs/execplans/9-1-1-profile-metadata.md` |
+
+Every file in both tables was verified to round-trip: the bytes written were
+re-hashed after writing and compared against the hash of `git show` output for
+the same path, and all twenty matched.
+
 ### Reproducing the import
 
 Every listed entry in `docs/ortho-config/examples-hello-world-files.txt`
