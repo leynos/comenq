@@ -1,8 +1,8 @@
 //! Regression tests for the in-process configuration precedence tiers.
 //!
-//! These pin the layered merge order — built-in defaults, then the TOML file,
-//! then command-line overrides — for the tiers whose inputs this process can
-//! supply without touching its own environment.
+//! These pin the layered merge order — the TOML file, then command-line
+//! overrides — for the tiers whose inputs this process can supply without
+//! touching its own environment.
 //!
 //! The environment tier is deliberately *not* here. Figment's `Env` provider
 //! reads `std::env::vars_os()` directly and offers no injection seam, so
@@ -10,6 +10,16 @@
 //! environment. Issue #237 §5 forbids adding that, so the environment cases
 //! live in `crates/comenqd/tests/config_environment.rs`, which re-executes the
 //! test binary in a child process with a cleared, rebuilt environment.
+//!
+//! The built-in-default tier is not here either, for a different reason. A
+//! default is only observable when *no* layer supplies a value, and this
+//! process cannot promise that: `Config`'s default socket path comes from
+//! `comenq_transport::default_socket_path()`, which honours the ambient
+//! `XDG_RUNTIME_DIR`. A test that asserted the bare `DEFAULT_SOCKET_PATH`
+//! constant would pass on a host without that variable and fail on one with
+//! it, which is a host-dependent verdict rather than a behaviour pin. That
+//! tier is pinned in `config_environment.rs` instead, where the child's
+//! environment is cleared outright.
 
 use super::super::{CliArgs, Config};
 use clap::Parser as _;
@@ -36,41 +46,34 @@ fn cli(args: &[&str]) -> CliArgs {
 
 /// One row of the precedence truth table.
 ///
-/// Each layer is optional so a row can express "this layer is absent" as
-/// opposed to "this layer holds a particular value". `expected` is the only
-/// `PathBuf` that is not optional: every row must resolve to something.
+/// The file layer is always present — the daemon's configuration file is
+/// mandatory — so only the command-line override is optional. Every present
+/// tier supplies a distinct literal, so reading the wrong layer shows up as a
+/// wrong value rather than an accidental match.
 struct TierCase {
-    file_value: Option<&'static str>,
+    file_value: &'static str,
     cli_value: Option<&'static str>,
     expected: &'static str,
 }
 
 #[rstest]
-#[case::default_when_no_layer_sets_a_value(TierCase {
-    file_value: None,
-    cli_value: None,
-    expected: comenq_transport::DEFAULT_SOCKET_PATH,
-})]
-#[case::file_overrides_default(TierCase {
-    file_value: Some("/tmp/file.sock"),
+#[case::file_overrides_the_built_in_default(TierCase {
+    file_value: "/tmp/file.sock",
     cli_value: None,
     expected: "/tmp/file.sock",
 })]
 #[case::command_line_overrides_file(TierCase {
-    file_value: Some("/tmp/file.sock"),
+    file_value: "/tmp/file.sock",
     cli_value: Some("/tmp/cli.sock"),
     expected: "/tmp/cli.sock",
 })]
 #[serial_test::serial]
 fn socket_path_resolves_to_the_highest_present_tier(#[case] case: TierCase) {
-    // Every present tier supplies a distinct literal, so reading the wrong
-    // layer shows up as a wrong value rather than an accidental match.
     let dir = tempdir().expect("create tempdir");
-    let contents = match case.file_value {
-        Some(value) => format!("{BASE_CONFIG}\nsocket_path='{value}'"),
-        None => BASE_CONFIG.to_string(),
-    };
-    let path = write_config(&dir, &contents);
+    let path = write_config(
+        &dir,
+        &format!("{BASE_CONFIG}\nsocket_path='{}'", case.file_value),
+    );
 
     let cfg = match case.cli_value {
         Some(value) => {

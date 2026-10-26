@@ -259,9 +259,10 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-26T15:20Z) **Milestone EP-M3 complete**: migrated
       `tests/steps/config_steps.rs` to `ortho_config::OrthoResult<Config>`
       (its `ConfigWorld` field type), added
-      `crates/comenqd/src/config/tests/precedence.rs` (9 runtime cases: a
-      four-row table over the tiers, the restated-default defect, and the
-      environment parsing behaviours), added `error_when_path_is_a_directory`
+      `crates/comenqd/src/config/tests/precedence.rs` (a precedence table plus
+      the restated-default defect; the final case count is recorded in the
+      later rework entries, which moved every environment case out), added
+      `error_when_path_is_a_directory`
       to `config/tests/configuration.rs` to pin v0.10.0's non-regular-file
       rejection, and added `crates/comenqd/tests/startup_contract.rs` (3 cases
       running the real binary to pin exit status and stream placement).
@@ -403,8 +404,8 @@ Thresholds that trigger escalation when breached.
       environment — so §5's own alternative, isolated child processes with
       controlled environments, is the only compliant route.
 - [x] (2026-10-27T00:15Z) Reworked the tests accordingly.
-      `crates/comenqd/src/config/tests/precedence.rs` now holds only
-      file-and-default tiers with no environment mutation;
+      `crates/comenqd/src/config/tests/precedence.rs` now holds only the file
+      and command-line tiers, with no environment mutation;
       `crates/comenqd/tests/config_environment.rs` (new) runs every
       environment case in a child that re-executes the test binary with
       `--exact` on one child body and a cleared, rebuilt environment. Dropped
@@ -415,11 +416,42 @@ Thresholds that trigger escalation when breached.
       links only system libraries).
 - [x] (2026-10-27T00:15Z) **Non-vacuity, measured with two seeded faults.**
       Deleting the `figment` merge line fails 5 of the 8 new cases — exactly
-      the environment ones — while the three file/default cases still pass.
+      the five environment ones — while the two file/default-tier cases and
+      the child body itself still pass.
       Swapping `Env` for `ortho_config::CsvEnv` fails exactly one:
       `comma_separated_token_files_are_not_split`, the error-becomes-a-working-
       pool regression the obligation exists for. `config.rs` was restored
       byte-identical to HEAD (`git diff --quiet`) after each mutation.
+- [x] (2026-10-27T01:40Z) **The first full gate run caught a host-dependent
+      test.** `make test` failed at `precedence.rs:85` on
+      `case_1_default_when_no_layer_sets_a_value`:
+      `left: "/run/user/1000/comenq/comenq.sock"`, `right:
+      "/run/comenq/comenq.sock"`. `Config`'s default socket path comes from
+      `comenq_transport::default_socket_path()`, which honours the ambient
+      `XDG_RUNTIME_DIR`, so a row asserting the bare `DEFAULT_SOCKET_PATH`
+      constant passes only on a host that leaves that variable unset. The
+      suggested repair was to reintroduce `EnvVarGuard::remove(...)` — the very
+      mutation §5 forbids — so instead the default tier was removed from the
+      in-process table and left to `config_environment.rs`, where the child's
+      environment is genuinely cleared. With `file_value` now always present,
+      `TierCase` lost its `Option` wrapper. Re-verified under the failing
+      condition: `XDG_RUNTIME_DIR=/run/user/1000 cargo nextest run … --lib
+      config::tests::precedence` gives 5/5 pass.
+- [x] (2026-10-27T02:10Z) Re-measured every obligation claim against the
+      reduced suite rather than carrying forward numbers from the superseded
+      design. All three seeded faults were re-run and `config.rs` restored
+      byte-identical after each: dropping the `socket_path` CLI override fails
+      only `case_2_command_line_overrides_file` (`left: "/tmp/file.sock"`,
+      `right: "/tmp/cli.sock"`); guarding the cooldown override with
+      `if secs != 960` fails only
+      `command_line_value_equal_to_the_default_still_wins` (`left: 10, right:
+      960`); and deleting the `figment` merge line fails exactly the five
+      environment child cases while the rest pass. The `CsvEnv` swap still
+      fails exactly `comma_separated_token_files_are_not_split`. This pass also
+      corrected two plan claims that had been asserted rather than measured —
+      an earlier draft said the restated-default control failed with `left:
+      20`, which stopped being true when its environment value moved into the
+      child harness. The measured value is `10`.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -663,7 +695,7 @@ Trace links:
 ```plaintext
 issue-237 §3  ->  EP-M1  ->  `cargo tree -i ortho_config` shows 0.10.0 from crates.io
 issue-237 §4  ->  EP-M2  ->  `config.rs` compiles on OrthoResult; `result_large_err` expectations removed
-issue-237 §5  ->  EP-M3  ->  file/default tiers in-process; environment tiers in an isolated child process
+issue-237 §5  ->  EP-M3  ->  file and CLI tiers in-process; default and environment tiers in a child
 issue-237 §6  ->  EP-M4  ->  full sequential gate run; baseline/migrated inventory comparison
 issue-237 §7  ->  EP-M5  ->  draft PR body with provenance, versions, applicability, results
 issue-237 §1  ->  EP-M0  ->  `docs/third-party-docs-provenance.md` checksum tables
@@ -680,46 +712,65 @@ and non-vacuity argument for each.
   file, a value in the environment, and a value on the command line, the
   effective value is the command-line value; without a command-line value it is
   the environment value; without that, the file value; without that, the
-  default. Method: one parameterized `rstest` case table with a row per tier,
-  over `socket_path`, plus the full-tuple test already present in
-  `apply_cli_overrides_preserves_unset_values_and_applies_set_values`.
+  default. The obligation is discharged across two artefacts, split by what a
+  process can control.
+
+  In-process (`config/tests/precedence.rs`): the file and command-line tiers,
+  as a two-row `rstest` table
+  `socket_path_resolves_to_the_highest_present_tier` with rows
+  `file_overrides_the_built_in_default` and `command_line_overrides_file`, plus
+  the full-tuple test already present in
+  `apply_cli_overrides_preserves_unset_values_and_applies_set_values`. The file
+  layer is always present because the daemon's configuration file is mandatory,
+  so only the command-line override is optional.
+
+  In a child process (`tests/config_environment.rs`): the environment tier and
+  the built-in-default tier. Neither can be reached in-process — Figment reads
+  the real environment, and the default is only observable when no layer
+  supplies a value, which a process whose `XDG_RUNTIME_DIR` is set cannot
+  promise. Rows: `defaults_apply_when_no_layer_sets_a_value`,
+  `file_overrides_default`, `environment_overrides_file`,
+  `environment_overrides_an_absent_file_value`.
+
   Rationale: the tiers are a finite, explicitly enumerated partition, so a
-  table is exhaustive for the claim, and one table makes the rows directly
-  comparable. Domain: `socket_path` (a `PathBuf`), with the other fields
-  covered by the named tests below. Artefact:
-  `socket_path_resolves_to_the_highest_present_tier` in
-  `config/tests/precedence.rs`, with rows `default_when_no_layer_sets_a_value`,
-  `file_overrides_default`, `environment_overrides_file`, and
-  `command_line_overrides_environment_and_file`. Evidence:
-  `cargo nextest run -p comenqd --all-features` passes, 11/11 in that module.
+  table is exhaustive for the claim, and one table per environment makes the
+  rows directly comparable. Domain: `socket_path` (a `PathBuf`), with the other
+  fields covered by the named tests below.
+
+  Evidence: `make test` passes, including all five in-process cases and all
+  eight child cases. The in-process table was re-run with
+  `XDG_RUNTIME_DIR=/run/user/1000` exported, the condition that originally
+  failed it, and still passes; the child cases clear the environment outright,
+  so they are host-independent by construction.
+
   Non-vacuity: every row supplies a distinct literal for each present tier, so
-  reading the wrong layer yields a wrong value rather than an accidental match;
-  and because an absent layer must be expressible, an omitted environment
-  variable is explicitly *removed* rather than left to whatever the developer's
-  shell happens to hold. Two negative controls were run and reverted. Removing
-  the `cli.socket_path` assignment entirely failed exactly
-  `case_4_command_line_overrides_environment_and_file` with
-  `left: "/tmp/env.sock", right: "/tmp/cli.sock"` — the environment value
-  leaking through in place of the command-line value, which is the wrong-tier
-  signal the rows exist to catch, with the other ten cases green. Separately,
-  guarding the cooldown assignment with `if secs != DEFAULT_COOLDOWN`
-  reproduced the v0.10.0 §2 defect: exactly one case failed,
+  reading the wrong layer yields a wrong value rather than an accidental match.
+  Two negative controls were run and reverted. Removing the `cli.socket_path`
+  assignment entirely failed exactly `case_2_command_line_overrides_file` with
+  `left: "/tmp/file.sock", right: "/tmp/cli.sock"` — the file value leaking
+  through in place of the command-line value, which is the wrong-tier signal
+  the rows exist to catch. Separately, guarding the cooldown assignment with
+  `if secs != 960` reproduced the v0.10.0 §2 defect: exactly one case failed,
   `command_line_value_equal_to_the_default_still_wins`, with
-  `assertion left == right failed, left: 20, right: 960`. Both mutations were
-  reverted and `config.rs` verified byte-identical.
+  `assertion left == right failed, left: 10, right: 960` — the file value
+  surviving because the guard suppressed the restated default. Both mutations
+  were reverted and `config.rs` verified byte-identical with `git diff --quiet`.
 
 - Obligation `INV-RESTATED-DEFAULT`: a command-line value equal to the
-  built-in default still wins over an environment value. Method: named unit
-  test. Rationale: this is precisely the v0.10.0 §2 defect, and it is one
-  concrete scenario, so a named test states the requirement better than a
-  table. Domain: file `cooldown_period_seconds=10`, environment
-  `COMENQD_COOLDOWN_PERIOD_SECONDS=20`, and `--cooldown-period-seconds 960`,
-  where `960` is exactly `DEFAULT_COOLDOWN`, expecting `960`. Artefact:
+  built-in default still wins over the file. Method: named unit test.
+  Rationale: this is precisely the v0.10.0 §2 defect, and it is one concrete
+  scenario, so a named test states the requirement better than a table. Domain:
+  file `cooldown_period_seconds=10` and `--cooldown-period-seconds 960`, where
+  `960` is exactly `DEFAULT_COOLDOWN`, expecting `960`. The environment value
+  the original scenario paired with it now lives in the child harness instead,
+  since setting it here would be the mutation §5 forbids. Artefact:
   `command_line_value_equal_to_the_default_still_wins` in
   `config/tests/precedence.rs`. Evidence: passes; it would fail if CLI
   overrides were conditioned on the value differing from the default, which the
-  negative control confirmed. Non-vacuity: the three candidate values are
-  mutually distinct (`960`, `20`, `10`), so a wrong tier choice is observable.
+  negative control confirmed. Non-vacuity: the two candidate values are distinct
+  (`960` against `10`), so a wrong tier choice is observable; the default and
+  the command line deliberately agree, which is the whole point — a working
+  "only override when different" guard would leave the file's `10` in place.
 
 - Obligation `INV-TOKENS`: the token selection order, the clearing rules, the
   64 KiB bound, the `${VAR}` expansion, and the duplicate rejection with no
@@ -817,9 +868,10 @@ and non-vacuity argument for each.
   separator and not a general inability to set the field from the environment.
 
   Non-vacuity, measured with two seeded faults. First, deleting the `figment`
-  merge line altogether makes 5 of the 8 cases fail — precisely the environment
-  cases — while the three file/default cases still pass, which is the correct
-  partition. Second, swapping `Env::prefixed(...).split("__")` for
+  merge line altogether makes 5 of the 8 cases fail — precisely the five
+  environment cases — while `defaults_apply_when_no_layer_sets_a_value`,
+  `file_overrides_default` and the child body itself still pass, which is the
+  correct partition. Second, swapping `Env::prefixed(...).split("__")` for
   `ortho_config::CsvEnv::prefixed(...).split("__")` makes exactly one case fail:
   `comma_separated_token_files_are_not_split`. That is the discriminator the
   obligation exists for — an error becoming a working two-token pool — and the
