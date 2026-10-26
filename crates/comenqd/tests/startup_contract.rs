@@ -38,6 +38,12 @@ fn run_daemon(config: &Path, extra: &[&str]) -> Output {
         .env_clear()
         .env("COMENQD_SOCKET_PATH", "/tmp/comenqd-contract-test.sock")
         .env("COMENQD_QUEUE_PATH", "/tmp/comenqd-contract-test-queue");
+    // `LLVM_PROFILE_FILE` is not configuration: `cargo llvm-cov` exports it to
+    // place each instrumented process's profile, and a child that loses it
+    // writes somewhere the collector is not reading. Forward only that.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command.args(extra);
     let child = command
         .stdout(Stdio::piped())

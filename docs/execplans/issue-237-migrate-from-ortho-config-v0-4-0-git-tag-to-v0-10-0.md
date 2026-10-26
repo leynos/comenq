@@ -492,6 +492,29 @@ Thresholds that trigger escalation when breached.
       cases green. `if secs != 960` fails exactly
       `command_line_cooldown_equal_to_the_default_still_wins` with `left: 10,
       right: 960`. `config.rs` restored byte-identical after each.
+- [x] (2026-10-27T05:40Z) **Fifth gate pass, at `c6ce5e6`** (`scrutineer`, ten
+      gates, strictly sequential): every gate exited 0, with `HEAD`, the
+      working tree and the `git diff` SHA-256 all identical before and after.
+      nextest **498/498**, 0 skipped; cucumber 11 features / 55 scenarios / 211
+      steps; markdownlint 39 files, 0 issues; spelling regenerated
+      `typos.toml` byte-identical; nixie 42 files; workflow contracts 198
+      passed. The run added no new tests, so 498 is the same total as the
+      fourth pass — the +17 over baseline is unchanged.
+- [x] (2026-10-27T06:50Z) **Fourth `coderabbit review --agent --base
+      origin/main` pass raised three findings, all correct. (a)** Both child
+      harnesses clear the environment, which also removes `LLVM_PROFILE_FILE`.
+      `cargo llvm-cov` exports that variable to place each instrumented
+      process's profile, and `.github/workflows/coverage-main.yml` runs the
+      suite that way, so a cleared child writes to the default location and
+      its coverage is silently dropped. Measured: with the forwarding removed,
+      `cargo llvm-cov nextest … binary(config_environment)` leaves exactly 7
+      stray `default_*.profraw` files in `crates/comenqd/` — one per spawned
+      child — and `binary(startup_contract)` leaves 3. With the forwarding
+      restored both leave 0 outside `target/llvm-cov-target`, and no test
+      verdict changes. **(b, c)** The plan's verification blocks piped each
+      gate into `tee` without `pipefail`, so a failing gate's status would be
+      replaced by `tee`'s and the sequence would continue; both blocks now
+      `set -o pipefail` and chain with `&&`.
 - [ ] Milestone EP-M5: push over SSH, open the draft pull request.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
@@ -1036,23 +1059,28 @@ Stage E (EP-M4 and EP-M5) runs the gates, requests the review, and delivers.
 Run every command from the worktree root.
 
 1. Format, then check, then lint, then typecheck, then test — sequentially,
-   each with a `tee` log:
+   each with a `tee` log. `pipefail` and `&&` matter here: without `pipefail` a
+   pipeline returns the status of its last command, which is `tee`, so a
+   failing gate would be reported as a success and the sequence would carry on
+   to the next one.
 
 ```console
-make fmt
-make check-fmt 2>&1 | tee /tmp/check-fmt-$(git branch --show-current).out
-make lint 2>&1 | tee /tmp/lint-$(git branch --show-current).out
-make typecheck 2>&1 | tee /tmp/typecheck-$(git branch --show-current).out
-make test 2>&1 | tee /tmp/test-$(git branch --show-current).out
+set -o pipefail
+make fmt &&
+  make check-fmt 2>&1 | tee /tmp/check-fmt-$(git branch --show-current).out &&
+  make lint 2>&1 | tee /tmp/lint-$(git branch --show-current).out &&
+  make typecheck 2>&1 | tee /tmp/typecheck-$(git branch --show-current).out &&
+  make test 2>&1 | tee /tmp/test-$(git branch --show-current).out
 ```
 
 1. Markdown-specific gates, which the migration also touches through the
-   ExecPlan and provenance documents:
+   ExecPlan and provenance documents. Same shape, same reason:
 
 ```console
-make spelling 2>&1 | tee /tmp/spelling-$(git branch --show-current).out
-make markdownlint 2>&1 | tee /tmp/markdownlint-$(git branch --show-current).out
-make nixie 2>&1 | tee /tmp/nixie-$(git branch --show-current).out
+set -o pipefail
+make spelling 2>&1 | tee /tmp/spelling-$(git branch --show-current).out &&
+  make markdownlint 2>&1 | tee /tmp/markdownlint-$(git branch --show-current).out &&
+  make nixie 2>&1 | tee /tmp/nixie-$(git branch --show-current).out
 ```
 
 1. Dependency evidence:

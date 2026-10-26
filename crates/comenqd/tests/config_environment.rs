@@ -76,6 +76,13 @@ const CHILD_BODY: &str = "child_loads_configuration_with_the_supplied_environmen
 /// The child's environment is rebuilt from scratch, so the only `COMENQD_*`
 /// variables in it are the ones a case sets. That total isolation is the
 /// point: a developer's own `COMENQD_*` settings cannot bend a verdict.
+///
+/// `LLVM_PROFILE_FILE` is the one exception, and it is not a configuration
+/// variable. `cargo llvm-cov` exports it to tell every instrumented process
+/// where its profile belongs; a child that does not receive it writes to the
+/// default location instead, which silently drops the child's coverage and
+/// litters the working directory. Forwarding it keeps the collector's output
+/// whole without letting anything else through.
 fn spawn_child(config: &Path, result: &Path, vars: &[(&str, &OsStr)]) -> Child {
     let mut command = Command::new(std::env::current_exe().expect("locate test binary"));
     command
@@ -84,6 +91,9 @@ fn spawn_child(config: &Path, result: &Path, vars: &[(&str, &OsStr)]) -> Child {
         .env(CHILD_MARKER, "1")
         .env(CHILD_CONFIG, config)
         .env(CHILD_RESULT, result);
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     for (key, value) in vars {
         command.env(key, value);
     }
