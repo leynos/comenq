@@ -555,6 +555,16 @@ Thresholds that trigger escalation when breached.
       cleared in `506d62d` and `52bdeff`. This pass also confirmed the value of
       sleeping a *real* 58 minutes: the same command that had been returning
       `rate_limit` for hours ran on the first attempt afterwards.
+- [x] (2026-10-27T03:31Z) **Remote CI green on `9ea79e5`.** `build-test` passed
+      in 15m43s, alongside four cross-architecture release builds
+      (`comenq`/`comenqd` for `x86_64` and `aarch64`) and `release / metadata`,
+      and `gh pr view --json mergeStateStatus` reports `CLEAN`. This matters
+      beyond corroborating the local gates: the release builds compile the
+      crate for two targets this machine does not run, so the dependency
+      repoint is confirmed against the registry source on a clean CI
+      toolchain, not only against the local Cargo cache. `CodeRabbit`,
+      `Kody Code Review` and `automerge` show `skipping` because the pull
+      request is a draft, and `Gecko Security Review` passed.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
       environment variables and CLI arguments, with CLI highest, then
