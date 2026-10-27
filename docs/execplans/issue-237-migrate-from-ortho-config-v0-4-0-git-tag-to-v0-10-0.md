@@ -584,6 +584,33 @@ Thresholds that trigger escalation when breached.
       merged, both because the change is unrelated to this issue and because
       merging it would restart the remote CI. PR #239 remains a draft with
       `Closes #237` and the session reference; not merged, not released.
+- [x] (2026-10-27T09:52Z) **Seventh and eighth CodeRabbit passes, on the
+      documentation corrections.** The seventh raised one finding, and it was
+      right: the v0.9.0 applicability row claimed this repository constructs
+      `OrthoError::Merge`, while the decision log three lines earlier explains
+      why `into_ortho_merge` is deliberately not adopted. Counting the
+      construction sites showed the row was wrong in a second way too — the
+      variants actually constructed are `File` twice and `Validation` three
+      times, with `Gathering` arriving by conversion from
+      `fig.extract().map_err(OrthoError::from)`; `Merge` appears nowhere in
+      `crates/`. The row is corrected and `Merge` is stated as never
+      constructed. The eighth pass, run after that fix, returned
+      `review_completed` with `findings: 0`, verified by parsing the events
+      individually (zero `finding` and zero `error` events across 35 files).
+      Eight passes in total, and every finding across all of them has been
+      cleared: two documentation corrections, the `LLVM_PROFILE_FILE`
+      forwarding, two `pipefail` defects, the bare `vsleep` instruction, the
+      upstream erratum, and this inventory.
+- [x] (2026-10-27T09:45Z) **A count error in an amended commit message, caught
+      before it was pushed.** The message first said `File` had five
+      construction sites and `Validation` four, because a raw `grep` count had
+      included matches inside doc comments (`token_resolution.rs:84` names
+      `OrthoError::Validation` in prose). Filtering to actual `Arc::new(...)`
+      construction gave `File` ×2 and `Validation` ×3, and the message was
+      amended before the push, so the erroneous figure never left this machine.
+      This is the same failure as the two in the 09:40Z entry and happened
+      within minutes of writing the lesson: the habit has to be to derive the
+      number at the moment of writing it, not to intend to check it later.
 - [x] (2026-10-27T09:40Z) **Two documentation inaccuracies found by re-deriving
       the PR body's numbers instead of trusting them**, both in text written
       earlier in this task and both the same species as the raised-default
