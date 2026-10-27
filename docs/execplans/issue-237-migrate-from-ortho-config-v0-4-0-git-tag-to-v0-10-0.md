@@ -566,10 +566,10 @@ Thresholds that trigger escalation when breached.
       `LLVM_PROFILE_FILE` forwarding, two `pipefail` defects, the bare
       `vsleep` instruction, and the upstream erratum. Nothing raised against
       the migration itself was ever outstanding.
-- [x] (2026-10-27T09:05Z) **Delivered head is `86cd8b1`**, pushed over SSH and
+- [x] (2026-10-27T09:05Z) **Delivered head is `e43c9cf`**, pushed over SSH and
       confirmed against the remote: `git ls-remote` reported
-      `86cd8b13e89c1995963a67f270b45d2e1c220aa4`, equal to `git rev-parse
-      HEAD`, after a `+`-prefixed tracking-ref refresh. The branch is 30 commits
+      `e43c9cf8fc8c74957393318e2865838d59476c2d`, equal to `git rev-parse
+      HEAD`, after a `+`-prefixed tracking-ref refresh. The branch is 32 commits
       ahead of `origin/main` and 1 behind it. The one missing commit is
       `43b11a1`, which touches five `.github/workflows/*.yml` files and
       overlaps this branch in no file at all; `git merge-tree` reports no
@@ -581,6 +581,25 @@ Thresholds that trigger escalation when breached.
       Markdown targets alone (`fmt`, `check-fmt`, `markdownlint`, `spelling`,
       `nixie`). PR #239 remains a draft with `Closes #237` and the session
       reference; not merged, not released.
+- [x] (2026-10-27T09:40Z) **Two documentation inaccuracies found by re-deriving
+      the PR body's numbers instead of trusting them**, both in text written
+      earlier in this task and both the same species as the raised-default
+      vacuity the plan already records: a claim that was never checked against
+      the artefact it described. The body said a single `fn` line was removed,
+      where `git diff` shows six removed and six added, pairing one for one as
+      `load`, `load_with_tokens`, `from_file`, `from_file_with_cli`,
+      `read_github_token_file` and `expand_env_prefix` each change only its
+      return type. It also described all eight `#[test]`s in
+      `config_environment.rs` as tier cases, where the eighth is the child body
+      the parent re-enters with `--exact` and is a no-op in an ordinary run.
+      Neither changed a verdict: the +17 total and every gate result stand,
+      because nextest counts the child body. What was wrong was the account of
+      *why* the numbers are what they are, which is exactly what a reviewer
+      uses to decide whether to trust the rest. Both are corrected in the PR
+      body, and the tier-case wording is corrected here in `INV-PRECEDENCE`.
+      Lesson: a count that appears in prose is a claim; derive it from the
+      diff or the log every time it is restated, and read the test files rather
+      than the test names.
 - [x] (2026-10-27T06:30Z) **CodeRabbit verification is quota-bound, and the
       retry harness had two defects of its own.** After the errata commit the
       review still could not run. Three separate problems were found and
