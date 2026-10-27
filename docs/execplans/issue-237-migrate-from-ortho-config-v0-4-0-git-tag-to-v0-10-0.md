@@ -555,6 +555,17 @@ Thresholds that trigger escalation when breached.
       cleared in `506d62d` and `52bdeff`. This pass also confirmed the value of
       sleeping a *real* 58 minutes: the same command that had been returning
       `rate_limit` for hours ran on the first attempt afterwards.
+- [x] (2026-10-27T07:16Z) **Sixth `coderabbit review --agent --base origin/main`
+      pass: clean.** `status: review_completed`, `findings: 0`, `outcome:
+      completed`, 35 files reviewed, and zero `finding` or `error` events in
+      the raw stream — verified by parsing the JSON events individually rather
+      than by grepping a summary line, because the earlier harness bug had
+      already produced one false "findings=0". This clears the `guide-policy-ci`
+      erratum finding from the fifth pass, and with it every concern raised
+      across all six passes: two documentation corrections, the
+      `LLVM_PROFILE_FILE` forwarding, two `pipefail` defects, the bare
+      `vsleep` instruction, and the upstream erratum. Nothing raised against
+      the migration itself was ever outstanding.
 - [x] (2026-10-27T06:30Z) **CodeRabbit verification is quota-bound, and the
       retry harness had two defects of its own.** After the errata commit the
       review still could not run. Three separate problems were found and
