@@ -584,6 +584,10 @@ Thresholds that trigger escalation when breached.
       merged, both because the change is unrelated to this issue and because
       merging it would restart the remote CI. PR #239 remains a draft with
       `Closes #237` and the session reference; not merged, not released.
+      **Superseded** by the 2026-10-27T08:27Z entry below: the decision not to
+      rebase was later overridden by an explicit instruction to do so, and the
+      reasoning recorded here — unrelated change, restarted CI — remains the
+      trade-off that instruction accepted knowingly.
 - [x] (2026-10-27T09:52Z) **Seventh and eighth CodeRabbit passes, on the
       documentation corrections.** The seventh raised one finding, and it was
       right: the v0.9.0 applicability row claimed this repository constructs
@@ -672,6 +676,66 @@ Thresholds that trigger escalation when breached.
       `test-support/src/workflow.rs` and the release and packaging BDD steps,
       which parse GitHub workflow YAML and have nothing to do with
       `ortho_config`.
+- [x] (2026-10-27T08:35Z) **Rebased onto `origin/main`.** This supersedes the
+      09:05Z decision to leave the branch one commit behind: an explicit
+      instruction to rebase overrode it, knowingly accepting the two costs
+      recorded there (an unrelated change entering the history, and the remote
+      CI restarting). The boundary was established before replaying anything.
+      `git merge-base origin/main HEAD` was `a781258`, which is exactly the
+      parent of the single incoming commit `43b11a1` ("Bump the shared-actions
+      group with 12 updates (#238)"), so `OLD_BASE` is `a781258`, the replay
+      range is its 36 linear commits, and `git rev-list --merges` reports zero
+      merges — this is the plain linear workflow, not a squash restack. A
+      `git merge-tree --write-tree HEAD origin/main` pre-check exited 0 with
+      tree `ebebf0d8`, so the conflict surface was predicted to be empty.
+      Recovery refs were created first under
+      `refs/backup/237-pre-rebase-{old-head,old-base,target}-20261027T082721Z`.
+      The **Weave merge driver was bypassed deliberately**. `git check-attr`
+      reported `merge: weave` for `*.rs`, but the rule lives only in
+      `~/.config/git/attributes` (`*.rs merge=weave` under an
+      "ANSIBLE MANAGED BLOCK - weave user-wide enrolment"), not in any tracked
+      `.gitattributes` — this repository has none, and no `.git/info/attributes`
+      either. That is ambient global configuration, not repository consent, and
+      the weave skill's unattended rule is to bypass it for a multi-commit
+      replay: the rebase ran with `-c core.attributesFile=/dev/null`. Had a
+      conflict needed `--continue`, the same `-c` override would have been
+      repeated on every continuation, because Git re-reads driver configuration
+      per replayed commit. Result: 36/36 commits replayed, zero conflicts, and
+      `range-diff` reports
+      every one of the 36 as `=` — identical patches, nothing dropped, nothing
+      collapsed to empty, nothing changed. The stronger check is that the final
+      tree `ebebf0d8` is **byte-identical to the `merge-tree` result computed
+      before the rebase**, which is an independent confirmation that replaying
+      the series produces exactly what a clean merge would have. The tree delta
+      against the old head is exactly the five `.github/workflows/*.yml` files,
+      and those are byte-identical to `origin/main`'s. Neither side touched
+      `Cargo.lock` or any manifest, so no lockfile resolution was needed and
+      the deliberate `ortho_config` 0.10.0 repoint survives untouched. In
+      `origin/main...HEAD` the workflow files drop out entirely, leaving 35
+      changed files — the same 35 the CodeRabbit passes reviewed. Two details
+      recorded so a later reader is not misled. First, the rebase
+      rewrote every **committer** date to the replay instant (author dates are
+      preserved), so `git log --format=%cd` now shows one timestamp for the
+      whole series; `%aI` still gives the real authoring times. Second, the
+      `Z`-suffixed timestamps throughout this plan are **local-clock readings**
+      labelled as UTC, not true UTC: at this moment `date -u` reads
+      `08:28:38Z` while a bare `date` reads `09:28:38+0100`, and the tip
+      commit's committer epoch `1793089645` agrees with `date -u`, so the
+      commits are right and this document's suffix is the thing that is off by
+      an hour. The timestamps are kept as written rather than rewritten, because
+      their ordering and spacing are what carry meaning; the offset is noted
+      here instead. **Gates.** The four targets the rebase instruction names
+      were run sequentially against the rebased tree, then the three Markdown
+      targets that cover the only edited file: `make check-fmt` pass
+      (`40 files left unchanged`), `make test` pass (nextest **498/498**, 0
+      skipped, across 19 binaries; cucumber **11 features / 55 scenarios / 211
+      steps**, summed across all eleven chunks), `make typecheck` pass,
+      `make lint` pass (zero clippy warnings, Whitaker dylint clean),
+      `make markdownlint` pass (39 files, 0 issues), `make spelling` pass
+      (`typos.toml` current), `make nixie` pass. The totals are identical to
+      the pre-rebase run, which is the point: the replay changed no patch, so
+      a changed total would have indicated a bad resolution. No gate modified a
+      tracked file.
 
 ## Surprises & discoveries
 
@@ -769,6 +833,26 @@ Thresholds that trigger escalation when breached.
   impossible to interpret correctly on a later reading. The `waitTime` figures
   themselves are a shared, contended pool, so a freed slot can also be taken by
   another user between polls; neither cause is a defect in this branch.
+
+- Observation: every `Z`-suffixed timestamp in this plan is a **local-clock
+  reading**, not UTC, so the whole document is one hour ahead of the truth
+  during BST. Evidence: at the moment of writing, `date -u` printed
+  `2026-10-27T08:28:38Z` while a bare `date` printed `09:28:38+0100`; the tip
+  commit's committer epoch `1793089645` equals the `date +%s` reading and
+  `date -u`, so the commits carry correct timestamps and only this document's
+  suffix is wrong. Impact: ordering and spacing between entries are unaffected,
+  so the timestamps are left as written rather than mass-rewritten; the offset
+  is now stated once here instead of silently misleading a later reader. The
+  habit that would have avoided it is to print `date -u` rather than `date`
+  when stamping a document that claims to be UTC.
+
+- Observation: `git rebase` rewrites the **committer** date of every replayed
+  commit to the replay instant while preserving the author date. Evidence:
+  after the 36-commit replay, `git log --format=%cd` reports one identical
+  timestamp across the whole series, while `%aI` still shows the original
+  authoring times spread over two days. Impact: any future check that infers
+  when the work happened must read the author date, not the committer date, or
+  it will conclude the entire branch was written in the same second.
 
 ## Decision log
 
@@ -882,6 +966,23 @@ Thresholds that trigger escalation when breached.
   `cargo orthohelp`. The provenance document is the right home because it is
   where a reader is already sent to check the import. Date/Author: 2026-10-27,
   migration agent.
+
+- Decision: rebase the branch onto `origin/main` at `43b11a1` rather than leave
+  it one commit behind, and do so with Git's built-in `zdiff3` merge machinery
+  rather than the Weave driver. Rationale: the rebase was instructed
+  explicitly, which overrides the earlier "unrelated to this issue" reasoning;
+  the resulting PR diff is unchanged at 35 files because main's five workflow
+  files drop out of `origin/main...HEAD`, so the repository's own contribution
+  is provably untouched. Weave was bypassed because its selection came only
+  from the global `~/.config/git/attributes` (`*.rs merge=weave`), not from any
+  tracked `.gitattributes` — this repository has none — and for an unattended
+  multi-commit replay ambient enrolment is not repository consent. The replay
+  therefore ran with `core.attributesFile=/dev/null` and
+  `merge.conflictStyle=zdiff3` passed as `-c` overrides. Idempotence: because
+  every patch was already applied and `--reapply-cherry-picks` keeps an
+  already-present commit rather than dropping it, the replay is deterministic;
+  the final tree matched the pre-computed `merge-tree` result exactly.
+  Date/Author: 2026-10-27, migration agent.
 
 ## Applicability matrix
 
