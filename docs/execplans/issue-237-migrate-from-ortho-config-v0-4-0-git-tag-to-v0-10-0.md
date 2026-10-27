@@ -1139,8 +1139,16 @@ coderabbit review --agent
 ```
 
 The SSH probe must report `Hi leynos!` before any push. If the CodeRabbit rate
-limit is hit, sleep `$(shuf -i 45-90 -n 1)` minutes with `vsleep` and retry in
-the foreground.
+limit is hit, retry in the foreground after a randomized cooldown:
+
+```console
+vsleep "$(shuf -i 45-90 -n 1)m"
+```
+
+The trailing `m` is required. `vsleep` reads a bare number as **seconds**, so
+omitting it turns a 45–90 minute cooldown into 45–90 seconds and the shared
+quota has no time to recover; see the corresponding entry under Surprises and
+discoveries.
 
 ## Idempotence and recovery
 
