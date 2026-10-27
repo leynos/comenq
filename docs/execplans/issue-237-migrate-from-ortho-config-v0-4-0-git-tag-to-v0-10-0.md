@@ -516,7 +516,29 @@ Thresholds that trigger escalation when breached.
       gate into `tee` without `pipefail`, so a failing gate's status would be
       replaced by `tee`'s and the sequence would continue; both blocks now
       `set -o pipefail` and chain with `&&`.
-- [ ] Milestone EP-M5: push over SSH, open the draft pull request.
+- [x] (2026-10-27T01:45Z) **Sixth gate pass, at `506d62d` — the delivered
+      HEAD** (`scrutineer`, ten gates, strictly sequential): every gate exited
+      0 with `HEAD` and the working tree verified identical before the first
+      gate, after `make fmt` and after `make markdownlint` (the two mutating
+      targets), and after the last. nextest **498/498**, 0 skipped; cucumber 11
+      features / 55 scenarios / 211 steps both standalone and embedded in `make
+      test`; markdownlint 39 files, 0 issues; spelling left `typos.toml`
+      unchanged rather than regenerating it; nixie "All diagrams validated
+      successfully"; workflow contracts 198 passed. Zero stray `*.profraw`
+      files outside `target/`. This pass exists because `52bdeff` and
+      `506d62d` both landed *after* the fifth pass at `c6ce5e6`, so the earlier
+      run no longer covered the delivered tree: `52bdeff` changed Rust in both
+      child harnesses, and the PR body's claim that ten gates validated the
+      final tree would otherwise have been false.
+- [x] (2026-10-27T01:50Z) **Milestone EP-M5 complete**: pushed over SSH with
+      `GIT_SSH_COMMAND=/usr/bin/ssh`, refreshed the tracking ref with a leading
+      `+` refspec, set the named upstream, and confirmed `git ls-remote`
+      reported `506d62d758c658f976f2741a0b074e48423a7c24`, equal to
+      `git rev-parse HEAD`, with `git log @{upstream}..HEAD` empty. Draft PR
+      **#239**, <https://github.com/leynos/comenq/pull/239>, base `main`, head
+      `issue-237-migrate-from-ortho-config-v0-4-0-git-tag-to-v0-10-0`,
+      `isDraft: true`, title including `(#237)`, body containing `Closes #237`
+      and the session reference. Not merged and not released, per the issue.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
       environment variables and CLI arguments, with CLI highest, then
@@ -611,6 +633,19 @@ Thresholds that trigger escalation when breached.
   `cargo tree -e features -i figment` after removal still lists both. Impact:
   the dependency is genuinely redundant and was removed rather than retained
   "for safety", which keeps the manifest honest.
+
+- Observation: `vsleep` takes a *suffix* for its unit, and a bare number means
+  **seconds**, not minutes. Evidence: `vsleep --help` prints
+  `s seconds (default), m minutes, h hours, d days`. Impact: every rate-limit
+  cooldown in this session written as `vsleep "$M"` for a 45–90 "minute" wait
+  actually slept 45–90 **seconds**, which is why the shared CodeRabbit quota
+  appeared never to recover: `waitTime` fell only from `2:42` to `0:18` across
+  roughly three minutes of real elapsed time while the log claimed hours. The
+  fix is `vsleep "${M}m"`. Recorded because the misleading log lines ("sleeping
+  72 minutes" followed one minute later by another round) are otherwise
+  impossible to interpret correctly on a later reading. The `waitTime` figures
+  themselves are a shared, contended pool, so a freed slot can also be taken by
+  another user between polls; neither cause is a defect in this branch.
 
 ## Decision log
 
