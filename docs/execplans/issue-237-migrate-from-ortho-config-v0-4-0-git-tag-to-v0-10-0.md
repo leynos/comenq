@@ -555,6 +555,25 @@ Thresholds that trigger escalation when breached.
       cleared in `506d62d` and `52bdeff`. This pass also confirmed the value of
       sleeping a *real* 58 minutes: the same command that had been returning
       `rate_limit` for hours ran on the first attempt afterwards.
+- [x] (2026-10-27T06:30Z) **CodeRabbit verification is quota-bound, and the
+      retry harness had two defects of its own.** After the errata commit the
+      review still could not run. Three separate problems were found and
+      fixed, each by measurement rather than assumption. **(a)** The detection
+      was wrong: a rate limit arrives as `{"type":"error","errorType":
+      "rate_limit"}`, not `{"type":"rate_limit"}`, so a loop grepping for the
+      latter recorded a rate-limited run as "REVIEW RAN, findings=0" — a
+      false clean verdict on a review that never happened. **(b)** `vsleep`
+      can return early under host load (load average ~13 on 6 cores while
+      several agents run gates), and an unguarded script then retries
+      immediately; the harness now computes an absolute target and keeps
+      sleeping until the wall clock passes it. **(c)** A background task is
+      killed when it reaches its time limit, which silently truncated one
+      round mid-wait. With all three fixed, a real 69-minute wait still
+      returned `waitTime: 8m27s`, which is the shared, contended pool and not
+      a defect in this branch; the retry continues. The lesson worth keeping
+      is that a *harness* which reports success without exercising the thing
+      it measures is the same failure this plan spends its Verification
+      section guarding against.
 - [x] (2026-10-27T03:31Z) **Remote CI green on `9ea79e5`.** `build-test` passed
       in 15m43s, alongside four cross-architecture release builds
       (`comenq`/`comenqd` for `x86_64` and `aarch64`) and `release / metadata`,
