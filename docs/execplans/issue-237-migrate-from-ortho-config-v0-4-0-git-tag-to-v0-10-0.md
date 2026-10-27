@@ -539,6 +539,22 @@ Thresholds that trigger escalation when breached.
       `issue-237-migrate-from-ortho-config-v0-4-0-git-tag-to-v0-10-0`,
       `isDraft: true`, title including `(#237)`, body containing `Closes #237`
       and the session reference. Not merged and not released, per the issue.
+- [x] (2026-10-27T01:54Z) **Fifth `coderabbit review --agent --base
+      origin/main` pass raised two findings, which are one real defect counted
+      twice**: the retry instruction in Plan of work still said
+      `vsleep "$(shuf -i 45-90 -n 1)"`. That is the very bug recorded under
+      Surprises at 01:45Z, left in place there while being documented
+      elsewhere — the entry explained the missing suffix without fixing the
+      command a reader would copy. Both findings were therefore correct, and
+      the instruction now passes the suffix explicitly and states why it is
+      required. No finding touched the migration itself; the review ran over
+      the full 33-file change set and returned nothing about the source, the
+      tests, the manifests, or the imported documents. The preceding
+      four findings (two documentation corrections, then the
+      `LLVM_PROFILE_FILE` forwarding and two `pipefail` defects) were all
+      cleared in `506d62d` and `52bdeff`. This pass also confirmed the value of
+      sleeping a *real* 58 minutes: the same command that had been returning
+      `rate_limit` for hours ran on the first attempt afterwards.
 - [x] (2026-10-26T15:40Z) Checked `docs/comenq-design.md:905-918`, which states
       that configuration merges `/etc/comenqd/config.toml`, `COMENQD_*`
       environment variables and CLI arguments, with CLI highest, then
