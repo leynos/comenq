@@ -927,11 +927,12 @@ and non-vacuity argument for each.
   fields covered by the named tests below.
 
   Evidence: `make test` passes, including all five in-process cases and all
-  eight child cases. The in-process table was re-run with
-  `XDG_RUNTIME_DIR=/run/user/1000` and six well-formed `COMENQD_*` variables
-  exported, and still passes; the child cases clear the environment outright
-  and pass 8/8 even with a malformed inherited variable set, so they are
-  host-independent by construction.
+  eight tests in the child harness — seven tier cases plus the child body the
+  parent re-enters with `--exact`, which is a no-op in an ordinary run. The
+  in-process table was re-run with `XDG_RUNTIME_DIR=/run/user/1000` and six
+  well-formed `COMENQD_*` variables exported, and still passes; the child
+  harness clears the environment outright and passes 8/8 even with a malformed
+  inherited variable set, so it is host-independent by construction.
 
   Known residual, measured rather than assumed: a *malformed* inherited
   `COMENQD_*` variable makes extraction fail before any override, so no tier is
