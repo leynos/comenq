@@ -566,21 +566,24 @@ Thresholds that trigger escalation when breached.
       `LLVM_PROFILE_FILE` forwarding, two `pipefail` defects, the bare
       `vsleep` instruction, and the upstream erratum. Nothing raised against
       the migration itself was ever outstanding.
-- [x] (2026-10-27T09:05Z) **Delivered head is `e43c9cf`**, pushed over SSH and
-      confirmed against the remote: `git ls-remote` reported
-      `e43c9cf8fc8c74957393318e2865838d59476c2d`, equal to `git rev-parse
-      HEAD`, after a `+`-prefixed tracking-ref refresh. The branch is 32 commits
-      ahead of `origin/main` and 1 behind it. The one missing commit is
-      `43b11a1`, which touches five `.github/workflows/*.yml` files and
-      overlaps this branch in no file at all; `git merge-tree` reports no
-      conflict. It was deliberately not merged, both because the change is
-      unrelated to this issue and because merging it would restart the remote
-      CI that has already gone green. The ten deterministic gates were last run
-      in full at `506d62d`; every commit after it touches only the ExecPlan and
+- [x] (2026-10-27T09:05Z) **Delivered tree.** The branch was pushed over SSH and
+      confirmed against the remote after a `+`-prefixed tracking-ref refresh,
+      with `git ls-remote` matching `git rev-parse HEAD` on each occasion. This
+      entry deliberately does **not** restate the tip SHA, because writing it
+      down changes it: four successive bookkeeping commits each recorded "the
+      delivered head is X" and each thereby made X stale, which is a fixed point
+      the plan cannot reach and should not chase. What is stable is stated
+      instead. The tree that the ten deterministic gates validated is
+      `506d62d`, and nothing after it changes code, tests or behaviour: every
+      later commit edits only this ExecPlan or
       `docs/third-party-docs-provenance.md`, and each was gated with the five
       Markdown targets alone (`fmt`, `check-fmt`, `markdownlint`, `spelling`,
-      `nixie`). PR #239 remains a draft with `Closes #237` and the session
-      reference; not merged, not released.
+      `nixie`). The branch is 1 commit behind `origin/main`: `43b11a1` touches
+      five `.github/workflows/*.yml` files, overlaps this branch in no file at
+      all, and `git merge-tree` reports no conflict. It was deliberately not
+      merged, both because the change is unrelated to this issue and because
+      merging it would restart the remote CI. PR #239 remains a draft with
+      `Closes #237` and the session reference; not merged, not released.
 - [x] (2026-10-27T09:40Z) **Two documentation inaccuracies found by re-deriving
       the PR body's numbers instead of trusting them**, both in text written
       earlier in this task and both the same species as the raised-default
@@ -599,7 +602,10 @@ Thresholds that trigger escalation when breached.
       body, and the tier-case wording is corrected here in `INV-PRECEDENCE`.
       Lesson: a count that appears in prose is a claim; derive it from the
       diff or the log every time it is restated, and read the test files rather
-      than the test names.
+      than the test names. The same discipline applies to hashes. Recording
+      "the delivered head is X" is self-refuting when the record is itself a
+      commit, so the entry above names the tree the gates validated instead and
+      lets `git log` answer for the tip.
 - [x] (2026-10-27T06:30Z) **CodeRabbit verification is quota-bound, and the
       retry harness had two defects of its own.** After the errata commit the
       review still could not run. Three separate problems were found and
