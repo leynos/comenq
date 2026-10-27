@@ -120,6 +120,37 @@ Every file in both tables was verified to round-trip: the bytes written were
 re-hashed after writing and compared against the hash of `git show` output for
 the same path, and all twenty matched.
 
+### Known upstream errata
+
+The imported copies are recorded byte for byte, so a defect in the pinned
+upstream text is preserved rather than corrected. Corrections are recorded here
+instead, so readers are not misled while the imported bytes and their hashes
+stay verifiable against `38812c56`.
+
+- `docs/ortho-config/docs/users-guide.md`, in the `guide-policy-ci` console
+  block under "Lint the declared behaviour", documents a CI recipe as two
+  sequential commands:
+
+  ```console
+  cargo orthohelp --check-agent-native --package my-cli --out-dir out
+  jq -e '.mode != "off"' out/policy-report.json
+  ```
+
+  The second command runs even when the first fails. On a deny-mode violation
+  `cargo orthohelp` both writes `out/policy-report.json` and exits non-zero,
+  and because that report then contains a mode other than `off`, the `jq` test
+  still succeeds — so a script made of these two lines, or a CI job using them,
+  finishes successfully despite the policy finding. Join them with `&&` (or run
+  under `set -e`) to keep the failure:
+
+  ```console
+  cargo orthohelp --check-agent-native --package my-cli --out-dir out &&
+    jq -e '.mode != "off"' out/policy-report.json
+  ```
+
+  This affects only the documentation's example. Nothing in this repository runs
+  `cargo orthohelp`, and the daemon's own behaviour is unaffected.
+
 ### Reproducing the import
 
 Every listed entry in `docs/ortho-config/examples-hello-world-files.txt`
