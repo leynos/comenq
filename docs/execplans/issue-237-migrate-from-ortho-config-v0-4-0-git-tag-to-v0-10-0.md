@@ -761,6 +761,21 @@ Thresholds that trigger escalation when breached.
   is not needed to make the build work; it is noted as a follow-up rather than
   done here. Date/Author: 2026-10-26, migration agent.
 
+- Decision: record the `guide-policy-ci` defect as a **local erratum in
+  `docs/third-party-docs-provenance.md`**, not as an edit to the imported
+  `docs/ortho-config/docs/users-guide.md`. Rationale: issue #237 §1 requires
+  the five authoritative documents to be imported byte for byte, and every one
+  is hash-verified against `38812c56`; correcting the prose would break the
+  invariant the issue exists to establish and would make the recorded SHA-256
+  wrong. The defect is real — the documented CI recipe runs
+  `jq -e '.mode != "off"'` as a separate command, and on a deny-mode violation
+  `cargo orthohelp` both emits the report and exits non-zero, so the `jq` test
+  succeeds on that report and the script exits 0 despite the finding. It
+  affects only the upstream example, not this repository, which never runs
+  `cargo orthohelp`. The provenance document is the right home because it is
+  where a reader is already sent to check the import. Date/Author: 2026-10-27,
+  migration agent.
+
 ## Applicability matrix
 
 Every row of the v0.10.0 migration guide's "Impact at a glance" table plus
