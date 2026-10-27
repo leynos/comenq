@@ -141,9 +141,10 @@ Thresholds that trigger escalation when breached.
   `string` feature, and `ortho_config_macros`), and that graph may raise
   effective minimum versions or add a `link`-conflicting crate. Severity:
   medium. Likelihood: medium. Mitigation: a targeted
-  `cargo update -p ortho_config --precise 0.10.0`, then
-  `cargo tree -i ortho_config` and `cargo tree -i figment` compared with the
-  baseline trees recorded below. Any unrelated churn in `Cargo.lock` is
+  `cargo update -p ortho_config` once the manifest no longer names the Git
+  source (see EP-M1 — `--precise 0.10.0` fails while the lockfile still does),
+  then `cargo tree -i ortho_config` and `cargo tree -i figment` compared with
+  the baseline trees recorded below. Any unrelated churn in `Cargo.lock` is
   explained commit-by-commit rather than accepted silently.
 - Risk: two `figment` versions could end up in the graph, one from
   `ortho_config` and one direct, producing a type-identity mismatch on
@@ -1016,9 +1017,13 @@ ortho_config = { git = "https://github.com/leynos/ortho-config.git", tag = "v0.4
 
 with the workspace's existing caret convention, `ortho_config = "0.10.0"`.
 `crates/comenqd/Cargo.toml:26` inherits via `workspace = true` and needs no
-change. Then run `cargo update -p ortho_config --precise 0.10.0` and inspect
-the lockfile delta. Commit the manifests and the lockfile together, and record
-the before/after trees in this plan.
+change. Then run `cargo update -p ortho_config` and inspect the lockfile delta.
+Do *not* add `--precise 0.10.0`: while the lockfile still keys the package to
+the Git source, `--precise` resolves against that source and fails with
+`revspec '0.10.0' not found`, as recorded under EP-M1 above. Confirm afterwards
+that `cargo tree -i ortho_config` reports a single `v0.10.0` from the registry.
+Commit the manifests and the lockfile together, and record the before/after
+trees in this plan.
 
 Stage C (EP-M2) migrates the source. In `crates/comenqd/src/config.rs`: replace
 the five `Result<_, ortho_config::OrthoError>` signatures with
@@ -1104,8 +1109,8 @@ the foreground.
 
 ## Idempotence and recovery
 
-Every step here is re-runnable. `cargo update -p ortho_config --precise 0.10.0`
-is idempotent once applied; if the graph needs to be undone,
+Every step here is re-runnable. `cargo update -p ortho_config` is idempotent
+once applied; if the graph needs to be undone,
 `git checkout Cargo.lock Cargo.toml` restores the baseline because both are
 tracked. The provenance document and the imported documents are add-only; a
 mistaken edit to an imported file is detected by re-running the SHA-256 table
@@ -1198,7 +1203,7 @@ redundant direct `figment` dependency was removed; and eight
 pointer-sized. Behaviour is preserved, and the preservation is argued from
 evidence rather than from the diff: cucumber totals are byte-identical to
 baseline at 11 features / 55 scenarios / 211 steps, nextest went from 481 to
-494 passing tests with the 13 additions accounted for, the 22 token tests were
+498 passing tests with all 17 additions accounted for, the 22 token tests were
 carried across with an empty diff, and the real binary still exits 1 with an
 empty standard output and a `color_eyre` report on standard error.
 
