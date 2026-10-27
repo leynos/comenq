@@ -566,6 +566,21 @@ Thresholds that trigger escalation when breached.
       `LLVM_PROFILE_FILE` forwarding, two `pipefail` defects, the bare
       `vsleep` instruction, and the upstream erratum. Nothing raised against
       the migration itself was ever outstanding.
+- [x] (2026-10-27T09:05Z) **Delivered head is `86cd8b1`**, pushed over SSH and
+      confirmed against the remote: `git ls-remote` reported
+      `86cd8b13e89c1995963a67f270b45d2e1c220aa4`, equal to `git rev-parse
+      HEAD`, after a `+`-prefixed tracking-ref refresh. The branch is 30 commits
+      ahead of `origin/main` and 1 behind it. The one missing commit is
+      `43b11a1`, which touches five `.github/workflows/*.yml` files and
+      overlaps this branch in no file at all; `git merge-tree` reports no
+      conflict. It was deliberately not merged, both because the change is
+      unrelated to this issue and because merging it would restart the remote
+      CI that has already gone green. The ten deterministic gates were last run
+      in full at `506d62d`; every commit after it touches only the ExecPlan and
+      `docs/third-party-docs-provenance.md`, and each was gated with the five
+      Markdown targets alone (`fmt`, `check-fmt`, `markdownlint`, `spelling`,
+      `nixie`). PR #239 remains a draft with `Closes #237` and the session
+      reference; not merged, not released.
 - [x] (2026-10-27T06:30Z) **CodeRabbit verification is quota-bound, and the
       retry harness had two defects of its own.** After the errata commit the
       review still could not run. Three separate problems were found and
