@@ -8,7 +8,9 @@
 //! their newline in the 64 KiB [`MAX_AWAIT_FRAME_BYTES`] limit. Idle waits send a
 //! heartbeat at least every [`AWAIT_HEARTBEAT_SECS`] seconds; clients allow
 //! [`AWAIT_IDLE_TIMEOUT_SECS`] seconds between complete frames. A disconnected
-//! wait never cancels the entry or changes its posting schedule.
+//! wait never cancels the entry or changes its posting schedule. A client
+//! treats an unterminated one-shot [`Response::Error`] in place of the first
+//! frame as a rejection by a daemon that does not support await.
 
 use serde::{Deserialize, Serialize};
 

@@ -24,6 +24,19 @@ processing unchanged; a later `await` can still return the URL.
 
 ## Queue and history compatibility
 
+`comenq` and `comenqd` must come from the same release. A newer client that
+sends `await` to an older daemon receives the daemon's one-shot rejection
+instead of a countdown, where `{message}` is the daemon's decode error such as
+``invalid request: unknown variant `await` ``:
+
+```text
+daemon rejected the await request: {message} (comenqd may predate await; run comenq and comenqd from the same release)
+```
+
+Restart `comenqd` from the matching build, then retry the command. If the
+daemon closes the connection without replying, the client reports a possible
+protocol mismatch and asks for the same matching release.
+
 No manual queue or history conversion is required. Startup migrates lifetime
 metadata for older queued entries before the worker claims them. The daemon
 maintains deletion markers automatically so a reused identifier cannot reveal
