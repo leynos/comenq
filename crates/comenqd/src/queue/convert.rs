@@ -4,7 +4,7 @@
 //! protocol types know nothing of either. These free functions keep every
 //! translation in the adapter layer so no representation leaks across a port.
 
-use comenq_domain::{ClaimToken, Comment, EntryId, EntryLifetime, QueuedEntry};
+use comenq_domain::{ClaimToken, Comment, EntryId, EntryLifetime, QueuedEntry, ScheduledEntry};
 use comenq_lib::CommentRequest;
 
 use crate::store::{StoreError, StoredEntry};
@@ -72,4 +72,9 @@ pub(crate) fn stored_from_queued(entry: &QueuedEntry) -> StoredEntry {
             .map(|token| token.as_str().to_owned()),
         request: request_from_comment(&entry.comment),
     }
+}
+
+/// Convert a scheduled domain entry back to the stored tuple shape.
+pub(crate) fn stored_schedule(scheduled: ScheduledEntry) -> (StoredEntry, u64) {
+    (stored_from_queued(&scheduled.entry), scheduled.eta_seconds)
 }
