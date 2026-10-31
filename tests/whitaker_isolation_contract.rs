@@ -32,8 +32,10 @@ fn whitaker_line() -> String {
         .args(["-n", "-B", "lint"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default();
+        .map_or_else(
+            |_| String::new(),
+            |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+        );
     output
         .lines()
         .find(|line| {
