@@ -378,6 +378,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comenq-domain"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "comenq-lib"
 version = "0.1.0"
 dependencies = [
