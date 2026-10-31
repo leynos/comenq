@@ -1,59 +1,90 @@
-//! Queue scheduling and atomic enqueue projection.
+//! Compatibility wrappers that run queue policy through the domain service.
+//!
+//! The store no longer decides ordering, floors, claims or ETAs. These
+//! synchronous methods exist so the persistence layer and its tests can drive
+//! the domain service with an explicit clock instant and flutter sample while
+//! holding the caller's queue lock.
 
-use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
-use crate::store::MAX_QUEUE_ENTRIES;
+use comenq_domain::{
+    FlutterSampler, PutComment, QueueError, QueuePolicy, QueueService, ScheduledEntry, WallClock,
+};
 use comenq_lib::CommentRequest;
 use uuid::Uuid;
+
+use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
+use crate::queue::convert::{comment_from_request, stored_from_queued};
+
+/// Clock fixed at the instant supplied by a synchronous store operation.
+#[derive(Debug, Clone, Copy)]
+struct FixedClock(u64);
+
+impl WallClock for FixedClock {
+    fn unix_now(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Sampler returning the caller's already-sampled flutter delay.
+#[derive(Debug, Clone, Copy)]
+struct FixedFlutter(u64);
+
+impl FlutterSampler for FixedFlutter {
+    fn sample(&self, maximum: u64) -> u64 {
+        self.0.min(maximum)
+    }
+}
+
+/// Compose a domain service over the store with fixed time and flutter.
+fn domain_service(
+    store: &QueueStore,
+    now: u64,
+    cooldown: u64,
+    flutter_seconds: u64,
+) -> QueueService<&QueueStore, FixedClock, FixedFlutter> {
+    QueueService::new(
+        store,
+        FixedClock(now),
+        FixedFlutter(flutter_seconds),
+        QueuePolicy::new(cooldown, flutter_seconds),
+    )
+}
+
+/// Collapse a domain error back into the store's historical error enum.
+pub(crate) fn store_error_from_queue(error: QueueError<StoreError>) -> StoreError {
+    match error {
+        QueueError::UnknownIdentifier(id) => StoreError::UnknownId(id),
+        QueueError::InvalidIdentifier(error) => StoreError::InvalidId(error.value().to_owned()),
+        QueueError::InvalidRepositoryComponent(field) => {
+            StoreError::InvalidRepositoryComponent(field)
+        }
+        QueueError::Repository(error) => error,
+    }
+}
+
+/// Convert a scheduled domain entry back to the stored tuple shape.
+fn stored_schedule(scheduled: ScheduledEntry) -> (StoredEntry, u64) {
+    (stored_from_queued(&scheduled.entry), scheduled.eta_seconds)
+}
 
 impl QueueStore {
     /// Enqueue `request` and return the persisted entry with its stable ETA.
     ///
-    /// Every fallible scheduling read happens before the entry is written, so
-    /// a response-projection error never leaves an unannounced queue entry.
+    /// Every fallible scheduling read happens inside the domain service before
+    /// the entry is written, so a projection error never leaves an unannounced
+    /// queue entry.
     pub fn put_with_eta(
         &self,
         request: CommentRequest,
         options: &PutOptions,
         now: u64,
     ) -> Result<(StoredEntry, u64)> {
-        let (id, existing) = self.resolve_entry_id(&request, now)?;
-        let (mut entries, usage) = self.entries_with_usage()?;
-        let previous_activity = self.previous_activity()?;
-        if let Some(entry) = existing {
-            let eta = projected_schedule(entries, previous_activity, options.cooldown, now)
-                .into_iter()
-                .find(|(scheduled, _)| scheduled.id == entry.id)
-                .map_or(0, |(_, eta)| eta);
-            return Ok((entry, eta));
-        }
-        if entries.len() >= MAX_QUEUE_ENTRIES {
-            return Err(StoreError::QueueFull(MAX_QUEUE_ENTRIES));
-        }
-
-        let entry = StoredEntry {
-            id,
-            incarnation: Uuid::new_v4().to_string(),
-            order: entries
-                .last()
-                .map_or(0, |tail| tail.order.saturating_add(1)),
-            flutter_seconds: options.flutter_seconds,
-            enqueued_at: now,
-            not_before: if options.immediate {
-                0
-            } else {
-                now.saturating_add(options.cooldown)
-                    .saturating_add(options.flutter_seconds)
-            },
-            claim_token: None,
-            request,
-        };
-        entries.push(entry.clone());
-        let eta = projected_schedule(entries, previous_activity, options.cooldown, now)
-            .into_iter()
-            .find(|(scheduled, _)| scheduled.id == entry.id)
-            .map_or(0, |(_, eta)| eta);
-        self.write_entry_with_usage(&entry, usage)?;
-        Ok((entry, eta))
+        let scheduled = domain_service(self, now, options.cooldown, options.flutter_seconds)
+            .put(PutComment {
+                comment: comment_from_request(&request),
+                immediate: options.immediate,
+            })
+            .map_err(store_error_from_queue)?;
+        Ok(stored_schedule(scheduled))
     }
 
     /// Enqueue `request` at the tail using its supplied flutter sample.
@@ -69,65 +100,59 @@ impl QueueStore {
 
     /// Pending entries paired with their estimated seconds-until-post.
     pub fn schedule(&self, cooldown: u64, now: u64) -> Result<Vec<(StoredEntry, u64)>> {
-        Ok(projected_schedule(
-            self.entries()?,
-            self.previous_activity()?,
-            cooldown,
-            now,
-        ))
+        Ok(domain_service(self, now, cooldown, 0)
+            .schedule()
+            .map_err(store_error_from_queue)?
+            .into_iter()
+            .map(stored_schedule)
+            .collect())
     }
 
     /// The head entry and its estimated seconds-until-post, when any.
     pub fn next_due(&self, cooldown: u64, now: u64) -> Result<Option<(StoredEntry, u64)>> {
-        let schedule = self.schedule(cooldown, now)?;
-        if schedule
-            .iter()
-            .any(|(entry, _)| entry.claim_token.is_some())
-        {
-            return Ok(None);
-        }
-        Ok(schedule.into_iter().next())
+        Ok(domain_service(self, now, cooldown, 0)
+            .next_due()
+            .map_err(store_error_from_queue)?
+            .map(stored_schedule))
     }
 
     /// Claim a due entry while holding the store lock for the whole transition.
     pub fn claim_next_due(&self, cooldown: u64, now: u64) -> Result<Option<(StoredEntry, u64)>> {
-        let Some((mut entry, wait_seconds)) = self.next_due(cooldown, now)? else {
-            return Ok(None);
-        };
-        if wait_seconds > 0 {
-            return Ok(Some((entry, wait_seconds)));
-        }
-        entry.claim_token = Some(Uuid::new_v4().to_string());
-        self.write_entry(&entry)?;
-        Ok(Some((entry, 0)))
+        Ok(domain_service(self, now, cooldown, 0)
+            .claim_next_due()
+            .map_err(store_error_from_queue)?
+            .map(stored_schedule))
     }
 
     /// Release a failed post's claim so the worker can retry it later.
+    ///
+    /// A missing entry or stale token is accepted as a no-op.
     pub fn release_claim(&self, id: &str, claim_token: &str, attempted_at: u64) -> Result<()> {
-        let mut entry = match self.find(id) {
-            Ok(entry) => entry,
-            Err(StoreError::UnknownId(_)) => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        if entry.claim_token.as_deref() == Some(claim_token) {
-            let latest_attempt = self.last_attempt()?.unwrap_or(0).max(attempted_at);
-            self.write_atomic(
-                &self.last_attempt_path,
-                latest_attempt.to_string().as_bytes(),
-            )?;
-            entry.claim_token = None;
-            self.write_entry(&entry)?;
-        }
-        Ok(())
+        domain_service(self, attempted_at, 0, 0)
+            .release_claim(id, claim_token)
+            .map(|_| ())
+            .map_err(store_error_from_queue)
     }
 
-    /// Latest completed post or failed attempt, used as the cooldown anchor.
-    fn previous_activity(&self) -> Result<Option<u64>> {
-        Ok(self
-            .last_post()?
-            .into_iter()
-            .chain(self.last_attempt()?)
-            .max())
+    /// Move the identified entry to the head of the queue.
+    pub fn bump(&self, id: &str) -> Result<()> {
+        domain_service(self, 0, 0, 0)
+            .bump(id)
+            .map_err(store_error_from_queue)
+    }
+
+    /// Move the identified entry to the tail of the queue.
+    pub fn bust(&self, id: &str) -> Result<()> {
+        domain_service(self, 0, 0, 0)
+            .bust(id)
+            .map_err(store_error_from_queue)
+    }
+
+    /// Remove the identified entry from the queue.
+    pub fn del(&self, id: &str) -> Result<()> {
+        domain_service(self, 0, 0, 0)
+            .del(id)
+            .map_err(store_error_from_queue)
     }
 
     /// Clear interrupted claims and assign stable lifetimes to legacy entries.
@@ -151,29 +176,4 @@ impl QueueStore {
         self.reconcile_completion()?;
         self.reclaim_claims()
     }
-}
-
-/// Project ordered entries onto their earliest posting times.
-///
-/// The input entries must already be in posting order; each projected time is
-/// constrained by the previous post, the entry's stored floor, and `now`.
-fn projected_schedule(
-    entries: Vec<StoredEntry>,
-    mut previous_post: Option<u64>,
-    cooldown: u64,
-    now: u64,
-) -> Vec<(StoredEntry, u64)> {
-    entries
-        .into_iter()
-        .map(|entry| {
-            let due = previous_post.map_or(now, |previous| {
-                previous
-                    .saturating_add(cooldown)
-                    .saturating_add(entry.flutter_seconds)
-            });
-            let post_at = due.max(entry.not_before).max(now);
-            previous_post = Some(post_at);
-            (entry, post_at.saturating_sub(now))
-        })
-        .collect()
 }
