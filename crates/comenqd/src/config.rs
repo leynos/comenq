@@ -67,12 +67,17 @@ pub struct Config {
     pub github_token_files: Vec<PathBuf>,
     /// Path to the Unix Domain Socket.
     ///
-    /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
-    /// directory is available, falling back to the system-wide path
-    /// otherwise. The default is supplied by the loader as its lowest
-    /// precedence layer, so an injected environment can resolve it without
-    /// reading the process environment. See
+    /// The loader supplies an environment-aware default as its lowest
+    /// precedence layer: `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user
+    /// runtime directory is available, falling back to the system-wide path.
+    /// An injected environment therefore resolves the default without reading
+    /// the process environment. See
     /// [`comenq_transport::default_socket_path_with_env`].
+    ///
+    /// Direct Serde deserialization uses the deterministic system-wide
+    /// [`comenq_transport::DEFAULT_SOCKET_PATH`]; it deliberately does not
+    /// consult the process environment.
+    #[serde(default = "system_socket_path")]
     pub socket_path: PathBuf,
     /// Directory for the persistent queue.
     #[serde(default = "default_queue_path")]
@@ -199,6 +204,15 @@ struct CliArgs {
     /// Override GitHub API timeout (seconds).
     #[arg(long)]
     github_api_timeout_secs: Option<u64>,
+}
+
+/// Deterministic socket path for direct Serde deserialization.
+///
+/// The loader replaces this with an environment-aware value; using the
+/// process environment here would reintroduce the ambient read that the
+/// injected-provider design removes.
+fn system_socket_path() -> PathBuf {
+    PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)
 }
 
 fn default_queue_path() -> PathBuf {

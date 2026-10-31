@@ -149,6 +149,11 @@ mutating process-wide variables. The loader reads only the documented upper-case
 `COMENQD_<FIELD>` names, so differently cased variables are ignored. The
 `${VAR}` token-path expansion also uses the injected provider.
 
+The loader always injects `socket_path` as its lowest-precedence Figment layer,
+resolved through that provider. Direct Serde deserialization of `Config`
+instead falls back to the deterministic system-wide
+`comenq_transport::DEFAULT_SOCKET_PATH`; it never reads the process environment.
+
 Public `_with_env` variants expose the same seam: `comenq::run_with_env`,
 `comenq::Args::socket_candidates_with_env`, and
 `Config::github_tokens_with_env`. Their production wrappers pass

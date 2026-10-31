@@ -315,6 +315,19 @@ fn default_socket_path_uses_runtime_dir() {
     );
 }
 
+/// Direct deserialization must not read `XDG_RUNTIME_DIR` from the process
+/// environment; only the loader supplies the environment-aware default.
+#[test]
+fn direct_deserialization_uses_system_socket_path() {
+    let cfg: Config = serde_json::from_value(serde_json::json!({ "github_token": "abc" }))
+        .expect("deserialize config without socket_path");
+
+    assert_eq!(
+        cfg.socket_path,
+        PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)
+    );
+}
+
 /// CLI arguments should take precedence over environment variables
 /// and configuration file values when building the daemon `Config`.
 #[rstest]

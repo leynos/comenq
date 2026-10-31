@@ -917,9 +917,11 @@ Only the documented upper-case `COMENQD_<FIELD>` names are read, so differently
 cased variables no longer override configuration. The `${VAR}` token-path
 expansion uses the same provider. Missing optional fields are replaced with
 defaults. The daemon socket default is resolved through the provider and sits
-below the file layer; a non-Unicode `XDG_RUNTIME_DIR` is treated as absent, so
-the system socket is used. Configuration fails unless it can resolve either a
-non-empty `github_token_files` pool or a usable single token. A non-empty
+below the file layer; direct Serde deserialization without `socket_path` falls
+back to the system path without reading the process environment. A non-Unicode
+`XDG_RUNTIME_DIR` is treated as absent, so the system socket is used.
+Configuration fails unless it can resolve either a non-empty
+`github_token_files` pool or a usable single token. A non-empty
 `github_token_files` pool takes precedence over the single-token settings;
 every listed file is checked at startup. Otherwise, `github_token_file` is read
 at startup and its trimmed contents take precedence over the configured token
