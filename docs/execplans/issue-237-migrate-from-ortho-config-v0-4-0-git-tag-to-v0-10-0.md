@@ -899,6 +899,21 @@ Thresholds that trigger escalation when breached.
      `9961ed4`; that attribution is unchanged above. Documentation gates were
      re-run for the corrected text.
 
+- [x] (2026-10-31) **Babysitting: both assessments clear for `af964c9`.** The
+      correction reply
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6544215563>)
+      confirmed all four fixes by line and retained the implementation verdict
+      and the proof-scrutiny `not applicable` conclusion. Its own scope check
+      found exactly one commit after `c9849f6`, touching only this plan, and
+      confirmed no implementation, test, dependency, workflow or
+      imported-document file changed. Both prerequisites in the assessment
+      reference are therefore discharged for the current candidate: the
+      implementation assessment holds, and proof scrutiny is justified as not
+      applicable. The outstanding conditions named in the replies are
+      operational rather than textual — the hosted checks must conclude green
+      on this head, and integration with newer `main` stays unverified until a
+      merged tree is validated.
+
 ## Surprises & discoveries
 
 - Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
