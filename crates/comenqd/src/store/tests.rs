@@ -1,7 +1,9 @@
 //! Tests for the reorderable persistent queue store.
 
-use super::{PutOptions, QueueStore, StoreError, StoredEntry, entry_id};
+use super::{PutOptions, QueueStore, StoreError, StoredEntry};
+use crate::queue::convert::comment_from_request;
 use crate::store::MAX_QUEUE_ENTRIES;
+use comenq_domain::derive_entry_id;
 use comenq_lib::CommentRequest;
 use rstest::rstest;
 use std::fs;
@@ -14,6 +16,13 @@ fn request(body: &str) -> CommentRequest {
         pr_number: 7,
         body: body.into(),
     }
+}
+
+/// Derive the identifier the way the domain service does at enqueue time.
+fn entry_id(request: &CommentRequest, enqueued_at: u64) -> String {
+    derive_entry_id(&comment_from_request(request), enqueued_at)
+        .as_str()
+        .to_owned()
 }
 
 fn open_store(dir: &TempDir) -> QueueStore {
