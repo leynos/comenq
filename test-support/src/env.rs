@@ -56,3 +56,25 @@ where
 
     env
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the mock environment helper.
+
+    use super::mock_env;
+    use mockable::Env as _;
+    use std::{env::VarError, ffi::OsString, path::PathBuf};
+
+    /// Every accessor must read the same map so tests can mix access styles.
+    #[test]
+    fn mock_env_reads_every_supported_accessor_from_the_same_map() {
+        let env = mock_env([("KEY", "value")]);
+
+        assert_eq!(env.string("KEY").as_deref(), Some("value"));
+        assert_eq!(env.os_string("KEY"), Some(OsString::from("value")));
+        assert_eq!(env.path_buf("KEY"), Some(PathBuf::from("value")));
+        assert_eq!(env.raw("KEY"), Ok("value".to_owned()));
+        assert_eq!(env.raw("MISSING"), Err(VarError::NotPresent));
+        assert_eq!(env.all().get("KEY").map(String::as_str), Some("value"));
+    }
+}

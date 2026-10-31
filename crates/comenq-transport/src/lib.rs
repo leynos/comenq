@@ -134,12 +134,24 @@ mod tests {
     //! Unit tests for shared socket transport policy.
 
     use super::{
-        DEFAULT_SOCKET_PATH, default_socket_path_with_env, socket_candidates_with_env,
-        user_socket_path_with_env,
+        DEFAULT_SOCKET_PATH, default_socket_path, default_socket_path_with_env, socket_candidates,
+        socket_candidates_with_env, user_socket_path, user_socket_path_with_env,
     };
     use rstest::rstest;
     use std::path::PathBuf;
     use test_support::mock_env;
+
+    /// The ambient wrappers delegate to the default environment; their
+    /// injected variants are used elsewhere for controlled values.
+    #[test]
+    fn ambient_wrappers_delegate_to_the_default_environment() {
+        assert!(user_socket_path().is_none_or(|path| path.is_absolute()));
+        assert!(default_socket_path().is_absolute());
+        assert_eq!(
+            socket_candidates().last(),
+            Some(&PathBuf::from(DEFAULT_SOCKET_PATH))
+        );
+    }
 
     #[rstest]
     #[case::unset(vec![])]

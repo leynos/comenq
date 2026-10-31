@@ -29,9 +29,9 @@ pub(super) const ENV_OVERRIDE_FIELDS: [&str; 9] = [
 
 /// Lowest-precedence provider for [`super::Config::socket_path`].
 ///
-/// Figment must see a value because removing the serde default made the field
-/// mandatory. Supplying it as a provider keeps the environment-dependent
-/// default below the file and environment layers.
+/// Supplying the environment-aware default as a provider keeps it below the
+/// file and environment layers. Serde's static fallback only applies to
+/// direct deserialization that bypasses the loader.
 pub(super) fn socket_path_defaults(env: &dyn Env) -> Serialized<Dict> {
     let path = comenq_transport::default_socket_path_with_env(env);
     let mut values = Dict::new();

@@ -4,8 +4,33 @@ use super::super::{CliArgs, Config, MAX_GITHUB_TOKEN_FILE_BYTES};
 use clap::Parser as _;
 use rstest::rstest;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
 use test_support::mock_env;
+
+/// A configuration with neither an inline token nor a token file cannot
+/// produce a pool, and must report the failure without consulting the
+/// process environment.
+#[test]
+fn github_tokens_with_env_rejects_an_empty_pool() {
+    let config = Config {
+        github_token: String::new(),
+        github_token_file: None,
+        github_token_files: Vec::new(),
+        socket_path: PathBuf::from("/tmp/socket"),
+        queue_path: PathBuf::from("/tmp/queue"),
+        cooldown_period_seconds: 0,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: 0,
+        github_api_timeout_secs: 0,
+    };
+
+    let error = config
+        .github_tokens_with_env(&mock_env([] as [(&str, &str); 0]))
+        .expect_err("an empty token pool must be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
 
 #[rstest]
 fn token_files_form_the_rotation_pool() {
