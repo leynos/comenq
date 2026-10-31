@@ -25,20 +25,16 @@ fn runs_whitaker(command: &str) -> bool {
     })
 }
 
-/// Returns the `make -n lint` line that runs Whitaker.
-fn whitaker_line() -> Result<String, String> {
+/// Returns the `make -n lint` line that runs Whitaker, or an empty line when `make` fails or the
+/// recipe runs none, which `isolation_problems` then reports.
+fn whitaker_line() -> String {
     let output = Command::new("make")
         .args(["-n", "-B", "lint"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .map_err(|error| format!("running make: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`make -n lint` failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    String::from_utf8_lossy(&output.stdout)
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    output
         .lines()
         .find(|line| {
             line.split("&&").any(|command| {
@@ -48,8 +44,8 @@ fn whitaker_line() -> Result<String, String> {
                     .is_some_and(runs_whitaker)
             })
         })
-        .map(str::to_owned)
-        .ok_or_else(|| "`make -n lint` runs no Whitaker command".to_owned())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Returns the complaints about a Whitaker line that is not isolated: it must clear an inherited
@@ -85,13 +81,9 @@ fn isolation_problems(line: &str) -> Vec<String> {
 /// Invariant: Whitaker clears the encoded flags and assigns the literal `RUSTFLAGS`, so it takes none of
 /// the development standard and inherits nothing from the caller.
 #[test]
-fn make_lint_isolates_whitaker_with_the_literal_rustflags() -> Result<(), String> {
-    let problems = isolation_problems(&whitaker_line()?);
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(problems.join("\n"))
-    }
+fn make_lint_isolates_whitaker_with_the_literal_rustflags() {
+    let problems = isolation_problems(&whitaker_line());
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 /// Scenario: Whitaker commands that assign no, inherited or development `RUSTFLAGS`.
@@ -121,13 +113,10 @@ fn make_lint_isolates_whitaker_with_the_literal_rustflags() -> Result<(), String
 #[case::none("whitaker --all", false)]
 #[case::development_flags("RUSTFLAGS=\"-D warnings -Zthreads=8\" whitaker --all", false)]
 #[case::inherited("RUSTFLAGS=\"$RUSTFLAGS -D warnings\" whitaker --all", false)]
-fn only_the_literal_rustflags_isolate_whitaker(
-    #[case] line: &str,
-    #[case] isolated: bool,
-) -> Result<(), String> {
-    if isolation_problems(line).is_empty() == isolated {
-        Ok(())
-    } else {
-        Err(format!("isolated should be {isolated}: {line}"))
-    }
+fn only_the_literal_rustflags_isolate_whitaker(#[case] line: &str, #[case] isolated: bool) {
+    assert_eq!(
+        isolation_problems(line).is_empty(),
+        isolated,
+        "isolated should be {isolated}: {line}"
+    );
 }
