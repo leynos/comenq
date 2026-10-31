@@ -974,6 +974,29 @@ Thresholds that trigger escalation when breached.
       `pull_request` events, so the merge could not invoke it. Every prior
       objection that had blocked the merge was either satisfied by evidence
       or, where the evidence showed it required correction, corrected.
+- [x] (2026-10-31T16:52Z) The post-merge `Coverage (main)` run the squash
+      triggered, `41219404778` on `b264e21`, concluded `success`; its single
+      `coverage-upload` job passed every step, including the CodeScene upload.
+      This was the last outstanding integration check for the landing commit.
+      Also verified against live state that the record itself is true: PR #239
+      is `MERGED` at `2026-10-31T16:22:47Z` with merge commit `b264e216`, that
+      commit is an ancestor of `origin/main`, review `5723747395` is
+      `APPROVED` at 16:22:06Z and `5723404161` is `CHANGES_REQUESTED` at
+      14:53:53Z, and the backup ref still resolves to `ef416608`.
+- [x] (2026-10-31T16:52Z) This record was itself reviewed, and its first
+      revision was wrong in two ways a reviewer caught. Both were in text added
+      after the migration landed, and both are fixed in `b00ee88`. The first
+      attached a false reason to a true conclusion: the plan said `release.yml`
+      "fires only on version tags", but that workflow also declares
+      `workflow_call`, and its only caller `release-dry-run.yml` runs on
+      `pull_request`. The conclusion holds, and is now stated as observed
+      evidence — the Actions run history for `b264e21` lists exactly one run,
+      `Coverage (main)` — with the real reason `release.yml` could not fire.
+      The second reintroduced first-person narration, a voice convention this
+      plan had already recorded as fixed at the second review pass; "the
+      objection was mine to fix" became "it required correction". Both threads
+      are resolved (`total=2 unresolved=0`), and a formal re-review was queued
+      through `comenq`.
 
 ## Surprises & discoveries
 
