@@ -107,12 +107,13 @@ when the queue changes.
 
 ### Domain service and ports
 
-The dependency-free `comenq-domain` crate holds the queue's rules so that they
-can be tested without a socket, a filesystem, or the JSON protocol. It defines
-commands (`put`, `bump`, `bust`, `del`, `release_claim`, `complete`) and queries
-(`list`, `next_due`), the queue entry and scheduling values, entry-state
-transitions, and `QueueError`. It imports neither serde, paths or filesystem
-errors, Tokio, protocol types, metrics, nor daemon configuration.
+The `comenq-domain` crate, whose only dependency is `thiserror`, holds the
+queue's rules so that they can be tested without a socket, a filesystem, or the
+JSON protocol. It defines commands (`put`, `bump`, `bust`, `del`,
+`release_claim`, `complete`) and queries (`list`, `next_due`), the queue entry
+and scheduling values, entry-state transitions, and `QueueError`. It imports
+neither serde, paths or filesystem errors, Tokio, protocol types, metrics, nor
+daemon configuration.
 
 `QueueService` depends on three ports. `QueueRepository` supplies entries,
 persists changes, records the successful-post and failed-attempt markers, mints

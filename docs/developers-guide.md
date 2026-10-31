@@ -13,15 +13,15 @@ supervisor. The detailed component and lifecycle design is maintained in
 and
 [Source code for `comenqd`](comenq-design.md#55-source-code-for-comenqd-daemon).
 
-The dependency-free `comenq-domain` crate owns the transport-independent queue
-rules: typed commands and queries, queue entries, their scheduling, entry-state
-transitions, and domain errors. It does not depend on serde, the filesystem,
-Tokio, the JSON protocol, metrics, or daemon configuration. The crate declares
-three required ports: `QueueRepository` for persistence, `WallClock` for time,
-and `FlutterSampler` for the bounded random delay. `QueueService` composes
-them. The daemon supplies the adapters: `QueueStore` implements
-`QueueRepository`, `SystemClock` implements `WallClock`, and
-`RandomFlutterSampler` implements `FlutterSampler`.
+The `comenq-domain` crate, whose only dependency is `thiserror`, owns the
+transport-independent queue rules: typed commands and queries, queue entries,
+their scheduling, entry-state transitions, and domain errors. It does not
+depend on serde, the filesystem, Tokio, the JSON protocol, metrics, or daemon
+configuration. The crate declares three required ports: `QueueRepository` for
+persistence, `WallClock` for time, and `FlutterSampler` for the bounded random
+delay. `QueueService` composes them. The daemon supplies the adapters:
+`QueueStore` implements `QueueRepository`, `SystemClock` implements
+`WallClock`, and `RandomFlutterSampler` implements `FlutterSampler`.
 
 At startup, `SharedQueue` builds a `QueuePolicy` from `Config`, stores the
 clock and sampler as shared trait objects, and keeps the persistent store
@@ -94,8 +94,8 @@ ordinary request to a typed `SharedQueue` operation: `put`, `list`, `bump`,
 boundary. The adapter converts the operation result to a protocol `Response`;
 queue mutations notify the worker after success. Domain and repository errors
 share one message and bounded-category mapping, while history requests keep
-their store-error mapping. The queue performs scheduling and persistence through
-`QueueStore`.
+their store-error mapping. The domain service performs scheduling, and
+`QueueStore` performs persistence.
 
 The worker claims the due head through the domain service while holding the
 store lock; the lock is released before the worker calls GitHub. A failed post

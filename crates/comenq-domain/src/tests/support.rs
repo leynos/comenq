@@ -1,8 +1,8 @@
 //! In-memory ports and fixtures for domain tests.
 //!
 //! These doubles live beside the tests rather than in a shared support crate,
-//! so the domain crate keeps a single dependency and its tests cannot reach
-//! for socket, protocol or filesystem helpers.
+//! so the domain crate keeps `thiserror` as its only dependency and its tests
+//! cannot reach for socket, protocol or filesystem helpers.
 
 use crate::{
     ClaimToken, Comment, Completion, EntryId, EntryLifetime, FlutterSampler, NewEntry, QueuePolicy,
