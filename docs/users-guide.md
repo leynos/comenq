@@ -88,6 +88,10 @@ client probes that socket first when `XDG_RUNTIME_DIR` contains a non-empty
 absolute path. It falls back to `/run/comenq/comenq.sock` when the user socket
 cannot be used, so a stale user socket does not hide a healthy system service.
 
+A non-Unicode `XDG_RUNTIME_DIR` is treated as absent, so the system socket is
+used. Environment variable names are case-sensitive: use `COMENQ_SOCKET` and
+the upper-case `COMENQD_*` names exactly.
+
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
 instead. Otherwise, use the queue-management subcommands:
 
