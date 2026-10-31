@@ -4,7 +4,7 @@
 //! holds the value types, the service value, and the dispatch entry points.
 
 use crate::error::QueueError;
-use crate::model::{ClaimToken, Comment, Completion, EntryId, ScheduledEntry};
+use crate::model::{ClaimToken, Comment, EntryId, QueuedEntry, ScheduledEntry};
 use crate::policy::QueuePolicy;
 use crate::ports::{FlutterSampler, QueueRepository, WallClock};
 
@@ -34,6 +34,8 @@ pub enum ReleaseOutcome {
 /// A state-changing queue request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueueCommand {
+    /// Claim the due head entry when nothing else is claimed.
+    ClaimNextDue,
     /// Enqueue a comment.
     Put(PutComment),
     /// Move the identified entry to the head of the queue.
@@ -49,13 +51,22 @@ pub enum QueueCommand {
         /// Token minted for the claim.
         token: ClaimToken,
     },
-    /// Record a successful post.
-    Complete(Completion),
+    /// Record a successful post; the service stamps the posting time.
+    Complete {
+        /// The claimed entry that was posted.
+        entry: QueuedEntry,
+        /// Hex SHA-256 of the token that made the attempt.
+        token_hash: String,
+        /// Full GitHub comment URL, when the API returned one.
+        comment_url: Option<String>,
+    },
 }
 
 /// Value produced by a successful [`QueueCommand`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandOutcome {
+    /// The head entry; claimed only when its wait is zero.
+    Claimed(Option<ScheduledEntry>),
     /// The enqueued entry and its projected wait.
     Put(ScheduledEntry),
     /// A reorder or removal completed.
@@ -127,6 +138,7 @@ where
     /// Returns the error of the corresponding command method.
     pub fn execute(&self, command: QueueCommand) -> Result<CommandOutcome, QueueError<R::Error>> {
         match command {
+            QueueCommand::ClaimNextDue => self.claim_next_due().map(CommandOutcome::Claimed),
             QueueCommand::Put(request) => self.put(request).map(CommandOutcome::Put),
             QueueCommand::Bump(id) => self.bump(id.as_str()).map(|()| CommandOutcome::Changed),
             QueueCommand::Bust(id) => self.bust(id.as_str()).map(|()| CommandOutcome::Changed),
@@ -134,12 +146,12 @@ where
             QueueCommand::ReleaseClaim { id, token } => self
                 .release_claim(id.as_str(), token.as_str())
                 .map(CommandOutcome::ReleaseClaim),
-            QueueCommand::Complete(completion) => self
-                .complete(
-                    completion.entry,
-                    completion.token_hash,
-                    completion.comment_url,
-                )
+            QueueCommand::Complete {
+                entry,
+                token_hash,
+                comment_url,
+            } => self
+                .complete(entry, token_hash, comment_url)
                 .map(|()| CommandOutcome::Completed),
         }
     }
