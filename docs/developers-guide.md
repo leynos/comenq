@@ -13,6 +13,26 @@ supervisor. The detailed component and lifecycle design is maintained in
 and
 [Source code for `comenqd`](comenq-design.md#55-source-code-for-comenqd-daemon).
 
+The dependency-free `comenq-domain` crate owns the transport-independent queue
+rules: typed commands and queries, queue entries, their scheduling, entry-state
+transitions, and domain errors. It does not depend on serde, the filesystem,
+Tokio, the JSON protocol, metrics, or daemon configuration. The crate declares
+three required ports: `QueueRepository` for persistence, `WallClock` for time,
+and `FlutterSampler` for the bounded random delay. `QueueService` composes
+them. The daemon supplies the adapters: `QueueStore` implements
+`QueueRepository`, `SystemClock` implements `WallClock`, and
+`RandomFlutterSampler` implements `FlutterSampler`.
+
+At startup, `SharedQueue` builds a `QueuePolicy` from `Config`, stores the
+clock and sampler as shared trait objects, and keeps the persistent store
+behind its mutex. Each operation composes a short-lived `QueueService` over the
+borrowed store inside the serialized `with_state` closure, so read-modify-write
+sequences still run under one lock. JSON conversion and protocol responses stay
+in `listener::protocol`; the worker uses the domain entry rather than the
+stored layout. Await subscription, history paging, and their file cursors
+remain adapter concerns because they coordinate readers rather than express
+queue policy.
+
 `comenq_transport::user_socket_path()` returns a per-user socket only when
 `XDG_RUNTIME_DIR` is a non-empty absolute path.
 `comenq_transport::default_socket_path()` selects that path for a daemon or the
@@ -69,30 +89,33 @@ the request.
 
 The listener's `listener::protocol::dispatch_request` adapter maps each valid
 ordinary request to a typed `SharedQueue` operation: `put`, `list`, `bump`,
-`bust`, `del`, or `hist`. It converts the operation result to a protocol
-`Response`; queue mutations notify the worker after success. The queue performs
-scheduling and persistence through `QueueStore`.
-`SharedQueue::claim_next_due()` selects the due head and durably claims it
-while holding the store lock; the lock is released before the worker calls
-GitHub. A failed post records its timestamp before releasing its claim, so the
-cooldown remains in the persisted schedule after a daemon restart. Queue
-changes cannot shorten the worker's in-process retry deadline. `bump` and
-`bust` may reorder a claimed entry without changing its claim, while `del`
-removes it. Completion checks the claim token so a successful post cannot
-delete a replacement entry.
+`bust`, `del`, or `hist`. `Request::Put` becomes a domain `PutComment`, and
+`ScheduledEntry` values become protocol `PendingEntry` values only at this
+boundary. The adapter converts the operation result to a protocol `Response`;
+queue mutations notify the worker after success. Domain and repository errors
+share one message and bounded-category mapping, while history requests keep
+their store-error mapping. The queue performs scheduling and persistence through
+`QueueStore`.
 
-`SharedQueue::complete(entry, token_hash, comment_url)` records the successful
-attempt, selected token hash, full comment URL, and posting timestamp before
-removing the claimed entry. Its durable recovery record contains the history
-payload and log offset as well as the entry identifier, claim token and posting
-time; reconciliation idempotently appends the history record, finishes the
-deletion and `last_post` update, then clears that record. Startup performs this
-recovery before reclaiming claims left by an interrupted worker. Failed
-attempts are recorded with
-`SharedQueue::record_failure(entry, token_hash, error)`; scheduling uses the
-later of the successful-post and failed-attempt timestamps as its cooldown
-anchor. Failure history writes are logged but do not interrupt claim release or
-retry pacing. Other queue-store failures become daemon error responses.
+The worker claims the due head through the domain service while holding the
+store lock; the lock is released before the worker calls GitHub. A failed post
+records its timestamp before releasing its claim, so the cooldown remains in
+the persisted schedule after a daemon restart. Queue changes cannot shorten the
+worker's in-process retry deadline. `bump` and `bust` may reorder a claimed
+entry without changing its claim, while `del` removes it. Completion checks the
+claim token so a successful post cannot delete a replacement entry.
+
+Completion records the successful attempt, selected token hash, full comment
+URL, and posting timestamp before removing the claimed entry. Its durable
+recovery record contains the history payload and log offset as well as the
+entry identifier, claim token and posting time; reconciliation idempotently
+appends the history record, finishes the deletion and `last_post` update, then
+clears that record. Startup performs this recovery before reclaiming claims
+left by an interrupted worker. Failed attempts are recorded with the worker's
+domain entry; scheduling uses the later of the successful-post and
+failed-attempt timestamps as its cooldown anchor. Failure history writes are
+logged but do not interrupt claim release or retry pacing. Other queue-store
+failures become daemon error responses.
 
 The await use case returns `queue::AwaitOutcome` and an opaque `AwaitToken` for
 pending work. The token keeps the wait bound to one queue-entry lifetime; the
