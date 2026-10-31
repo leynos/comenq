@@ -427,6 +427,7 @@ dependencies = [
 name = "comenq-domain"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "thiserror 1.0.69",
 ]
 

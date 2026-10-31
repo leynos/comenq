@@ -2,6 +2,17 @@
 
 use super::support::{Fixture, comment, seeded_entry, unwrap_ok};
 use crate::{ClaimToken, PutComment, QueuePolicy, QueueRepository, ReleaseOutcome};
+use rstest::{fixture, rstest};
+
+/// A queue holding one entry claimed with the token `"held"`.
+#[fixture]
+fn claimed() -> Fixture {
+    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
+    let mut entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
+    entry.claim_token = Some(ClaimToken::new("held"));
+    fixture.repository.seed(entry);
+    fixture
+}
 
 #[test]
 fn claim_takes_only_a_due_head() {
@@ -50,47 +61,35 @@ fn del_removes_the_entry() {
     assert!(fixture.repository.stored_entries().is_empty());
 }
 
-#[test]
-fn matching_release_clears_the_claim_and_records_the_attempt() {
-    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
-    let mut entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
-    entry.claim_token = Some(ClaimToken::new("held"));
-    fixture.repository.seed(entry);
-    fixture.repository.set_last_attempt(Some(900));
+#[rstest]
+#[case::matching("held", Some(900), ReleaseOutcome::Released, None, Some(1_000))]
+#[case::later_marker_kept("held", Some(2_000), ReleaseOutcome::Released, None, Some(2_000))]
+#[case::stale_token("other", None, ReleaseOutcome::Stale, Some("held"), None)]
+fn release_outcomes(
+    claimed: Fixture,
+    #[case] token: &str,
+    #[case] seeded_attempt: Option<u64>,
+    #[case] expected: ReleaseOutcome,
+    #[case] expected_claim: Option<&str>,
+    #[case] expected_attempt: Option<u64>,
+) {
+    claimed.repository.set_last_attempt(seeded_attempt);
 
-    let outcome = unwrap_ok(fixture.service().release_claim("aaaaaaaa", "held"));
+    let outcome = unwrap_ok(claimed.service().release_claim("aaaaaaaa", token));
 
-    assert_eq!(outcome, ReleaseOutcome::Released);
-    assert_eq!(stored_claim(&fixture), None);
-    let stored = fixture.repository.stored_entries();
+    assert_eq!(outcome, expected);
+    assert_eq!(stored_claim(&claimed), expected_claim.map(ClaimToken::new));
+    let stored = claimed.repository.stored_entries();
     let stored = match stored.first() {
         Some(entry) => entry,
         None => panic!("expected the released entry"),
     };
     assert_eq!(stored.lifetime.as_str(), "lifetime-aaaaaaaa");
-    let state = fixture.repository.last_attempt();
-    let attempt = match state {
-        Ok(attempt) => attempt,
-        Err(error) => panic!("last attempt read failed: {error}"),
-    };
-    assert_eq!(attempt, Some(1_000));
-    assert_eq!(fixture.clock.reads(), 1);
-}
-
-#[test]
-fn release_keeps_a_later_existing_attempt_marker() {
-    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
-    let mut entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
-    entry.claim_token = Some(ClaimToken::new("held"));
-    fixture.repository.seed(entry);
-    fixture.repository.set_last_attempt(Some(2_000));
-
-    unwrap_ok(fixture.service().release_claim("aaaaaaaa", "held"));
-
-    match fixture.repository.last_attempt() {
-        Ok(attempt) => assert_eq!(attempt, Some(2_000)),
-        Err(error) => panic!("last attempt read failed: {error}"),
-    }
+    assert_eq!(
+        claimed.repository.last_attempt().expect("read attempt"),
+        expected_attempt
+    );
+    assert_eq!(claimed.clock.reads(), 1);
 }
 
 #[test]
