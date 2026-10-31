@@ -129,8 +129,9 @@ impl SharedQueue {
         id: &str,
         token: Option<AwaitToken>,
     ) -> std::result::Result<AwaitOutcome, AwaitError> {
+        let id = super::parse_entry_id(id).map_err(|_| AwaitError::InvalidIdentifier)?;
         let cursor = token.map(|token| token.0);
-        self.resolve_await_store(id, cursor)
+        self.resolve_await_store(id.as_str(), cursor)
             .await
             .map(AwaitOutcome::from)
             .map_err(|error| match error {

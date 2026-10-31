@@ -68,7 +68,14 @@ fn body_sizes_at_response_limit(extra_bytes: usize) -> [usize; 2] {
                 body: String::new(),
             },
         })
-        .map(|entry| crate::listener::protocol::pending_entry(entry, 0))
+        .map(|entry| {
+            let entry = crate::queue::convert::queued_from_stored(entry)
+                .expect("test entry has a valid identifier");
+            crate::listener::protocol::pending_entry(comenq_domain::ScheduledEntry {
+                entry,
+                eta_seconds: 0,
+            })
+        })
         .collect();
     let base_size = serde_json::to_vec(&Response::entries(entries))
         .expect("serialize empty-body response")

@@ -470,6 +470,7 @@ dependencies = [
  "backon",
  "clap",
  "color-eyre",
+ "comenq-domain",
  "comenq-lib",
  "comenq-transport",
  "metrics",

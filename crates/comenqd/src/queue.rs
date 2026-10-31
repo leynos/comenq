@@ -1,21 +1,48 @@
 //! Shared queue state and queue use-case operations.
 //!
 //! [`SharedQueue`] bundles the persistent [`QueueStore`] with the daemon
-//! configuration and a change signal. The listener maps protocol operations
-//! to these typed operations, and the worker waits on the change signal so
-//! queue mutations are observed promptly.
+//! configuration and a change signal. Each operation composes a short-lived
+//! [`QueueService`] over the borrowed store, so queue policy stays in the
+//! domain while persistence, time and randomness remain adapter concerns.
+//!
+//! The listener maps protocol operations to these typed operations, and the
+//! worker waits on the change signal so queue mutations are observed promptly.
 
-use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use comenq_lib::CommentRequest;
+use comenq_domain::{
+    EntryId, PutComment, QueueError, QueuePolicy, QueueService, QueuedEntry, ScheduledEntry,
+};
 use rand::Rng;
 use tokio::sync::{Notify, watch};
 
 use crate::config::Config;
 use crate::metrics;
-use crate::store::{PutOptions, QueueStore, Result as StoreResult, StoredEntry};
+use crate::store::{
+    QueueStore, Result as StoreResult, StoreError, StoredEntry, store_error_from_queue,
+};
+
+use self::convert::{queued_from_stored, stored_from_queued};
+
+/// A queue operation result that keeps domain and storage failures distinct.
+pub(crate) type QueueResult<T> = Result<T, QueueError<StoreError>>;
+
+/// Wall clock used for timestamps persisted in the queue store.
+pub use comenq_domain::WallClock as UnixClock;
+
+/// Provide the bounded random delay added to a newly enqueued comment.
+pub(crate) use comenq_domain::FlutterSampler;
+
+/// Return a bounded classification for queue failures without exposing values.
+pub(crate) fn queue_error_category(error: &QueueError<StoreError>) -> &'static str {
+    match error {
+        QueueError::UnknownIdentifier(_) => "unknown_identifier",
+        QueueError::InvalidIdentifier(_) => "unsafe_identifier",
+        QueueError::InvalidRepositoryComponent(_) => "invalid_repository_component",
+        QueueError::Repository(error) => error.category(),
+    }
+}
 
 /// Current Unix time in whole seconds.
 ///
@@ -25,18 +52,6 @@ pub fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
-}
-
-/// Wall clock used for timestamps persisted in the queue store.
-pub trait UnixClock: Debug + Send + Sync {
-    /// Return whole Unix seconds for queue scheduling.
-    fn unix_now(&self) -> u64;
-}
-
-/// Provide the bounded random delay added to a newly enqueued comment.
-pub(crate) trait FlutterSampler: Debug + Send + Sync {
-    /// Sample flutter no greater than the caller's configured maximum.
-    fn sample(&self, maximum: u64) -> u64;
 }
 
 /// Production flutter source backed by the operating system random generator.
@@ -70,6 +85,7 @@ pub struct SharedQueue {
     store: Arc<Mutex<QueueState>>,
     clock: Arc<dyn UnixClock>,
     flutter_sampler: Arc<dyn FlutterSampler>,
+    policy: QueuePolicy,
     changed: Notify,
     state_version: Arc<watch::Sender<u64>>,
 }
@@ -90,6 +106,7 @@ impl SharedQueue {
         clock: Arc<dyn UnixClock>,
         flutter_sampler: Arc<dyn FlutterSampler>,
     ) -> StoreResult<Arc<Self>> {
+        let policy = QueuePolicy::new(cfg.cooldown_period_seconds, cfg.cooldown_flutter_seconds);
         let store = QueueStore::open(&cfg.queue_path)?;
         let (entry_count, accounted_bytes) = store.queue_metrics_snapshot()?;
         metrics::record_queue_entries(entry_count);
@@ -99,6 +116,7 @@ impl SharedQueue {
             store: Arc::new(Mutex::new(QueueState::new(store))),
             clock,
             flutter_sampler,
+            policy,
             changed: Notify::new(),
             state_version: Arc::new(watch::channel(0).0),
         }))
@@ -134,23 +152,43 @@ impl SharedQueue {
     }
 
     /// The head entry and its estimated seconds-until-post, when any.
+    ///
+    /// This compatibility view returns the stored layout. Domain-aware callers
+    /// use [`Self::next_due_domain`].
     pub async fn next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
-        let cooldown = self.cfg.cooldown_period_seconds;
-        let now = self.clock.unix_now();
-        self.with_store("next_due", move |store| store.next_due(cooldown, now))
+        self.next_due_domain()
             .await
+            .map_err(store_error_from_queue)
+            .map(|due| due.map(stored_schedule))
+    }
+
+    /// The head entry as a domain value, when nothing is claimed.
+    pub(crate) async fn next_due_domain(&self) -> QueueResult<Option<ScheduledEntry>> {
+        self.with_service("next_due", |store, clock, sampler, policy| {
+            service(store, clock, sampler, policy).next_due()
+        })
+        .await
     }
 
     /// Claim the due entry while holding the store lock.
+    ///
+    /// This compatibility view returns the stored layout. The worker uses
+    /// [`Self::claim_next_due_domain`].
     pub async fn claim_next_due(&self) -> StoreResult<Option<(StoredEntry, u64)>> {
-        let cooldown = self.cfg.cooldown_period_seconds;
-        let now = self.clock.unix_now();
+        self.claim_next_due_domain()
+            .await
+            .map_err(store_error_from_queue)
+            .map(|due| due.map(stored_schedule))
+    }
+
+    /// Claim the due entry as a domain value while holding the store lock.
+    pub(crate) async fn claim_next_due_domain(&self) -> QueueResult<Option<ScheduledEntry>> {
         let result = self
-            .with_store("claim_next_due", move |store| {
-                store.claim_next_due(cooldown, now)
+            .with_service("claim_next_due", |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).claim_next_due()
             })
             .await;
-        if matches!(&result, Ok(Some((_, 0)))) {
+        if matches!(&result, Ok(Some(scheduled)) if scheduled.eta_seconds == 0) {
             self.update_queue_gauges().await;
         }
         result
@@ -165,19 +203,33 @@ impl SharedQueue {
     }
 
     /// Durably record a successful post before removing its queue entry.
+    ///
+    /// This compatibility view accepts the stored layout. Domain-aware callers
+    /// use [`Self::complete_entry`].
     pub async fn complete(
         &self,
         entry: &StoredEntry,
         token_hash: &str,
         comment_url: &str,
     ) -> StoreResult<()> {
+        let entry = queued_from_stored(entry.clone())?;
+        self.complete_entry(&entry, token_hash, Some(comment_url.to_owned()))
+            .await
+            .map_err(store_error_from_queue)
+    }
+
+    /// Durably record a successful post for a claimed domain entry.
+    pub(crate) async fn complete_entry(
+        &self,
+        entry: &QueuedEntry,
+        token_hash: &str,
+        comment_url: Option<String>,
+    ) -> QueueResult<()> {
         let entry = entry.clone();
         let token_hash = token_hash.to_owned();
-        let comment_url = comment_url.to_owned();
-        let now = self.clock.unix_now();
         let result = self
-            .with_store("complete", move |store| {
-                store.complete_claim_with_token(&entry, &token_hash, now, Some(comment_url))
+            .with_service("complete", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).complete(entry, token_hash, comment_url)
             })
             .await;
         if result.is_ok() {
@@ -187,40 +239,28 @@ impl SharedQueue {
     }
 
     /// Release a failed post's claim before waiting for its retry deadline.
+    ///
+    /// A stale claim is treated as success because another actor already
+    /// cleared or replaced it.
     pub async fn release_claim(&self, id: &str, claim_token: &str) -> StoreResult<()> {
         let id = id.to_owned();
         let claim_token = claim_token.to_owned();
-        let attempted_at = self.clock.unix_now();
         let result = self
-            .with_store("release_claim", move |store| {
-                store.release_claim(&id, &claim_token, attempted_at)
+            .with_service("release_claim", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).release_claim(&id, &claim_token)
             })
             .await;
         if result.is_ok() {
             self.update_queue_gauges().await;
         }
-        result
+        result.map(|_| ()).map_err(store_error_from_queue)
     }
 
     /// Persist a put request and return its schedule-stable queue entry.
-    pub(crate) async fn put(
-        &self,
-        request: CommentRequest,
-        immediate: bool,
-    ) -> StoreResult<(StoredEntry, u64)> {
-        validate_request(&request)?;
-        let cooldown = self.cfg.cooldown_period_seconds;
-        let flutter_max = self.cfg.cooldown_flutter_seconds;
-        let flutter_seconds = self.flutter_sampler.sample(flutter_max).min(flutter_max);
-        let now = self.clock.unix_now();
+    pub(crate) async fn put(&self, request: PutComment) -> QueueResult<ScheduledEntry> {
         let result = self
-            .with_store("put", move |store| {
-                let options = PutOptions {
-                    cooldown,
-                    flutter_seconds,
-                    immediate,
-                };
-                store.put_with_eta(request, &options, now)
+            .with_service("put", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).put(request)
             })
             .await;
         if result.is_ok() {
@@ -230,37 +270,48 @@ impl SharedQueue {
     }
 
     /// Return the ordered schedule without constructing a protocol response.
-    pub(crate) async fn list(&self) -> StoreResult<Vec<(StoredEntry, u64)>> {
-        let cooldown = self.cfg.cooldown_period_seconds;
-        let now = self.clock.unix_now();
-        self.with_store("list", move |store| store.schedule(cooldown, now))
-            .await
+    pub(crate) async fn list(&self) -> QueueResult<Vec<ScheduledEntry>> {
+        self.with_service("list", |store, clock, sampler, policy| {
+            service(store, clock, sampler, policy).schedule()
+        })
+        .await
     }
 
     /// Move the identified entry to the head of the queue.
-    pub(crate) async fn bump(&self, id: &str) -> StoreResult<()> {
-        self.mutate_entry("bump", id, QueueStore::bump).await
+    pub(crate) async fn bump(&self, id: &str) -> QueueResult<()> {
+        let id = id.to_owned();
+        let result = self
+            .with_service("bump", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).bump(&id)
+            })
+            .await;
+        if result.is_ok() {
+            self.mutation_finished().await;
+        }
+        result
     }
 
     /// Move the identified entry to the tail of the queue.
-    pub(crate) async fn bust(&self, id: &str) -> StoreResult<()> {
-        self.mutate_entry("bust", id, QueueStore::bust).await
+    pub(crate) async fn bust(&self, id: &str) -> QueueResult<()> {
+        let id = id.to_owned();
+        let result = self
+            .with_service("bust", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).bust(&id)
+            })
+            .await;
+        if result.is_ok() {
+            self.mutation_finished().await;
+        }
+        result
     }
 
     /// Remove the identified entry from the queue.
-    pub(crate) async fn del(&self, id: &str) -> StoreResult<()> {
-        self.mutate_entry("del", id, QueueStore::del).await
-    }
-
-    async fn mutate_entry(
-        &self,
-        operation: &'static str,
-        id: &str,
-        mutate: fn(&QueueStore, &str) -> StoreResult<()>,
-    ) -> StoreResult<()> {
+    pub(crate) async fn del(&self, id: &str) -> QueueResult<()> {
         let id = id.to_owned();
         let result = self
-            .with_store(operation, move |store| mutate(store, &id))
+            .with_service("del", move |store, clock, sampler, policy| {
+                service(store, clock, sampler, policy).del(&id)
+            })
             .await;
         if result.is_ok() {
             self.mutation_finished().await;
@@ -275,33 +326,31 @@ impl SharedQueue {
     }
 }
 
-/// Reject repository components that could alter paths, URLs, or terminal output.
-fn validate_request(request: &CommentRequest) -> StoreResult<()> {
-    if !is_safe_repository_component(&request.owner) {
-        return Err(crate::store::StoreError::InvalidRepositoryComponent(
-            "owner",
-        ));
-    }
-    if !is_safe_repository_component(&request.repo) {
-        return Err(crate::store::StoreError::InvalidRepositoryComponent("name"));
-    }
-    Ok(())
+/// Convert a scheduled domain entry back to the stored tuple shape.
+fn stored_schedule(scheduled: ScheduledEntry) -> (StoredEntry, u64) {
+    (stored_from_queued(&scheduled.entry), scheduled.eta_seconds)
 }
 
-/// Report whether a GitHub owner or repository name is safe at this boundary.
-fn is_safe_repository_component(component: &str) -> bool {
-    !component.is_empty()
-        && component != "."
-        && component != ".."
-        && component
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+/// Compose a domain service from the queue's ports and posting policy.
+fn service<'a>(
+    store: &'a QueueStore,
+    clock: &'a dyn UnixClock,
+    sampler: &'a dyn FlutterSampler,
+    policy: QueuePolicy,
+) -> QueueService<&'a QueueStore, &'a dyn UnixClock, &'a dyn FlutterSampler> {
+    QueueService::new(store, clock, sampler, policy)
+}
+
+/// Parse an identifier through the domain's validation rule.
+pub(crate) fn parse_entry_id(id: &str) -> Result<EntryId, QueueError<StoreError>> {
+    EntryId::parse(id).map_err(QueueError::InvalidIdentifier)
 }
 
 #[cfg(test)]
 mod tests;
 
 mod await_lookup;
+pub(crate) mod convert;
 pub use await_lookup::{AwaitError, AwaitOutcome, AwaitToken};
 mod store_access;
 use store_access::QueueState;
