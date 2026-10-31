@@ -105,6 +105,15 @@ pub(crate) fn derive_entry_id_with_salt(
     EntryId::from_hex_digits(hex)
 }
 
+/// Posting order: explicit position, then enqueue time, then identifier.
+pub(crate) fn entry_order(left: &QueuedEntry, right: &QueuedEntry) -> std::cmp::Ordering {
+    (left.order, left.enqueued_at, left.id.as_str()).cmp(&(
+        right.order,
+        right.enqueued_at,
+        right.id.as_str(),
+    ))
+}
+
 /// Project ordered entries onto their earliest posting times.
 ///
 /// Entries are ordered by explicit position, then enqueue time, then
@@ -126,13 +135,7 @@ pub fn project_schedule(
     cooldown: u64,
     now: u64,
 ) -> Vec<ScheduledEntry> {
-    entries.sort_by(|left, right| {
-        (left.order, left.enqueued_at, left.id.as_str()).cmp(&(
-            right.order,
-            right.enqueued_at,
-            right.id.as_str(),
-        ))
-    });
+    entries.sort_by(entry_order);
     let mut previous_post = previous_post;
     entries
         .into_iter()

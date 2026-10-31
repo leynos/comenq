@@ -7,7 +7,7 @@ use crate::error::QueueError;
 use crate::model::{
     ClaimToken, Comment, Completion, EntryId, EntryLifetime, NewEntry, QueuedEntry, ScheduledEntry,
 };
-use crate::policy::{activity_anchor, derive_entry_id_with_salt, project_schedule};
+use crate::policy::{activity_anchor, derive_entry_id_with_salt, entry_order, project_schedule};
 use crate::ports::{FlutterSampler, QueueRepository, WallClock};
 
 use super::{PutComment, QueueService, ReleaseOutcome};
@@ -262,13 +262,4 @@ where
 /// Parse a caller-supplied identifier inside the domain.
 fn parse_id<E>(id: &str) -> Result<EntryId, QueueError<E>> {
     EntryId::parse(id).map_err(QueueError::InvalidIdentifier)
-}
-
-/// Posting order: explicit position, then enqueue time, then identifier.
-fn entry_order(left: &QueuedEntry, right: &QueuedEntry) -> std::cmp::Ordering {
-    (left.order, left.enqueued_at, left.id.as_str()).cmp(&(
-        right.order,
-        right.enqueued_at,
-        right.id.as_str(),
-    ))
 }
