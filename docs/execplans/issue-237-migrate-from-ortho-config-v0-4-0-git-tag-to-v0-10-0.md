@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: APPROVED
+Status: COMPLETE
 
 ## Purpose / big picture
 
@@ -928,6 +928,53 @@ Thresholds that trigger escalation when breached.
       conditions. Assessment coverage is therefore current for `14b3573`,
       which is the head intended for readiness and merge.
 
+- [x] (2026-10-31) **Babysitting: formal review, seven errata, and merge.**
+      The PR was marked ready, which caused CodeRabbit's formal review
+      (`5723404161`, `CHANGES_REQUESTED`) to run. It returned seven findings
+      and all seven were genuine. None could be fixed in place, because each
+      sits in a byte-for-byte copy that issue #237 requires to stay unedited,
+      so all seven were verified against the pinned bytes and recorded under
+      `### Known upstream errata` in
+      `docs/third-party-docs-provenance.md` at `945df03`. Two of CodeRabbit's
+      suggested remedies were declined on evidence: a fabricated `design.md`
+      stub would make the link resolve without reaching the section it names,
+      and a bare `ExternalHelp` deletion note is less useful than naming the
+      mechanism that actually works. CodeRabbit discarded the stub remedy
+      itself, endorsed the second explanation, and independently recomputed
+      all twenty recorded SHA-256 values. Integration with the advanced
+      `main` (`01a7128`) was verified by building the real merge rather than
+      arguing from a disjoint file set:
+      `--no-ff --no-commit`, committed as `ef41660` in a temporary worktree.
+      All eight gates passed there — `fmt`, `check-fmt`, `lint` (clippy and
+      Whitaker), `test` (505/505 nextest, 11 features, 55 scenarios,
+      211 steps), `typecheck`, `markdownlint`, `spelling`, `nixie`. The
+      validated tree is preserved as
+      `refs/backup/pr239-merged-tree-validated-ef41660`, so the evidence
+      survives the worktree's removal. One caveat, recorded rather than
+      smoothed over: the first `lint` attempt was killed by a harness
+      background cap mid-compile, so its PASS rests on the completed re-run.
+      The first approval request
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6545975881>)
+      was skipped with `Approval skipped: unresolved review threads`. That was
+      an omission in this work, not a service fault: the findings had been
+      dispositioned and accepted, but six of the seven inline threads were
+      still open. The six were resolved through the review-thread API after
+      re-verifying that all seven errata were present in the committed file,
+      and the second request
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6546000081>)
+      produced a real approval review object (`5723747395`, `APPROVED`,
+      16:22:06Z). Resolving those threads did not change a single byte: the
+      defects remain in the preserved upstream text. The PR squash-merged as
+      `b264e216f37d0b34d624c3212c33846cfbc79692` at
+      2026-10-31T16:22:47Z, guarded by `--match-head-commit` against the
+      accepted head `945df03`, with no administrator bypass. Nothing was
+      published: the Actions run history for `b264e21` lists exactly one run,
+      `Coverage (main)` (push). `release.yml` runs on version-tag pushes and
+      as a reusable workflow; its only caller, `release-dry-run.yml`, runs on
+      `pull_request` events, so the merge could not invoke it. Every prior
+      objection that had blocked the merge was either satisfied by evidence
+      or, where the evidence showed it required correction, corrected.
+
 ## Surprises & discoveries
 
 - Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
@@ -1742,6 +1789,17 @@ baseline at 11 features / 55 scenarios / 211 steps, nextest went from 481 to
 498 passing tests with all 17 additions accounted for, the 22 token tests were
 carried across with an empty diff, and the real binary still exits 1 with an
 empty standard output and a `color_eyre` report on standard error.
+
+Delivered to trunk: squash-merged as `b264e216f37d0b34d624c3212c33846cfbc79692`
+at 2026-10-31T16:22:47Z, after a formal review that found seven genuine defects
+in the imported upstream documents. Those seven are now recorded upstream
+errata rather than silent corrections, which is the honest outcome: this
+migration vendored the text at a pinned commit and must not rewrite it, so a
+reader is told what is wrong with it instead. Nothing was published: the
+Actions run history for `b264e21` lists exactly one run, `Coverage (main)`.
+`release.yml` runs on version-tag pushes and as a reusable workflow, and its
+only caller, `release-dry-run.yml`, runs on `pull_request` events, so the merge
+could not invoke it.
 
 What actually mattered was resisting two tempting edits. Adopting
 `into_ortho_merge` would have relabelled every environment- and file-layer
