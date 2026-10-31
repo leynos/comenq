@@ -5,14 +5,12 @@
 //! the domain service with an explicit clock instant and flutter sample while
 //! holding the caller's queue lock.
 
-use comenq_domain::{
-    FlutterSampler, PutComment, QueueError, QueuePolicy, QueueService, ScheduledEntry, WallClock,
-};
+use comenq_domain::{FlutterSampler, PutComment, QueueError, QueuePolicy, QueueService, WallClock};
 use comenq_lib::CommentRequest;
 use uuid::Uuid;
 
 use super::{PutOptions, QueueStore, Result, StoreError, StoredEntry};
-use crate::queue::convert::{comment_from_request, stored_from_queued};
+use crate::queue::convert::{comment_from_request, stored_schedule};
 
 /// Clock fixed at the instant supplied by a synchronous store operation.
 #[derive(Debug, Clone, Copy)]
@@ -59,11 +57,6 @@ pub(crate) fn store_error_from_queue(error: QueueError<StoreError>) -> StoreErro
         }
         QueueError::Repository(error) => error,
     }
-}
-
-/// Convert a scheduled domain entry back to the stored tuple shape.
-fn stored_schedule(scheduled: ScheduledEntry) -> (StoredEntry, u64) {
-    (stored_from_queued(&scheduled.entry), scheduled.eta_seconds)
 }
 
 impl QueueStore {

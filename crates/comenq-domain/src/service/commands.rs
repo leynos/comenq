@@ -5,7 +5,7 @@
 
 use crate::error::QueueError;
 use crate::model::{
-    ClaimToken, Completion, EntryId, EntryLifetime, NewEntry, QueuedEntry, ScheduledEntry,
+    ClaimToken, Comment, Completion, EntryId, EntryLifetime, NewEntry, QueuedEntry, ScheduledEntry,
 };
 use crate::policy::{activity_anchor, derive_entry_id_with_salt, project_schedule};
 use crate::ports::{FlutterSampler, QueueRepository, WallClock};
@@ -41,17 +41,7 @@ where
             self.repository.last_post()?,
             self.repository.last_attempt()?,
         );
-        let mut salt = None;
-        let (id, existing) = loop {
-            let id = derive_entry_id_with_salt(&request.comment, now, salt);
-            match self.repository.find(&id)? {
-                Some(existing) if existing.comment == request.comment => {
-                    break (id, Some(existing));
-                }
-                Some(_) => salt = Some(salt.map_or(1, |value| value.saturating_add(1))),
-                None => break (id, None),
-            }
-        };
+        let (id, existing) = self.resolve_entry_id(&request.comment, now)?;
         if let Some(existing) = existing {
             return Ok(self.scheduled_entry(entries, previous_activity, now, &existing));
         }
@@ -236,6 +226,28 @@ where
         ScheduledEntry {
             entry: entry.clone(),
             eta_seconds,
+        }
+    }
+
+    /// Find the identifier for `comment`, salting it past colliding entries.
+    ///
+    /// A repeated put resolves to the existing entry with the same content, so
+    /// the caller can report its schedule without inserting a second copy.
+    fn resolve_entry_id(
+        &self,
+        comment: &Comment,
+        now: u64,
+    ) -> Result<(EntryId, Option<QueuedEntry>), QueueError<R::Error>> {
+        let mut salt = None;
+        loop {
+            let id = derive_entry_id_with_salt(comment, now, salt);
+            match self.repository.find(&id)? {
+                Some(existing) if existing.comment == *comment => {
+                    return Ok((id, Some(existing)));
+                }
+                Some(_) => salt = Some(salt.map_or(1, |value| value.saturating_add(1))),
+                None => return Ok((id, None)),
+            }
         }
     }
 

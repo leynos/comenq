@@ -23,7 +23,7 @@ use crate::store::{
     QueueStore, Result as StoreResult, StoreError, StoredEntry, store_error_from_queue,
 };
 
-use self::convert::{queued_from_stored, stored_from_queued};
+use self::convert::{queued_from_stored, stored_schedule};
 
 /// A queue operation result that keeps domain and storage failures distinct.
 pub(crate) type QueueResult<T> = Result<T, QueueError<StoreError>>;
@@ -324,11 +324,6 @@ impl SharedQueue {
         // notify_one buffers a permit while the worker is processing an entry.
         self.changed.notify_one();
     }
-}
-
-/// Convert a scheduled domain entry back to the stored tuple shape.
-fn stored_schedule(scheduled: ScheduledEntry) -> (StoredEntry, u64) {
-    (stored_from_queued(&scheduled.entry), scheduled.eta_seconds)
 }
 
 /// Compose a domain service from the queue's ports and posting policy.
