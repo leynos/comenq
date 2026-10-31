@@ -5,6 +5,7 @@
 //! flutter was fixed when it was enqueued, so the projected schedule reported
 //! to clients matches what the worker executes.
 
+#![expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 use crate::config::Config;
 use crate::metrics;
 use crate::queue::SharedQueue;
