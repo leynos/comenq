@@ -2,8 +2,8 @@
 
 use super::support::{Fixture, TestError, comment, seeded_entry, unwrap_err, unwrap_ok};
 use crate::{
-    ClaimToken, PutComment, QueueError, QueuePolicy, activity_anchor, derive_entry_id,
-    project_schedule,
+    ClaimToken, FlutterSampler, PutComment, QueueError, QueuePolicy, QueueService, activity_anchor,
+    derive_entry_id, project_schedule,
 };
 
 #[test]
@@ -20,6 +20,36 @@ fn put_projects_cooldown_plus_flutter() {
     assert_eq!(scheduled.entry.flutter_seconds, 37);
     assert_eq!(fixture.sampler.last_maximum(), Some(240));
     assert_eq!(fixture.clock.reads(), 1);
+}
+
+/// A sampler that ignores the caller's maximum.
+#[derive(Debug)]
+struct OverEagerFlutter;
+
+impl FlutterSampler for OverEagerFlutter {
+    fn sample(&self, maximum: u64) -> u64 {
+        maximum.saturating_add(100)
+    }
+}
+
+#[test]
+fn put_clamps_flutter_to_the_policy_bound() {
+    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(600, 240));
+    let service = QueueService::new(
+        &fixture.repository,
+        &fixture.clock,
+        &OverEagerFlutter,
+        fixture.policy,
+    );
+
+    let scheduled = unwrap_ok(service.put(PutComment {
+        comment: comment(),
+        immediate: false,
+    }));
+
+    assert_eq!(scheduled.entry.flutter_seconds, 240);
+    assert_eq!(scheduled.entry.not_before, 1_840);
+    assert_eq!(scheduled.eta_seconds, 840);
 }
 
 #[test]

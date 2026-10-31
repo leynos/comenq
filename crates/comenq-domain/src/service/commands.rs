@@ -22,7 +22,9 @@ where
     ///
     /// Every fallible read completes before the new entry is persisted, so a
     /// failed projection never leaves an unannounced queue entry. Sampling the
-    /// flutter delay happens once, before those reads.
+    /// flutter delay happens once, before those reads, and the result is
+    /// clamped to the policy bound so a misbehaving sampler cannot widen the
+    /// schedule.
     ///
     /// # Errors
     ///
@@ -35,7 +37,10 @@ where
             .validate()
             .map_err(QueueError::InvalidRepositoryComponent)?;
         let now = self.clock.unix_now();
-        let flutter_seconds = self.sampler.sample(self.policy.flutter_max_seconds);
+        let flutter_seconds = self
+            .sampler
+            .sample(self.policy.flutter_max_seconds)
+            .min(self.policy.flutter_max_seconds);
         let entries = self.repository.entries()?;
         let previous_activity = activity_anchor(
             self.repository.last_post()?,
