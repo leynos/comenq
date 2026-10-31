@@ -5,6 +5,10 @@
 //! flutter was fixed when it was enqueued, so the projected schedule reported
 //! to clients matches what the worker executes.
 
+#![expect(
+    clippy::result_large_err,
+    reason = "PostCommentError carries octocrab's large `Error`"
+)]
 use crate::config::Config;
 use crate::metrics;
 use crate::queue::SharedQueue;
@@ -38,10 +42,6 @@ enum PostCommentError {
 ///
 /// A deadline expiry is kept distinct from an API response failure so the
 /// worker can report a bounded outcome and retry the queued entry.
-#[expect(
-    clippy::result_large_err,
-    reason = "octocrab's `Error` is large and the daemon's error enums carry it by value"
-)]
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -61,10 +61,6 @@ async fn post_comment(
 #[tracing::instrument(
     skip(octocrab, request, config),
     fields(task = "worker", outcome = tracing::field::Empty)
-)]
-#[expect(
-    clippy::result_large_err,
-    reason = "octocrab's `Error` is large and the daemon's error enums carry it by value"
 )]
 async fn post_comment_with_metrics(
     octocrab: &Octocrab,
