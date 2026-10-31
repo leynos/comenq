@@ -93,9 +93,9 @@ ordinary request to a typed `SharedQueue` operation: `put`, `list`, `bump`,
 `ScheduledEntry` values become protocol `PendingEntry` values only at this
 boundary. The adapter converts the operation result to a protocol `Response`;
 queue mutations notify the worker after success. Domain and repository errors
-share one message and bounded-category mapping, while history requests keep
-their store-error mapping. The domain service performs scheduling, and
-`QueueStore` performs persistence.
+share one message and bounded-category mapping. History requests wrap their
+store errors as `QueueError::Repository` and use the same mapping. The domain
+service performs scheduling, and `QueueStore` performs persistence.
 
 The worker claims the due head through the domain service while holding the
 store lock; the lock is released before the worker calls GitHub. A failed post
