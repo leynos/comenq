@@ -967,11 +967,13 @@ Thresholds that trigger escalation when breached.
       defects remain in the preserved upstream text. The PR squash-merged as
       `b264e216f37d0b34d624c3212c33846cfbc79692` at
       2026-10-31T16:22:47Z, guarded by `--match-head-commit` against the
-      accepted head `945df03`, with no administrator bypass. `Coverage (main)`
-      is the only workflow a `main` push triggers here; `release.yml` fires
-      only on version tags, so nothing was published. Every prior objection
-      that had blocked the merge was either satisfied by evidence or, where
-      the evidence showed the objection was mine to fix, corrected.
+      accepted head `945df03`, with no administrator bypass. Nothing was
+      published: the Actions run history for `b264e21` lists exactly one run,
+      `Coverage (main)` (push). `release.yml` runs on version-tag pushes and
+      as a reusable workflow; its only caller, `release-dry-run.yml`, runs on
+      `pull_request` events, so the merge could not invoke it. Every prior
+      objection that had blocked the merge was either satisfied by evidence
+      or, where the evidence showed it required correction, corrected.
 
 ## Surprises & discoveries
 
@@ -1793,9 +1795,11 @@ at 2026-10-31T16:22:47Z, after a formal review that found seven genuine defects
 in the imported upstream documents. Those seven are now recorded upstream
 errata rather than silent corrections, which is the honest outcome: this
 migration vendored the text at a pinned commit and must not rewrite it, so a
-reader is told what is wrong with it instead. Nothing was published —
-`release.yml` fires only on version tags, so the merge triggered only
-`Coverage (main)`.
+reader is told what is wrong with it instead. Nothing was published: the
+Actions run history for `b264e21` lists exactly one run, `Coverage (main)`.
+`release.yml` runs on version-tag pushes and as a reusable workflow, and its
+only caller, `release-dry-run.yml`, runs on `pull_request` events, so the merge
+could not invoke it.
 
 What actually mattered was resisting two tempting edits. Adopting
 `into_ortho_merge` would have relabelled every environment- and file-layer
