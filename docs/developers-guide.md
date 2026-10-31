@@ -149,6 +149,11 @@ mutating process-wide variables. The loader reads only the documented upper-case
 `COMENQD_<FIELD>` names, so differently cased variables are ignored. The
 `${VAR}` token-path expansion also uses the injected provider.
 
+Public `_with_env` variants expose the same seam: `comenq::run_with_env`,
+`comenq::Args::socket_candidates_with_env`, and
+`Config::github_tokens_with_env`. Their production wrappers pass
+`mockable::DefaultEnv`.
+
 `Config::github_tokens()` is a fallible resolver, not an accessor for a cached
 pool. Each call reads and validates the configured token files again. The
 `NamedToken` values returned by the resolver own both the token string and its
