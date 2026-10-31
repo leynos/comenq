@@ -43,7 +43,7 @@ jobs:
         with:
           globs: '**/*.md'
       - name: Install Whitaker Dylint suite
-        uses: leynos/shared-actions/.github/actions/install-whitaker@872f59f53717b5bebe8e24b2f4a7496b089a939a
+        uses: leynos/shared-actions/.github/actions/install-whitaker@5a99aed78ce68dcebd3052b75c31e6f173162b1e
         env:
           # The prebuilt dylint-link binary aborts its post-install
           # verification when RUSTUP_TOOLCHAIN is unset, and the source
