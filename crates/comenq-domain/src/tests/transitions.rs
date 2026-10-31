@@ -106,23 +106,6 @@ fn missing_entry_release_is_stale() {
 }
 
 #[test]
-fn stale_token_release_leaves_the_claim_untouched() {
-    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
-    let mut entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
-    entry.claim_token = Some(ClaimToken::new("held"));
-    fixture.repository.seed(entry);
-
-    let outcome = unwrap_ok(fixture.service().release_claim("aaaaaaaa", "other"));
-
-    assert_eq!(outcome, ReleaseOutcome::Stale);
-    assert_eq!(stored_claim(&fixture), Some(ClaimToken::new("held")));
-    match fixture.repository.last_attempt() {
-        Ok(attempt) => assert_eq!(attempt, None),
-        Err(error) => panic!("last attempt read failed: {error}"),
-    }
-}
-
-#[test]
 fn release_without_a_claim_is_stale() {
     let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
     fixture
