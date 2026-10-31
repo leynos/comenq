@@ -791,6 +791,54 @@ Thresholds that trigger escalation when breached.
       reported `capacity 4, held 4, healthy` throughout, so this was ordinary
       queueing, not a hung or unhealthy gate.
 
+- [x] (2026-10-31) **Babysitting: renewed the candidate-bound assessment for
+      the repaired head.** The prior clearance,
+      <https://github.com/leynos/comenq/pull/239#issuecomment-6470567550>,
+      named head `7a92f36` and therefore did not cover `9961ed4`; the
+      assessment reference requires renewed candidate-bound evidence after a
+      repair. Following it, a follow-up question was posted through the
+      manual-comment route (pool identity `pandalump`, deliberately not the
+      lifecycle account, per the comment-identity contract) as
+      <https://github.com/leynos/comenq/pull/239#issuecomment-6544126165>,
+      carrying `Assessment-ID:
+      comenq-239-ortho-config-0100-followup-9961ed4` and naming base
+      `43b11a1` and head `9961ed4`. It linked the original request and
+      response, described the CodeScene finding and the `rstest` repair,
+      listed the eight gate results with the 498/498 and 11/55/211 totals, and
+      recorded the three known limitations (Sourcery's 150,000-character
+      review-limit decline, the absence of hosted CodeScene analysis, and
+      `origin/main` having advanced to `01a7128` with no file overlap).
+      The substantive reply arrived 83 seconds later as
+      <https://github.com/leynos/comenq/pull/239#issuecomment-6544141609>: it
+      echoed the Assessment-ID and both SHAs, confirmed exactly one commit
+      after `7a92f36` touching only `startup_contract.rs` and this plan, and
+      assessed the parameterization as behaviour-preserving on the strength of
+      the source cases themselves rather than the reported totals. Its
+      conformance table cleared all eight obligations (published dependency
+      and graph, precedence, error-API migration, token behaviour, regression
+      coverage, test isolation and coverage collection, documentation
+      provenance, and optional capabilities and toolchain). Two caveats were
+      stated rather than glossed: it did not independently re-run builds,
+      tests, or CodeScene, and it assessed the requested base/head rather than
+      a tree merged with newer `main`. Neither is an in-scope defect; the
+      first is covered by the gate evidence above, the second by the empty
+      file-set intersection with `01a7128` recorded in the decision log.
+
+- [x] (2026-10-31) **Babysitting: recorded proof scrutiny as not applicable.**
+      The assessment reference requires an explicit satisfactory assessment
+      only for proofs the change introduces or materially alters, and asks for
+      a justified `not applicable` otherwise. This diff introduces none. It
+      adds no `kani`, `verus`, `crosshair`, or `lemmascript` artefact
+      (`git ls-files` matches nothing for any of those names), and it adds no
+      property test: `proptest` is already a workspace dependency and is used
+      elsewhere, but the PR's 669 added test lines are `rstest` cases,
+      integration tests over a child process, and one behavioural step —
+      example-based coverage, not proofs. The only `rstest` additions are the
+      parameterized startup-contract cases, whose obligation is the ordinary
+      one that a regression test fails before the fix and passes after, which
+      the case-specific diagnostic needles discharge. Posting an empty proof
+      inventory would have been ceremonial, so no question was posted.
+
 ## Surprises & discoveries
 
 - Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
