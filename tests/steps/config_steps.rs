@@ -13,7 +13,7 @@ use test_support::EnvVarGuard;
 pub struct ConfigWorld {
     dir: Option<TempDir>,
     path: Option<PathBuf>,
-    result: Option<Result<Config, ortho_config::OrthoError>>,
+    result: Option<ortho_config::OrthoResult<Config>>,
     env_guard: Option<EnvVarGuard>,
     socket_guard: Option<EnvVarGuard>,
 }

@@ -5,11 +5,25 @@ use super::super::{
     DEFAULT_RESTART_MIN_DELAY_MS,
 };
 use clap::Parser as _;
+use ortho_config::OrthoError;
 use rstest::rstest;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use test_support::EnvVarGuard;
+
+/// Return the `io::ErrorKind` behind an [`OrthoError::File`], if present.
+///
+/// `load_config_file` wraps every filesystem verdict in `OrthoError::File`
+/// with an `io::Error` source, so the kind is what distinguishes "no such
+/// file" from "not a regular file" without matching on a rendered message.
+fn file_error_kind(error: &OrthoError) -> Option<io::ErrorKind> {
+    let OrthoError::File { source, .. } = error else {
+        return None;
+    };
+    source.downcast_ref::<io::Error>().map(io::Error::kind)
+}
 
 #[test]
 fn github_token_file_cli_option_parses() {
@@ -181,6 +195,26 @@ fn error_when_missing_file() {
     let path = PathBuf::from("/nonexistent/file.toml");
     let res = Config::from_file(&path);
     assert!(res.is_err());
+}
+
+#[rstest]
+#[serial_test::serial]
+fn error_when_path_is_a_directory() {
+    // ortho_config v0.3.0 returned `Ok(None)` for any path that was not a
+    // file; v0.10.0 rejects a non-regular entry outright. Both are errors
+    // once the missing-file `ok_or_else` runs, so `is_err()` alone would pass
+    // under either behaviour and would not detect a regression. Assert the
+    // `InvalidInput` kind that v0.10.0's directory rejection produces.
+    let dir = tempdir().expect("create tempdir");
+
+    let res = Config::from_file(dir.path());
+
+    let error = res.expect_err("a directory must not load as configuration");
+    assert_eq!(
+        file_error_kind(&error),
+        Some(io::ErrorKind::InvalidInput),
+        "v0.10.0 rejects a directory as invalid input, not as a missing file; got {error}",
+    );
 }
 
 #[rstest]
