@@ -1,8 +1,4 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![expect(
-    clippy::result_large_err,
-    reason = "octocrab's `Error` is large and is carried by value in the daemon's error enums"
-)]
 
 //! Library components for the Comenqd daemon.
 //!

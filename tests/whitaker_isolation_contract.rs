@@ -9,6 +9,22 @@ use std::process::Command;
 
 use rstest::rstest;
 
+/// The warning-only `RUSTFLAGS` assignment that isolates Whitaker, with its trailing space.
+const LITERAL_RUSTFLAGS: &str = "RUSTFLAGS=\"-D warnings\" ";
+
+/// Returns whether a command, after any leading `NAME=value` assignments, runs the Whitaker
+/// executable: the first word's basename is `whitaker` or a versioned `whitaker-*` name, so a
+/// `cargo` path that merely contains the word does not match.
+fn runs_whitaker(command: &str) -> bool {
+    let mut words = command
+        .split_whitespace()
+        .skip_while(|word| word.contains('='));
+    words.next().is_some_and(|binary| {
+        let name = binary.rsplit('/').next().unwrap_or(binary);
+        name == "whitaker" || name.starts_with("whitaker-")
+    })
+}
+
 /// Returns the `make -n lint` line that runs Whitaker.
 fn whitaker_line() -> Result<String, String> {
     let output = Command::new("make")
@@ -24,7 +40,14 @@ fn whitaker_line() -> Result<String, String> {
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .find(|line| line.contains("whitaker"))
+        .find(|line| {
+            line.split("&&").any(|command| {
+                command
+                    .trim()
+                    .strip_prefix(LITERAL_RUSTFLAGS)
+                    .is_some_and(runs_whitaker)
+            })
+        })
         .map(str::to_owned)
         .ok_or_else(|| "`make -n lint` runs no Whitaker command".to_owned())
 }
@@ -33,15 +56,14 @@ fn whitaker_line() -> Result<String, String> {
 /// `CARGO_ENCODED_RUSTFLAGS`, which outranks `RUSTFLAGS`, and then assign the literal warning-only
 /// `RUSTFLAGS`, which displaces every `rustflags` source and inherits nothing from the caller.
 fn isolation_problems(line: &str) -> Vec<String> {
-    let literal = "RUSTFLAGS=\"-D warnings\" ";
     let commands: Vec<&str> = line.split("&&").map(str::trim).collect();
     let clear_at = commands
         .iter()
         .position(|command| *command == "unset CARGO_ENCODED_RUSTFLAGS");
     let whitaker_at = commands.iter().position(|command| {
         command
-            .strip_prefix(literal)
-            .is_some_and(|rest| rest.contains("whitaker"))
+            .strip_prefix(LITERAL_RUSTFLAGS)
+            .is_some_and(runs_whitaker)
     });
     let mut problems = Vec::new();
     // The clear must run before Whitaker starts, or the encoded flags are still in force then.
@@ -79,6 +101,14 @@ fn make_lint_isolates_whitaker_with_the_literal_rustflags() -> Result<(), String
 #[case::isolated(
     "unset CARGO_ENCODED_RUSTFLAGS && RUSTFLAGS=\"-D warnings\" whitaker --all -- --all-targets",
     true
+)]
+#[case::versioned_installer_name(
+    "unset CARGO_ENCODED_RUSTFLAGS && RUSTFLAGS=\"-D warnings\" whitaker-0.2.9 --all",
+    true
+)]
+#[case::a_path_that_only_contains_the_word(
+    "unset CARGO_ENCODED_RUSTFLAGS && RUSTFLAGS=\"-D warnings\" /home/whitaker/.cargo/bin/cargo clippy",
+    false
 )]
 #[case::encoded_flags_cleared_after_whitaker(
     "RUSTFLAGS=\"-D warnings\" whitaker --all -- --all-targets && unset CARGO_ENCODED_RUSTFLAGS",

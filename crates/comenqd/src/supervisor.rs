@@ -43,6 +43,10 @@ pub enum SupervisorError {
 pub type Result<T> = std::result::Result<T, SupervisorError>;
 
 /// Asynchronously create the queue directory and any missing parents.
+#[expect(
+    clippy::result_large_err,
+    reason = "octocrab's `Error` is large and the daemon's error enums carry it by value"
+)]
 pub async fn ensure_queue_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).await?;
     Ok(())
@@ -157,6 +161,10 @@ async fn supervise_task<F>(
 }
 
 /// Start the daemon with the provided configuration.
+#[expect(
+    clippy::result_large_err,
+    reason = "octocrab's `Error` is large and the daemon's error enums carry it by value"
+)]
 pub async fn run(config: Config) -> Result<()> {
     let tokens = config.github_tokens()?;
     run_with_tokens(config, tokens).await
@@ -175,6 +183,10 @@ pub async fn run(config: Config) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
+#[expect(
+    clippy::result_large_err,
+    reason = "octocrab's `Error` is large and the daemon's error enums carry it by value"
+)]
 pub async fn run_with_tokens(config: Config, tokens: Vec<NamedToken>) -> Result<()> {
     if tokens.is_empty() {
         return Err(std::io::Error::new(

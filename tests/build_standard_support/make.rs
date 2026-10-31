@@ -137,7 +137,13 @@ fn is_isolated_whitaker(command: &str) -> bool {
     command
         .strip_prefix("RUSTFLAGS=\"-D warnings\" ")
         .and_then(|rest| rest.split_whitespace().next())
-        .is_some_and(|binary| binary.rsplit('/').next() == Some("whitaker"))
+        .is_some_and(|binary| {
+            // A versioned installer name such as `whitaker-0.2.9` is the same tool.
+            binary
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name == "whitaker" || name.starts_with("whitaker-"))
+        })
 }
 
 /// A Makefile target name, typed so a runner takes a target and not just any text.
