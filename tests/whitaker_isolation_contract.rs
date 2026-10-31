@@ -35,19 +35,22 @@ fn whitaker_line() -> Result<String, String> {
 fn isolation_problems(line: &str) -> Vec<String> {
     let literal = "RUSTFLAGS=\"-D warnings\" ";
     let commands: Vec<&str> = line.split("&&").map(str::trim).collect();
-    let clears_encoded = commands.contains(&"unset CARGO_ENCODED_RUSTFLAGS");
-    let runs_literal = commands.iter().any(|command| {
+    let clear_at = commands
+        .iter()
+        .position(|command| *command == "unset CARGO_ENCODED_RUSTFLAGS");
+    let whitaker_at = commands.iter().position(|command| {
         command
             .strip_prefix(literal)
             .is_some_and(|rest| rest.contains("whitaker"))
     });
     let mut problems = Vec::new();
-    if !clears_encoded {
+    // The clear must run before Whitaker starts, or the encoded flags are still in force then.
+    if clear_at.is_none_or(|clear| whitaker_at.is_some_and(|whitaker| clear > whitaker)) {
         problems.push(format!(
             "the Whitaker command must clear `CARGO_ENCODED_RUSTFLAGS` first: {line}"
         ));
     }
-    if !runs_literal {
+    if whitaker_at.is_none() {
         problems.push(format!(
             "the Whitaker command must assign the literal `RUSTFLAGS=\"-D warnings\"`: {line}"
         ));
@@ -76,6 +79,10 @@ fn make_lint_isolates_whitaker_with_the_literal_rustflags() -> Result<(), String
 #[case::isolated(
     "unset CARGO_ENCODED_RUSTFLAGS && RUSTFLAGS=\"-D warnings\" whitaker --all -- --all-targets",
     true
+)]
+#[case::encoded_flags_cleared_after_whitaker(
+    "RUSTFLAGS=\"-D warnings\" whitaker --all -- --all-targets && unset CARGO_ENCODED_RUSTFLAGS",
+    false
 )]
 #[case::encoded_flags_not_cleared(
     "RUSTFLAGS=\"-D warnings\" whitaker --all -- --all-targets",
