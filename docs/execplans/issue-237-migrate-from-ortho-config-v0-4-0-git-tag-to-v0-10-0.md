@@ -747,7 +747,8 @@ Thresholds that trigger escalation when breached.
       base/head comparison: `cs delta 43b11a1 7a92f36` — the PR's actual base
       rather than a movable `origin/main`, which had advanced to `2e2f1be`
       (#241, a CI pin touching only `.github/workflows/ci.yml`, a path this PR
-      does not modify; `git merge-tree` against the new main is conflict-free).
+      does not modify; `git merge-tree` against the new main reported no
+      textual conflict, which says nothing about merged-tree behaviour).
       The delta reported exactly one finding, `Duplicated Assertion Blocks`,
       `introduced`, `new-score` 9.68, in
       `crates/comenqd/tests/startup_contract.rs` — a file this PR adds. The
@@ -807,7 +808,9 @@ Thresholds that trigger escalation when breached.
       listed the eight gate results with the 498/498 and 11/55/211 totals, and
       recorded the three known limitations (Sourcery's 150,000-character
       review-limit decline, the absence of hosted CodeScene analysis, and
-      `origin/main` having advanced to `01a7128` with no file overlap).
+      `origin/main` having advanced to `01a7128` with no overlap between the
+      two changed-file sets — which bounds direct conflict risk but is not
+      evidence about interaction or merged-tree behaviour).
       The substantive reply arrived 83 seconds later as
       <https://github.com/leynos/comenq/pull/239#issuecomment-6544141609>: it
       echoed the Assessment-ID and both SHAs, confirmed exactly one commit
@@ -820,9 +823,15 @@ Thresholds that trigger escalation when breached.
       provenance, and optional capabilities and toolchain). Two caveats were
       stated rather than glossed: it did not independently re-run builds,
       tests, or CodeScene, and it assessed the requested base/head rather than
-      a tree merged with newer `main`. Neither is an in-scope defect; the
-      first is covered by the gate evidence above, the second by the empty
-      file-set intersection with `01a7128` recorded in the decision log.
+      a tree merged with newer `main`. Neither is an in-scope defect. The
+      first is covered by the gate evidence above. The second is *not*
+      discharged by the empty file-set intersection with `01a7128`: that
+      intersection reduces direct conflict risk but proves nothing about
+      interaction between the two change sets, so integration with the newer
+      `main` stays marked unverified until a merged tree is validated. This
+      bullet is a summary with references, not a verbatim reproduction of the
+      conversation; the full bodies are preserved under the evidence directory
+      and at the two URLs above.
 
 - [x] (2026-10-31) **Babysitting: recorded proof scrutiny as not applicable.**
       The assessment reference requires an explicit satisfactory assessment
@@ -833,11 +842,62 @@ Thresholds that trigger escalation when breached.
       property test: `proptest` is already a workspace dependency and is used
       elsewhere, but the PR's 669 added test lines are `rstest` cases,
       integration tests over a child process, and one behavioural step —
-      example-based coverage, not proofs. The only `rstest` additions are the
-      parameterized startup-contract cases, whose obligation is the ordinary
-      one that a regression test fails before the fix and passes after, which
-      the case-specific diagnostic needles discharge. Posting an empty proof
-      inventory would have been ceremonial, so no question was posted.
+      example-based coverage, not proofs. The `rstest` additions are wider than
+      the `9961ed4` refactor alone: besides the parameterized startup-contract
+      cases, the PR adds the two-row precedence table
+      `socket_path_resolves_to_the_highest_present_tier` (with rows
+      `command_line_overrides_a_differing_file_value` and
+      `command_line_value_equal_to_the_built_in_default_still_wins`), and
+      further `rstest` tables in `config/tests/configuration.rs`. All of them
+      are example-based specification, not proofs.
+      The startup-contract cases in particular are *preservation* tests: the
+      behaviour is meant to be unchanged, so they pass before and after the
+      migration, and the case-specific diagnostic needles serve to distinguish
+      the intended startup failure from an unrelated later failure rather than
+      to demonstrate a red-then-green transition. The non-vacuity evidence for
+      this suite is the recorded seeded-fault and mutation checks
+      (`INV-RESTATED-DEFAULT` and the two seeded faults), not the needles.
+      Posting an empty proof inventory would have been ceremonial, so no
+      question was posted.
+
+- [x] (2026-10-31) **Babysitting: dispositioned four documentation findings
+      from the second assessment.** The plan-only commit moved the head to
+      `c9849f6`, so a third question
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6544173786>)
+      asked whether the prior assessment still held. The reply
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6544184832>)
+      retained the implementation assessment and kept the proof-scrutiny
+      `not applicable` conclusion, but raised four wording defects. All four
+      were true and all four were fixed in the plan text:
+
+  1. *The empty changed-file intersection was presented as covering the
+     integration caveat.* Corrected. Disjoint file sets bound direct conflict
+     risk; they say nothing about interaction between the two change sets, so
+     integration with `01a7128` is now marked unverified until a merged tree is
+     validated. The same overclaim appeared twice more and was corrected
+     there too, at the `2e2f1be` note (a conflict-free `git merge-tree` proves
+     no textual conflict, not merged-tree behaviour) and in the limitation
+     summary.
+  2. *"The only `rstest` additions are the parameterized startup-contract
+     cases" was false for the whole PR.* Corrected. The PR also adds the
+     two-row `socket_path_resolves_to_the_highest_present_tier` precedence
+     table and further `rstest` tables in `config/tests/configuration.rs`; the
+     bullet now names them rather than restricting the claim to the `9961ed4`
+     refactor.
+  3. *The diagnostic needles were said to discharge a red-then-green
+     obligation.* Corrected. These are preservation tests for unchanged
+     behaviour, so they are expected to pass before and after; the needles
+     distinguish the intended startup failure from an unrelated later one.
+     Non-vacuity rests on the recorded seeded-fault and mutation checks, and
+     the bullet now says so.
+  4. *The first bullet read as a verbatim reproduction.* Corrected. It is now
+     labelled a summary with references, with the full bodies held in the
+     evidence directory and at the two comment URLs.
+
+     The reviewer explicitly authorized not re-running the compile-based gates
+     for this prose-only delta and asked that their results stay attributed to
+     `9961ed4`; that attribution is unchanged above. Documentation gates were
+     re-run for the corrected text.
 
 ## Surprises & discoveries
 
