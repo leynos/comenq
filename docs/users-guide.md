@@ -205,10 +205,12 @@ If the daemon closes the connection before sending any reply, the client reports
 mismatch with an older daemon; run comenq and comenqd from the same release)`
 instead, because it cannot tell a protocol mismatch from an empty response.
 
-Both errors exit with status 1, and neither changes the queue. The comment
-keeps its place and posts on schedule while `comenqd` keeps running. If the
-daemon closed the connection because it stopped or crashed rather than because
-of a version mismatch, check that `comenqd` is running before retrying.
+Both errors exit with status 1. These errors do not themselves change the
+queue, but `NoInitialReply` does not prove that the comment is still queued.
+The daemon may have posted and removed the comment before the client received
+the first frame. Check posting history with `comenq hist` before retrying. If
+the daemon closed the connection because it stopped or crashed rather than
+because of a version mismatch, check that `comenqd` is running before retrying.
 
 ## Inspect local metrics
 
