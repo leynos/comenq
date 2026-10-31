@@ -151,6 +151,82 @@ stay verifiable against `38812c56`.
   This affects only the documentation's example. Nothing in this repository runs
   `cargo orthohelp`, and the daemon's own behaviour is unaffected.
 
+- `docs/ortho-config/docs/adrs/adr-0003-define-schema-ownership-for-agent-native-contracts.md`
+  writes the policy-report owner as `cargo-orthohelp::policy` at lines 58 and
+  74. The surrounding corpus uses the underscore form for the same module —
+  `docs/ortho-config/CHANGELOG.md`, `cargo-orthohelp-api-guide.md`,
+  `cargo-orthohelp-design.md` and `agent-native-cli-design.md` all write
+  `cargo_orthohelp::policy`. Because these are backticked Rust paths rather
+  than prose, the hyphenated spelling does not compile. Read both occurrences as
+  `cargo_orthohelp::policy`. The hyphenated form does exist in the corpus, but
+  only as the CLI binary's *name*, so the distinction is between the package
+  and the module that package exposes.
+
+- `docs/ortho-config/docs/adrs/adr-0014-documentation-build-ownership.md`
+  links `[design-infrastructure]` to
+  `../design.md#419-executable-documentation-test-build-ownership` at line 370.
+  `docs/ortho-config/docs/design.md` was not imported and the target heading
+  text appears nowhere in the imported corpus, so this reference is dangling.
+  That is the boundary recorded above under "Second-level link targets": the
+  deeper reference is in the same dangling state it occupies upstream. The
+  related `[developer-guidance]` link to
+  `developers-guide.md#public-documentation-examples` *does* resolve, because
+  that file and its `### Public documentation examples` heading are both
+  present. Only the `design.md` target is missing here.
+
+- `docs/ortho-config/docs/cargo-orthohelp-design.md` registers one
+  three-parameter scriptblock
+  `param($wordToComplete, $commandAst, $cursorPosition)` at line 1102 and again
+  at line 1373, then reuses it for both branches of the registration at lines
+  1108-1112 and 1374-1381. That signature is correct only for the `-Native`
+  branch. Without `-Native`, `Register-ArgumentCompleter` passes a different
+  positional contract, so the fallback branch would bind the wrong values. Per
+  Microsoft's `Register-ArgumentCompleter` reference, the scriptblock must
+  accept these parameters in order. With `-Native`: `$wordToComplete`,
+  `$commandAst`, `$cursorPosition`. Without it: `$commandName`,
+  `$parameterName`, `$wordToComplete`, `$commandAst`, `$fakeBoundParameters`. A
+  generated wrapper needs two scriptblocks, or one scriptblock that
+  distinguishes the case. The design document's stated intent elsewhere is that
+  registrations target the wrapper *function*, which requires the five-argument
+  form.
+
+- `docs/ortho-config/docs/cargo-orthohelp-design.md` sets
+  `ExternalHelp = '<ModuleName>-help.xml'` in the minimum module manifest at
+  line 1125, and `ExternalHelp = 'MyApp-help.xml'` at line 1392. `ExternalHelp`
+  is not a module-manifest key. Per Microsoft's `about_Comment_Based_Help`,
+  `.EXTERNALHELP` is a *comment-based help keyword*, and for a module-exported
+  function the documented mechanism is a `<ModuleName>-help.xml` file placed in
+  a language-specific subdirectory of the module directory, discovered without
+  any manifest entry. The key as written is therefore inert. `HelpInfoUri`,
+  which the same example already comments out, is the manifest key for
+  *updatable* help and should be set only when hosting Update-Help payloads.
+
+- `docs/ortho-config/docs/cargo-orthohelp-design.md` opens "14. Implementation
+  plan (delta)" at line 1398 with "Bump the IR schema to 1.1". That item
+  predates the current contract. The document is Revision 4 (line 14), and it
+  states `ir_version = "2.0"` at lines 1213, 1287 and 1334. Read the 1.1 item
+  as a historical Revision 2 stage; the binding version for the current
+  revision is `2.0`.
+
+- `docs/ortho-config/docs/v0-7-0-migration-guide.md` line 124 imports
+  `FluentLocalizer`, `Localizer`, `langid` and
+  `localize_clap_error_with_command` from `ortho_config`, but line 132 calls
+  `Cli::command().localize(&localizer)`. The trait method `localize` is
+  provided by `LocalizeCmd`, which the example does not import, so a consumer
+  copying it verbatim gets an unresolved-method error. Add `LocalizeCmd` to the
+  import list.
+
+- `docs/ortho-config/examples/hello_world/README.md` renders the crate name's
+  possessive with a space before the apostrophe, producing `ortho_config ’s`
+  rather than `ortho_config’s`. This occurs twice: at line 48, in the
+  "Localized help text" bullet, and at line 91, in the `src/localizer.rs`
+  description. Only the spacing is wrong; the punctuation is the correct
+  typographic apostrophe.
+
+No file above was edited. Each entry names a defect in the pinned upstream text
+at `38812c56`, which this repository preserves rather than rewrites, so every
+recorded SHA-256 above remains valid.
+
 ### Reproducing the import
 
 Every listed entry in `docs/ortho-config/examples-hello-world-files.txt`
