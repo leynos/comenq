@@ -13,7 +13,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 anyhow = { workspace = true }
-cap-std = { version = "4.0.3", features = ["fs_utf8"] }
 cucumber = "0.20"
 tokio = { workspace = true }
 clap = { workspace = true }
