@@ -169,41 +169,6 @@ pub struct QueueStore {
     history_path: PathBuf,
 }
 
-/// Compute the deterministic eight-character identifier for an entry.
-///
-/// Uses the 64-bit FNV-1a hash of the request fields and enqueue time,
-/// rendered as the first eight lowercase hex digits. The hash is content
-/// derived, so an entry keeps the same identifier for its whole life and
-/// across daemon restarts.
-fn entry_id(request: &CommentRequest, enqueued_at: u64) -> String {
-    entry_id_with_salt(request, enqueued_at, None)
-}
-
-/// Derive an identifier, adding a salt only when resolving a collision.
-fn entry_id_with_salt(request: &CommentRequest, enqueued_at: u64, salt: Option<u64>) -> String {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = FNV_OFFSET;
-    let mut eat = |bytes: &[u8]| {
-        for b in bytes {
-            hash ^= u64::from(*b);
-            hash = hash.wrapping_mul(FNV_PRIME);
-        }
-    };
-    eat(request.owner.as_bytes());
-    eat(&[0]);
-    eat(request.repo.as_bytes());
-    eat(&[0]);
-    eat(&request.pr_number.to_le_bytes());
-    eat(request.body.as_bytes());
-    eat(&enqueued_at.to_le_bytes());
-    if let Some(salt) = salt {
-        eat(&salt.to_le_bytes());
-    }
-    let hex = format!("{hash:016x}");
-    hex.chars().take(8).collect()
-}
-
 impl QueueStore {
     /// Open (creating if necessary) the store rooted at `queue_path`.
     pub fn open(queue_path: &Path) -> Result<Self> {
@@ -224,40 +189,6 @@ impl QueueStore {
         store.reclaim_claims()?;
         store.reconcile_await_deletions()?;
         Ok(store)
-    }
-
-    /// Move the identified entry to the head of the queue.
-    pub fn bump(&self, id: &str) -> Result<()> {
-        self.reorder(id, |entry, all| {
-            all.first().map_or(entry.order, |head| {
-                if head.id == entry.id {
-                    entry.order
-                } else {
-                    head.order.saturating_sub(1)
-                }
-            })
-        })
-    }
-
-    /// Move the identified entry to the tail of the queue.
-    pub fn bust(&self, id: &str) -> Result<()> {
-        self.reorder(id, |entry, all| {
-            all.last().map_or(entry.order, |tail| {
-                if tail.id == entry.id {
-                    entry.order
-                } else {
-                    tail.order.saturating_add(1)
-                }
-            })
-        })
-    }
-
-    /// Remove the identified entry from the queue.
-    pub fn del(&self, id: &str) -> Result<()> {
-        let entry = self.find(id)?;
-        self.write_await_deletion(&entry)?;
-        fs::remove_file(self.entry_path(id)?)?;
-        Ok(())
     }
 
     /// Unix time of the most recent successful post, when any.
@@ -323,18 +254,6 @@ impl QueueStore {
         Ok(entry)
     }
 
-    /// Apply an order-key change and atomically replace each affected file.
-    fn reorder(
-        &self,
-        id: &str,
-        new_order: impl Fn(&StoredEntry, &[StoredEntry]) -> i64,
-    ) -> Result<()> {
-        let all = self.entries()?;
-        let mut entry = self.find(id)?;
-        entry.order = new_order(&entry, &all);
-        self.write_entry(&entry)
-    }
-
     /// Replace a file through a temporary sibling so partial writes are unseen.
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         let tmp = path.with_extension("tmp");
@@ -351,27 +270,6 @@ impl QueueStore {
         directory.sync_all()?;
         Ok(())
     }
-
-    /// Find a request's stable identifier, salting only on content collisions.
-    fn resolve_entry_id(
-        &self,
-        request: &CommentRequest,
-        now: u64,
-    ) -> Result<(String, Option<StoredEntry>)> {
-        let mut salt = None;
-        loop {
-            let id = salt.map_or_else(
-                || entry_id(request, now),
-                |value| entry_id_with_salt(request, now, Some(value)),
-            );
-            match self.find(&id) {
-                Ok(existing) if existing.request == *request => return Ok((id, Some(existing))),
-                Ok(_) => salt = Some(salt.map_or(1, |value| value.saturating_add(1))),
-                Err(StoreError::UnknownId(_)) => return Ok((id, None)),
-                Err(e) => return Err(e),
-            }
-        }
-    }
 }
 
 /// Check whether an identifier is safe as a queue-entry filename.
@@ -385,7 +283,9 @@ mod await_deletions;
 mod bounds;
 mod completion;
 mod history;
+mod repository;
 mod scheduling;
+pub(crate) use scheduling::store_error_from_queue;
 
 #[cfg(test)]
 pub(crate) use history::HistoryRecordAt;

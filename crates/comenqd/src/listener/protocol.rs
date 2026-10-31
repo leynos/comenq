@@ -1,14 +1,14 @@
 //! Adapt JSON protocol requests and queue results at the listener boundary.
 
+use comenq_domain::{PutComment, QueueError, ScheduledEntry};
 use comenq_lib::protocol::{
     HistoryCursor, HistoryEntry, MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, PendingEntry, Request,
     Response,
 };
 
-use crate::queue::SharedQueue;
-use crate::store::{
-    HistoryPage, HistoryPosition, HistoryRecord, Result as StoreResult, StoreError, StoredEntry,
-};
+use crate::queue::convert::comment_from_request;
+use crate::queue::{QueueResult, SharedQueue, queue_error_category};
+use crate::store::{HistoryPage, HistoryPosition, HistoryRecord, StoreError};
 
 /// Adapt one protocol request into a queue operation and its wire response.
 pub(crate) async fn dispatch_request(queue: &SharedQueue, request: Request) -> Response {
@@ -20,10 +20,16 @@ pub(crate) async fn dispatch_request_with_error_kind(
     request: Request,
 ) -> (Response, Option<&'static str>) {
     match request {
-        Request::Put { request, immediate } => match queue.put(request, immediate).await {
-            Ok((entry, eta)) => (Response::entry(pending_entry(entry, eta)), None),
-            Err(error) => store_error_response(error),
-        },
+        Request::Put { request, immediate } => {
+            let comment = PutComment {
+                comment: comment_from_request(&request),
+                immediate,
+            };
+            match queue.put(comment).await {
+                Ok(scheduled) => (Response::entry(pending_entry(scheduled)), None),
+                Err(error) => queue_error_response(&error),
+            }
+        }
         Request::Await { .. } => (
             Response::error("await requires a streaming connection"),
             Some("stream_required"),
@@ -40,11 +46,11 @@ pub(crate) async fn dispatch_request_with_error_kind(
                     Some("response_serialization"),
                 ),
             },
-            Err(error) => store_error_response(error),
+            Err(error) => queue_error_response(&error),
         },
-        Request::Bump { id } => map_store_response(queue.bump(&id).await),
-        Request::Bust { id } => map_store_response(queue.bust(&id).await),
-        Request::Del { id } => map_store_response(queue.del(&id).await),
+        Request::Bump { id } => map_queue_response(queue.bump(&id).await),
+        Request::Bust { id } => map_queue_response(queue.bust(&id).await),
+        Request::Del { id } => map_queue_response(queue.del(&id).await),
         Request::Hist { limit, cursor } => {
             let position = cursor.map(|cursor| HistoryPosition {
                 offset: cursor.offset,
@@ -62,21 +68,21 @@ pub(crate) async fn dispatch_request_with_error_kind(
                         Some("response_serialization"),
                     ),
                 },
-                Err(error) => store_error_response(error),
+                Err(error) => queue_error_response(&QueueError::Repository(error)),
             }
         }
     }
 }
 
-fn map_store_response(result: StoreResult<()>) -> (Response, Option<&'static str>) {
+fn map_queue_response(result: QueueResult<()>) -> (Response, Option<&'static str>) {
     match result {
         Ok(()) => (Response::ok(), None),
-        Err(error) => store_error_response(error),
+        Err(error) => queue_error_response(&error),
     }
 }
 
-fn store_error_response(error: StoreError) -> (Response, Option<&'static str>) {
-    let category = error.category();
+fn queue_error_response(error: &QueueError<StoreError>) -> (Response, Option<&'static str>) {
+    let category = queue_error_category(error);
     (Response::error(error.to_string()), Some(category))
 }
 
@@ -85,13 +91,13 @@ fn store_error_response(error: StoreError) -> (Response, Option<&'static str>) {
 /// Returning an error keeps the daemon from sending a response that the client
 /// would reject for exceeding the shared wire-size limit.
 fn response_for_schedule(
-    schedule: Vec<(StoredEntry, u64)>,
+    schedule: Vec<ScheduledEntry>,
 ) -> std::result::Result<Response, serde_json::Error> {
     let mut projected_size = serde_json::to_vec(&Response::entries(Vec::new()))?.len();
     let mut entries = Vec::with_capacity(schedule.len().min(MAX_PENDING_ENTRIES));
 
-    for (entry, eta) in schedule.into_iter().take(MAX_PENDING_ENTRIES) {
-        let pending = pending_entry(entry, eta);
+    for scheduled in schedule.into_iter().take(MAX_PENDING_ENTRIES) {
+        let pending = pending_entry(scheduled);
         let pending_size = serde_json::to_vec(&pending)?.len();
         let separator_size = usize::from(!entries.is_empty());
         let next_size = projected_size
@@ -178,15 +184,16 @@ fn history_entry(record: HistoryRecord) -> HistoryEntry {
     }
 }
 
-/// Adapt stored data to the wire shape only at the transport boundary.
-pub(crate) fn pending_entry(entry: StoredEntry, eta_seconds: u64) -> PendingEntry {
+/// Adapt domain scheduling data to the wire shape only at the transport boundary.
+pub(crate) fn pending_entry(scheduled: ScheduledEntry) -> PendingEntry {
+    let ScheduledEntry { entry, eta_seconds } = scheduled;
     PendingEntry {
-        id: entry.id,
+        id: entry.id.as_str().to_owned(),
         eta_seconds,
-        owner: entry.request.owner,
-        repo: entry.request.repo,
-        pr_number: entry.request.pr_number,
-        body: entry.request.body,
+        owner: entry.comment.owner,
+        repo: entry.comment.repo,
+        pr_number: entry.comment.pr_number,
+        body: entry.comment.body,
     }
 }
 
@@ -194,7 +201,79 @@ pub(crate) fn pending_entry(entry: StoredEntry, eta_seconds: u64) -> PendingEntr
 mod tests {
     use super::*;
     use crate::store::{HistoryPosition, HistoryRecordAt};
+    use comenq_domain::{Comment, EntryId, EntryLifetime, QueuedEntry, ScheduledEntry};
     use comenq_lib::CommentRequest;
+    use rstest::rstest;
+
+    /// Build a scheduled entry for wire-conversion tests.
+    fn scheduled_entry(eta_seconds: u64) -> ScheduledEntry {
+        ScheduledEntry {
+            entry: QueuedEntry {
+                id: EntryId::parse("1a2b3c4d").expect("valid identifier"),
+                lifetime: EntryLifetime::new("lifetime"),
+                order: 3,
+                flutter_seconds: 7,
+                enqueued_at: 1_000,
+                not_before: 0,
+                claim_token: None,
+                comment: Comment::new("octocat", "hello-world", 7, "body"),
+            },
+            eta_seconds,
+        }
+    }
+
+    /// Domain errors keep their historical client-facing messages and categories.
+    #[rstest]
+    #[case::unknown_identifier(
+        QueueError::UnknownIdentifier("deadbeef".into()),
+        "no queued comment has id 'deadbeef'",
+        "unknown_identifier"
+    )]
+    #[case::invalid_identifier(
+        QueueError::InvalidIdentifier(
+            EntryId::parse("wrong").expect_err("identifier must be rejected")
+        ),
+        "queue entry id 'wrong' must be eight hexadecimal characters",
+        "unsafe_identifier"
+    )]
+    #[case::invalid_repository_component(
+        QueueError::InvalidRepositoryComponent("owner"),
+        "GitHub repository owner contains unsafe characters",
+        "invalid_repository_component"
+    )]
+    #[case::repository_queue_full(
+        QueueError::Repository(StoreError::QueueFull(1024)),
+        "queue would exceed the maximum of 1024 pending entries",
+        "queue_full"
+    )]
+    fn queue_errors_map_to_bounded_wire_responses(
+        #[case] error: QueueError<StoreError>,
+        #[case] message: &str,
+        #[case] category: &str,
+    ) {
+        let (response, kind) = queue_error_response(&error);
+
+        assert_eq!(kind, Some(category));
+        let Response::Error {
+            message: actual, ..
+        } = response
+        else {
+            panic!("expected an error response");
+        };
+        assert_eq!(actual, message);
+    }
+
+    #[test]
+    fn pending_entry_converts_domain_scheduling_data() {
+        let pending = pending_entry(scheduled_entry(637));
+
+        assert_eq!(pending.id, "1a2b3c4d");
+        assert_eq!(pending.eta_seconds, 637);
+        assert_eq!(pending.owner, "octocat");
+        assert_eq!(pending.repo, "hello-world");
+        assert_eq!(pending.pr_number, 7);
+        assert_eq!(pending.body, "body");
+    }
 
     fn history_record(body: String) -> HistoryRecord {
         HistoryRecord {
