@@ -2,7 +2,6 @@
 
 pub mod daemon;
 pub mod env;
-pub mod env_guard;
 pub mod logging;
 pub mod util;
 mod workflow;
@@ -11,7 +10,6 @@ pub use workflow::uses_shared_release_actions;
 // Re-exports from daemon module (added in main)
 pub use daemon::{TestConfig, octocrab_for, octocrab_with_token, temp_config};
 pub use env::mock_env;
-pub use env_guard::EnvVarGuard;
 
 // Re-exports from util module with documentation (from your branch)
 /// Maximum number of times to poll for an expected file.

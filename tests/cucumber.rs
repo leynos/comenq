@@ -1,7 +1,7 @@
 //! Cucumber test entry point.
 //!
-//! This module runs independent worlds concurrently and serializes worlds
-//! that mutate process-wide environment variables.
+//! All worlds run concurrently. Environment-dependent behaviour uses injected
+//! `mockable::Env` providers, so no world mutates process-wide state.
 
 mod steps;
 use cucumber::World as _;
@@ -29,13 +29,10 @@ fn main() -> anyhow::Result<()> {
             HistoryWorld::run("tests/features/history.feature"),
             QueueWorld::run("tests/features/queue.feature"),
             WorkerWorld::run("tests/features/worker.feature"),
+            CliWorld::run("tests/features/cli.feature"),
+            ClientWorld::run("tests/features/client_main.feature"),
+            ConfigWorld::run("tests/features/config.feature"),
         );
-
-        // These worlds temporarily mutate process-wide environment variables.
-        // Run them separately so their environment-dependent assertions cannot race.
-        CliWorld::run("tests/features/cli.feature").await;
-        ClientWorld::run("tests/features/client_main.feature").await;
-        ConfigWorld::run("tests/features/config.feature").await;
     });
     Ok(())
 }

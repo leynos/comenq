@@ -19,7 +19,6 @@ clap = { workspace = true }
 comenq = { path = "crates/comenq" }
 comenqd = { path = "crates/comenqd", features = ["test-support"] }
 ortho_config = { workspace = true }
-serial_test = "3"
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
 wiremock = { workspace = true }
 octocrab = { workspace = true }

@@ -1,4 +1,3 @@
-@serial
 Feature: Daemon configuration
 
   Scenario: loading a valid configuration file
