@@ -428,6 +428,7 @@ name = "comenq-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cap-std",
  "clap",
  "comenq",
  "comenqd",

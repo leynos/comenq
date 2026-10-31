@@ -138,7 +138,10 @@ async fn request_rejected(world: &mut ListenerWorld) -> anyhow::Result<()> {
         other => anyhow::bail!("expected error reply, got {other:?}"),
     }
     let queue = world.queue.as_ref().context("queue initialized")?;
-    assert!(listed_entries(queue).await?.is_empty());
+    assert_eq!(
+        listed_entries(queue).await?,
+        [] as [comenq_lib::protocol::PendingEntry; 0]
+    );
     Ok(())
 }
 
