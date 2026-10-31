@@ -1,5 +1,6 @@
 //! Shared token-file reading and path expansion for GitHub credentials.
 
+use mockable::Env;
 use ortho_config::OrthoResult;
 use std::io;
 use std::io::Read as _;
@@ -42,7 +43,10 @@ pub(super) fn read_token_file(path: &Path) -> Result<String, TokenFileReadError>
 }
 
 /// Expand a leading `${VAR}` placeholder in a token-file path.
-pub(super) fn expand_token_path(path: &Path) -> Result<PathBuf, TokenPathError> {
+///
+/// The variable is read through `env`, so callers can supply a fake
+/// environment in tests. An unset or non-Unicode value is treated as unset.
+pub(super) fn expand_token_path(path: &Path, env: &dyn Env) -> Result<PathBuf, TokenPathError> {
     let Some(text) = path.to_str() else {
         return Ok(path.to_path_buf());
     };
@@ -52,7 +56,9 @@ pub(super) fn expand_token_path(path: &Path) -> Result<PathBuf, TokenPathError> 
     let Some((variable, tail)) = rest.split_once('}') else {
         return Err(TokenPathError::Malformed(text.to_owned()));
     };
-    let value = std::env::var(variable).map_err(|_| TokenPathError::Unset(variable.to_owned()))?;
+    let value = env
+        .string(variable)
+        .ok_or_else(|| TokenPathError::Unset(variable.to_owned()))?;
     Ok(PathBuf::from(format!("{value}{tail}")))
 }
 
@@ -74,13 +80,13 @@ pub(super) fn read_github_token_file(path: &Path) -> OrthoResult<String> {
     }
 }
 
-/// Expand a leading `${VAR}` placeholder in `path` from the environment.
+/// Expand a leading `${VAR}` placeholder in `path` from `env`.
 ///
 /// Only a placeholder at the very start of the path is expanded; paths
 /// without one are returned unchanged. An unset variable or a malformed
 /// placeholder is an error so misconfiguration fails loudly at startup.
-pub(super) fn expand_env_prefix(path: &Path) -> OrthoResult<PathBuf> {
-    expand_token_path(path).map_err(|error| {
+pub(super) fn expand_env_prefix(path: &Path, env: &dyn Env) -> OrthoResult<PathBuf> {
+    expand_token_path(path, env).map_err(|error| {
         let message = match error {
             TokenPathError::Malformed(text) => {
                 format!("unterminated environment placeholder in '{text}'")

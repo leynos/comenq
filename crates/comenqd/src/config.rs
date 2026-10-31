@@ -4,17 +4,21 @@
 //! overridden by environment variables using the `COMENQD_` prefix.
 
 use clap::Parser;
+use mockable::{DefaultEnv, Env};
 use ortho_config::OrthoResult;
-use ortho_config::figment::providers::Env;
+use ortho_config::figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod env_layer;
 mod single_token;
 mod token_resolution;
 mod tokens;
 pub use tokens::NamedToken;
+
+use env_layer::{env_overrides, socket_path_defaults};
 
 #[cfg(test)]
 use single_token::MAX_GITHUB_TOKEN_FILE_BYTES;
@@ -32,6 +36,7 @@ const DEFAULT_COOLDOWN_FLUTTER: u64 = 0;
 const DEFAULT_RESTART_MIN_DELAY_MS: u64 = 100;
 /// Default timeout in seconds for GitHub API calls.
 const DEFAULT_GITHUB_API_TIMEOUT_SECS: u64 = 30;
+
 /// Runtime configuration for the daemon.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 pub struct Config {
@@ -64,8 +69,10 @@ pub struct Config {
     ///
     /// Defaults to `$XDG_RUNTIME_DIR/comenq/comenq.sock` when a user runtime
     /// directory is available, falling back to the system-wide path
-    /// otherwise. See [`comenq_transport::default_socket_path`].
-    #[serde(default = "default_socket_path")]
+    /// otherwise. The default is supplied by the loader as its lowest
+    /// precedence layer, so an injected environment can resolve it without
+    /// reading the process environment. See
+    /// [`comenq_transport::default_socket_path_with_env`].
     pub socket_path: PathBuf,
     /// Directory for the persistent queue.
     #[serde(default = "default_queue_path")]
@@ -194,10 +201,6 @@ struct CliArgs {
     github_api_timeout_secs: Option<u64>,
 }
 
-fn default_socket_path() -> PathBuf {
-    comenq_transport::default_socket_path()
-}
-
 fn default_queue_path() -> PathBuf {
     PathBuf::from(DEFAULT_QUEUE_PATH)
 }
@@ -217,6 +220,7 @@ fn default_restart_min_delay_ms() -> u64 {
 fn default_github_api_timeout_secs() -> u64 {
     DEFAULT_GITHUB_API_TIMEOUT_SECS
 }
+
 impl Config {
     /// Default location of the daemon configuration file.
     pub const DEFAULT_PATH: &'static str = "/etc/comenqd/config.toml";
@@ -233,7 +237,7 @@ impl Config {
     /// ```
     pub fn load() -> OrthoResult<Self> {
         let args = CliArgs::parse();
-        Self::from_file_with_cli(&args.config, &args)
+        Self::from_file_with_cli(&args.config, &args, &DefaultEnv)
     }
 
     /// Load runtime configuration and resolve its GitHub token pool once.
@@ -251,12 +255,15 @@ impl Config {
     /// ```
     pub fn load_with_tokens() -> OrthoResult<(Self, Vec<NamedToken>)> {
         let args = CliArgs::parse();
-        Self::from_file_with_cli_and_tokens(&args.config, &args)
+        Self::from_file_with_cli_and_tokens(&args.config, &args, &DefaultEnv)
     }
 
     /// Test-only helper that loads the configuration from the specified path,
-    /// merging `COMENQD_*` environment variables and CLI arguments over file
-    /// values.
+    /// merging ambient `COMENQD_*` environment variables and CLI arguments over
+    /// file values.
+    ///
+    /// Prefer [`Config::from_file_with_env`] in tests so environment values
+    /// are injected rather than mutated process-wide.
     ///
     /// # Examples
     ///
@@ -274,18 +281,38 @@ impl Config {
         expect(dead_code, reason = "test-only helper")
     )]
     pub fn from_file(path: &Path) -> OrthoResult<Self> {
-        Self::from_file_with_cli(path, &CliArgs::default())
+        Self::from_file_with_env(path, &DefaultEnv)
     }
 
-    fn from_file_with_cli(path: &Path, cli: &CliArgs) -> OrthoResult<Self> {
-        Self::from_file_with_cli_and_tokens(path, cli).map(|(config, _)| config)
+    /// Test-only helper that loads the configuration from `path` using the
+    /// environment values supplied by `env`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use comenqd::config::Config;
+    /// use mockable::DefaultEnv;
+    /// use std::env;
+    /// let config_path = env::temp_dir().join("comenqd_config.toml");
+    /// let cfg = Config::from_file_with_env(&config_path, &DefaultEnv)
+    ///     .expect("load config");
+    /// ```
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "test-support")))]
+    pub fn from_file_with_env(path: &Path, env: &dyn Env) -> OrthoResult<Self> {
+        Self::from_file_with_cli(path, &CliArgs::default(), env)
+    }
+
+    fn from_file_with_cli(path: &Path, cli: &CliArgs, env: &dyn Env) -> OrthoResult<Self> {
+        Self::from_file_with_cli_and_tokens(path, cli, env).map(|(config, _)| config)
     }
 
     fn from_file_with_cli_and_tokens(
         path: &Path,
         cli: &CliArgs,
+        env: &dyn Env,
     ) -> OrthoResult<(Self, Vec<NamedToken>)> {
-        let mut fig = ortho_config::load_config_file(path)?.ok_or_else(|| {
+        let file = ortho_config::load_config_file(path)?.ok_or_else(|| {
             Arc::new(ortho_config::OrthoError::File {
                 path: path.to_path_buf(),
                 source: Box::new(io::Error::new(
@@ -295,11 +322,14 @@ impl Config {
             })
         })?;
 
-        fig = fig.merge(Env::prefixed("COMENQD_").split("__"));
+        // Later merges win, so the order is default socket, file, environment.
+        let fig = Figment::from(socket_path_defaults(env))
+            .merge(file)
+            .merge(env_overrides(env));
         let mut cfg: Self = fig.extract().map_err(ortho_config::OrthoError::from)?;
 
         Self::apply_cli_overrides(&mut cfg, cli);
-        let tokens = cfg.resolve_github_token(cli.github_token.is_some())?;
+        let tokens = cfg.resolve_github_token(cli.github_token.is_some(), env)?;
         Ok((cfg, tokens))
     }
 
