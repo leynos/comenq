@@ -737,6 +737,60 @@ Thresholds that trigger escalation when breached.
       a changed total would have indicated a bad resolution. No gate modified a
       tracked file.
 
+- [x] (2026-10-31) **Babysitting: cleared the one introduced CodeScene
+      finding.** This repository has no `.codescene/` configuration and no
+      hosted `CodeScene Code Health Review` check; its only CodeScene wiring is
+      a coverage *upload* on `main` (`coverage-main.yml`), and `ci.yml` states
+      in a comment that pull requests "neither publish a report nor contact
+      CodeScene". The gap in hosted coverage was therefore closed locally with
+      the installed CLI (`cs version 1.0.52 (efcaeed)`), using the same
+      base/head comparison: `cs delta 43b11a1 7a92f36` — the PR's actual base
+      rather than a movable `origin/main`, which had advanced to `2e2f1be`
+      (#241, a CI pin touching only `.github/workflows/ci.yml`, a path this PR
+      does not modify; `git merge-tree` against the new main is conflict-free).
+      The delta reported exactly one finding, `Duplicated Assertion Blocks`,
+      `introduced`, `new-score` 9.68, in
+      `crates/comenqd/tests/startup_contract.rs` — a file this PR adds. The
+      threshold is 2 and three tests tripped it
+      (`missing_configuration_…`, `malformed_configuration_…`,
+      `missing_token_…`), each repeating the same four-assertion contract:
+      non-zero exit, empty stdout, non-empty stderr, plus one case-specific
+      diagnostic. Section 4 of the babysitting skill puts refactoring before
+      every other remedy, and `AGENTS.md` independently asks for `rstest`
+      parameterized cases in place of duplicated tests, so the repair was a
+      decomposition rather than a suppression: the shared exit-status and
+      stream assertions became `assert_startup_failure(output, what,
+      must_contain)`, and the three bodies became one
+      `#[rstest]` function with `#[case::missing_configuration]`,
+      `#[case::malformed_configuration]` and `#[case::missing_token]` rows
+      carrying their own `must_contain` needles. Nothing was weakened. The
+      diagnostic needles are unchanged verbatim (`"Configuration file error in"`
+      plus `"not found"` / `"TOML parse error"`; and
+      `"provide github_token, github_token_file, or github_token_files"`), and
+      the per-case `what` string keeps each failure message specific
+      ("a missing configuration", "malformed TOML", "a token-less
+      configuration") rather than collapsing to one generic phrase. The three
+      case names remain distinct in test output, so the contract each one pins
+      is still identifiable. Result: `cs delta 43b11a1` now emits `[]` and
+      `cs check` reports `Code health score: 10.00` for the file.
+      **Gates**, run sequentially against this tree: `make fmt` pass (0 issues),
+      `make check-fmt` pass (40 files unchanged), `make test` pass (nextest
+      **498/498**, 0 skipped, across 19 binaries; cucumber **11 features / 55
+      scenarios / 211 steps**), `make typecheck` pass, `make lint` pass,
+      `make markdownlint` pass, `make spelling` pass, `make nixie` pass. The
+      nextest total is the same 498 as the pre-refactor run and cucumber's
+      11/55/211 are unchanged, which is the evidence that the parameterization
+      neither dropped nor duplicated a case; the three renamed cases appear in
+      the output as `case_1_missing_configuration`,
+      `case_2_malformed_configuration` and `case_3_missing_token`, all passing.
+      `make lint` reported no clippy warning; its only warnings in 34 minutes of
+      output were the three instances of the pre-existing
+      `vendor/filetime` patch notice already documented in the PR body. Long
+      durations (lint 2808 s, typecheck 1566 s, test 1857 s) were cold-cache
+      builds behind a heavily contended compile queue; `build-limits-status`
+      reported `capacity 4, held 4, healthy` throughout, so this was ordinary
+      queueing, not a hung or unhealthy gate.
+
 ## Surprises & discoveries
 
 - Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
@@ -854,7 +908,69 @@ Thresholds that trigger escalation when breached.
   when the work happened must read the author date, not the committer date, or
   it will conclude the entire branch was written in the same second.
 
+- Observation: this repository has **no hosted CodeScene code-health review**,
+  so "the CodeScene check is green" is the wrong test of whether CodeScene
+  issues are outstanding here. Evidence: `cs` and `codescene` appear in
+  `Makefile`, `clippy.toml`, three docs files and two workflows, but the only
+  hosted use is `upload-codescene-coverage` in `coverage-main.yml`, guarded on
+  `github.ref == 'refs/heads/main'`; `ci.yml` says in as many words that a pull
+  request "neither publish[es] a report nor contact[s] CodeScene". No
+  `codescene-access[bot]` review or comment exists on PR #239, and no CodeScene
+  check run appears among the eleven checks on head `7a92f36` — only
+  `build-test`, four cross-architecture release builds, `release / metadata`,
+  `Gecko Security Review`, and three skipped checks (`CodeRabbit`,
+  `Kody Code Review`, `automerge`). Impact: the absence of a red gate is not
+  evidence of absence of findings. Code health has to be established by running
+  `cs delta BASE HEAD` locally. Doing so found one real introduced finding that
+  no hosted check would ever have surfaced, which is the whole reason the skill
+  requires the local run rather than trusting the check list.
+
+- Observation: the repository's own `AGENTS.md` rule ("Replace duplicated tests
+  with `#[rstest(...)]` parameterized cases") and the CodeScene
+  `Duplicated Assertion Blocks` rule point at the same code, so the CodeScene
+  repair needed no judgement call about which remedy to prefer. Evidence: the
+  three startup-failure tests each opened with the identical four-assertion
+  block before diverging only in their fixture and their expected diagnostic.
+  Impact: the refactor satisfies both authorities at once and, because the
+  case-specific diagnostic needles were preserved verbatim, it is a pure
+  de-duplication rather than a change in what the tests assert.
+
 ## Decision log
+
+- Decision: leave the `typos.toml` drift that `make spelling` regenerates out of
+  this PR, and do not revert it into the branch as a "fix". Rationale:
+  `make spelling` runs `typos-config-builder gate`, which silently rewrites
+  `typos.toml` when the builder (pinned to the mutable Git tag `v0.1.3`, not to
+  a commit) produces a different file from the one committed. The gate then
+  exits **0**, so the refresh is invisible to hosted CI: CI ran green on this
+  exact tree before any refresh. The drift is also entirely pre-existing and
+  unrelated — `typos.toml` at `HEAD` is byte-identical to `origin/main`, and
+  the tokens the refreshed file changes (`#[tokio::main(flavor = "local")]`
+  versus a broad `\bflavor =` pattern) appear only in
+  `crates/comenqd/tests/metrics.rs` and
+  `docs/behavioural-testing-in-rust-with-cucumber.md`, neither of which this PR
+  touches. `AGENTS.md` asks that such an unrelated regeneration be committed
+  separately so "each review diff stays focused", and creating a stacked
+  prerequisite PR for a cosmetic regex refresh was not warranted here. Verified
+  instead that the committed `typos.toml` keeps the gate green and idempotent:
+  reverting the working-tree refresh and re-running `make spelling` exits 0 with
+  `current: typos.toml`, and running it again on the refreshed file also exits
+  0. So both versions pass, and committing the drift would add review noise
+  without changing any verdict.
+
+- Decision: treat `cs delta` against the PR's own comparison base as the
+  authority on CodeScene findings for this repository, and repair the one
+  finding it reported by extracting a shared assertion helper rather than by
+  suppressing the rule, raising its threshold, or adding a `@codescene`
+  directive. Rationale: the hosted CodeScene surface for this repository is a
+  coverage upload on `main` only, so no pull-request check could ever have
+  reported this finding — there was no red gate to satisfy, only an actual
+  duplication to remove. Suppression was available (the skill documents it as a
+  last resort) but the finding was true: three tests did repeat an identical
+  assertion block, which is exactly what `AGENTS.md` asks contributors to
+  replace with `#[rstest]` parameterized cases. Choosing the refactor costs one
+  level of indirection and keeps every original assertion, every original
+  diagnostic needle, and every original case name in the test output.
 
 - Decision: keep the hand-built Figment layering on the v0.10.0 APIs rather
   than converting `Config` to `#[derive(OrthoConfig)]`. Rationale: the derive

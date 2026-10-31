@@ -13,6 +13,7 @@ use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use rstest::rstest;
 use tempfile::tempdir;
 
 /// How long a startup-failure run may take before the test calls it hung.
@@ -77,16 +78,17 @@ fn wait_with_deadline(mut child: Child) -> Output {
     child.wait_with_output().expect("collect comenqd output")
 }
 
-#[test]
-fn missing_configuration_exits_non_zero_and_reports_on_stderr() {
-    let dir = tempdir().expect("create tempdir");
-    let missing = dir.path().join("absent.toml");
-
-    let output = run_daemon(&missing, &[]);
-
+/// Assert the exit-status and stream contract every startup failure shares.
+///
+/// Each case below fails for its own reason, but an operator observes all of
+/// them the same way: a non-zero exit, nothing on standard output, and a
+/// diagnostic on standard error. Holding that in one place keeps the cases
+/// about *which* failure occurred; `must_contain` then pins the specific
+/// diagnostic so an unrelated later failure cannot satisfy the test.
+fn assert_startup_failure(output: &Output, what: &str, must_contain: &[&str]) {
     assert!(
         !output.status.success(),
-        "a missing configuration must fail; stdout was {:?}",
+        "{what} must fail; stdout was {:?}",
         String::from_utf8_lossy(&output.stdout),
     );
     assert!(
@@ -99,77 +101,51 @@ fn missing_configuration_exits_non_zero_and_reports_on_stderr() {
         !stderr.trim().is_empty(),
         "the failure must be explained on stderr"
     );
-    // The fixture supplies no token, so a loader that silently treated an
-    // absent path as empty configuration would fail here anyway, for the wrong
-    // reason. Require the file-specific diagnostic.
-    assert!(
-        stderr.contains("Configuration file error in") && stderr.contains("not found"),
-        "the failure must be the missing configuration file, not a later token \
-         error; got {stderr:?}"
-    );
+    for needle in must_contain {
+        assert!(
+            stderr.contains(needle),
+            "{what} must report {needle:?}, not some later failure; got {stderr:?}"
+        );
+    }
 }
 
-#[test]
-fn malformed_configuration_exits_non_zero_and_reports_on_stderr() {
+// The missing case supplies no token, so a loader that silently treated an
+// absent path as empty configuration would fail anyway, for the wrong reason.
+// Every case therefore requires its own file- or credential-specific text.
+#[rstest]
+#[case::missing_configuration(
+    None,
+    "a missing configuration",
+    &["Configuration file error in", "not found"]
+)]
+#[case::malformed_configuration(
+    Some("github_token='abc' this is not toml"),
+    "malformed TOML",
+    &["Configuration file error in", "TOML parse error"]
+)]
+#[case::missing_token(
+    Some("socket_path='/tmp/comenqd-contract-test.sock'"),
+    "a token-less configuration",
+    &["provide github_token, github_token_file, or github_token_files"]
+)]
+fn startup_failure_exits_non_zero_and_reports_on_stderr(
+    #[case] contents: Option<&str>,
+    #[case] what: &str,
+    #[case] must_contain: &[&str],
+) {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
-    fs::write(&path, "github_token='abc' this is not toml").expect("write bad fixture");
+    let absent = dir.path().join("absent.toml");
+    let config = match contents {
+        Some(contents) => {
+            fs::write(&path, contents).expect("write configuration fixture");
+            path
+        }
+        // Deliberately not created: this case asserts the missing-file path.
+        None => absent,
+    };
 
-    let output = run_daemon(&path, &[]);
+    let output = run_daemon(&config, &[]);
 
-    assert!(
-        !output.status.success(),
-        "malformed TOML must fail; stdout was {:?}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "diagnostics belong on stderr, not stdout; got {:?}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.trim().is_empty(),
-        "the failure must be explained on stderr"
-    );
-    // As above: treat malformed TOML falling back to an empty configuration as
-    // a defect, not as an acceptable route to some later failure.
-    assert!(
-        stderr.contains("Configuration file error in") && stderr.contains("TOML parse error"),
-        "the failure must be the TOML parse error, not a later token error; got {stderr:?}"
-    );
-}
-
-#[test]
-fn missing_token_exits_non_zero_and_reports_on_stderr() {
-    let dir = tempdir().expect("create tempdir");
-    let path = dir.path().join("config.toml");
-    fs::write(&path, "socket_path='/tmp/comenqd-contract-test.sock'")
-        .expect("write token-less fixture");
-
-    let output = run_daemon(&path, &[]);
-
-    assert!(
-        !output.status.success(),
-        "a token-less configuration must fail; stdout was {:?}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "diagnostics belong on stderr, not stdout; got {:?}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.trim().is_empty(),
-        "the failure must be explained on stderr"
-    );
-    // `Config::resolve_github_token` reports an absent credential through this
-    // exact message. Without it, any other startup failure would satisfy the
-    // assertions above and this test would no longer pin the contract it
-    // exists to protect.
-    assert!(
-        stderr.contains("provide github_token, github_token_file, or github_token_files"),
-        "the failure must name the missing credential, not merely fail; got {stderr:?}"
-    );
+    assert_startup_failure(&output, what, must_contain);
 }
