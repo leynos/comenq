@@ -301,7 +301,7 @@ async fn retry_deadline_ignores_queue_notifications_until_it_expires() {
     let changed = Notify::new();
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(());
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut wait = Box::pin(wait_for_retry_deadline(
+    let mut wait = std::pin::pin!(wait_for_retry_deadline(
         deadline,
         &changed,
         &mut shutdown_rx,

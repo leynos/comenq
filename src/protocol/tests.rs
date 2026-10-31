@@ -114,7 +114,7 @@ fn history_entries_without_token_hash_remain_readable() -> Result<(), String> {
 
     let entry: HistoryEntry = serde_json::from_value(value).map_err(|error| error.to_string())?;
 
-    assert!(entry.token_hash.is_empty());
+    assert_eq!(entry.token_hash, "");
     Ok(())
 }
 
