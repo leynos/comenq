@@ -44,33 +44,8 @@ where
         Ok(schedule.into_iter().next())
     }
 
-    /// Claim the due head entry while the caller holds the queue lock.
-    ///
-    /// The head is returned unclaimed when its wait is still positive, and no
-    /// entry is returned while any claim exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError::Repository`] when the repository cannot read the
-    /// queue or persist the claim.
-    pub fn claim_next_due(&self) -> Result<Option<ScheduledEntry>, QueueError<R::Error>> {
-        let schedule = self.project(self.clock.unix_now())?;
-        if self.has_claim_in(&schedule) {
-            return Ok(None);
-        }
-        let Some(mut scheduled) = schedule.into_iter().next() else {
-            return Ok(None);
-        };
-        if scheduled.eta_seconds > 0 {
-            return Ok(Some(scheduled));
-        }
-        scheduled.entry.claim_token = Some(self.repository.mint_claim_token());
-        self.repository.save(&scheduled.entry)?;
-        Ok(Some(scheduled))
-    }
-
     /// Read the clock once, then project the whole queue.
-    fn project(&self, now: u64) -> Result<Vec<ScheduledEntry>, QueueError<R::Error>> {
+    pub(super) fn project(&self, now: u64) -> Result<Vec<ScheduledEntry>, QueueError<R::Error>> {
         let entries = self.repository.entries()?;
         let previous_activity = activity_anchor(
             self.repository.last_post()?,
@@ -85,7 +60,7 @@ where
     }
 
     /// Whether a projected entry set contains a claim.
-    fn has_claim_in(&self, schedule: &[ScheduledEntry]) -> bool {
+    pub(super) fn has_claim_in(&self, schedule: &[ScheduledEntry]) -> bool {
         schedule
             .iter()
             .any(|scheduled| scheduled.entry.is_claimed())

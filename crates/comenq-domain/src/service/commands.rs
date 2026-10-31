@@ -88,6 +88,31 @@ where
         Ok(ScheduledEntry { entry, eta_seconds })
     }
 
+    /// Claim the due head entry while the caller holds the queue lock.
+    ///
+    /// The head is returned unclaimed when its wait is still positive, and no
+    /// entry is returned while any claim exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Repository`] when the repository cannot read the
+    /// queue or persist the claim.
+    pub fn claim_next_due(&self) -> Result<Option<ScheduledEntry>, QueueError<R::Error>> {
+        let schedule = self.project(self.clock.unix_now())?;
+        if self.has_claim_in(&schedule) {
+            return Ok(None);
+        }
+        let Some(mut scheduled) = schedule.into_iter().next() else {
+            return Ok(None);
+        };
+        if scheduled.eta_seconds > 0 {
+            return Ok(Some(scheduled));
+        }
+        scheduled.entry.claim_token = Some(self.repository.mint_claim_token());
+        self.repository.save(&scheduled.entry)?;
+        Ok(Some(scheduled))
+    }
+
     /// Move the identified entry to the head of the queue.
     ///
     /// Reordering preserves the entry's not-before floor and any claim.

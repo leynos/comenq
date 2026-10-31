@@ -109,9 +109,10 @@ when the queue changes.
 
 The `comenq-domain` crate, whose only dependency is `thiserror`, holds the
 queue's rules so that they can be tested without a socket, a filesystem, or the
-JSON protocol. It defines commands (`put`, `bump`, `bust`, `del`,
-`release_claim`, `complete`) and queries (`list`, `next_due`), the queue entry
-and scheduling values, entry-state transitions, and `QueueError`. It imports
+JSON protocol. It defines commands (`claim_next_due`, `put`, `bump`, `bust`,
+`del`, `release_claim`, `complete`) and queries (`list`, `next_due`), the queue
+entry and scheduling values, entry-state transitions, and `QueueError`. It
+imports
 neither serde, paths or filesystem errors, Tokio, protocol types, metrics, nor
 daemon configuration.
 
