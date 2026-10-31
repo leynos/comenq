@@ -914,6 +914,20 @@ Thresholds that trigger escalation when breached.
       on this head, and integration with newer `main` stays unverified until a
       merged tree is validated.
 
+- [x] (2026-10-31) **Babysitting: assessment carried forward to `14b3573`.**
+      A fourth question
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6544231968>)
+      asked whether the assessment transferred to the commit recording the
+      clearance. The reply
+      (<https://github.com/leynos/comenq/pull/239#issuecomment-6544238614>)
+      carried the implementation assessment forward, found no defect in the
+      appended bullet, and retained the proof-scrutiny `not applicable`
+      conclusion. It read "both prerequisites discharged" as referring to the
+      two assessment prerequisites, which is the intended meaning, and noted
+      that the following sentence already preserves the operational
+      conditions. Assessment coverage is therefore current for `14b3573`,
+      which is the head intended for readiness and merge.
+
 ## Surprises & discoveries
 
 - Observation: the repository never uses `#[derive(OrthoConfig)]`. Every
