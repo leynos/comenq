@@ -190,6 +190,28 @@ queue; a later `await` on the same ID can still return the URL.
 daemon, queue, or connection error, and status 2 when the command line is
 invalid.
 
+### Diagnose a daemon that predates await
+
+`comenq` and `comenqd` must come from the same release. A daemon built before
+the streaming await protocol cannot decode `Request::Await`, so it answers with
+its one-shot rejection instead of a countdown:
+
+```text
+daemon rejected the await request: {message} (comenqd may predate await; run comenq and comenqd from the same release)
+```
+
+If the daemon closes the connection before sending any reply, the client reports
+`daemon closed the connection without a reply (possible protocol
+mismatch with an older daemon; run comenq and comenqd from the same release)`
+instead, because it cannot tell a protocol mismatch from an empty response.
+
+Both errors exit with status 1. These errors do not themselves change the
+queue, but `NoInitialReply` does not prove that the comment is still queued.
+The daemon may have posted and removed the comment before the client received
+the first frame. Check posting history with `comenq hist` before retrying. If
+the daemon closed the connection because it stopped or crashed rather than
+because of a version mismatch, check that `comenqd` is running before retrying.
+
 ## Inspect local metrics
 
 The daemon attempts to expose Prometheus metrics at

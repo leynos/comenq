@@ -2,7 +2,7 @@
 
 use super::super::{ClientError, await_stream::receive, await_with_writers, run_with_writer};
 use crate::{Args, Command};
-use comenq_lib::protocol::{AwaitEvent, MAX_AWAIT_FRAME_BYTES, Request};
+use comenq_lib::protocol::{AwaitEvent, MAX_AWAIT_FRAME_BYTES, Request, Response};
 use rstest::rstest;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
@@ -93,9 +93,11 @@ async fn run_dispatches_await_to_streaming_transport() -> Result<(), ClientError
 }
 
 #[rstest]
-#[case::unknown(b"{\"status\":\"error\",\"message\":\"unknown identifier\"}\n".to_vec(), "daemon")]
-#[case::eof(Vec::new(), "lost")]
-#[case::partial(b"{\"status\":\"waiting\"}".to_vec(), "lost")]
+#[case::unknown(b"{\"status\":\"error\",\"message\":\"unknown comment identifier\"}\n".to_vec(), "daemon")]
+#[case::eof(Vec::new(), "no-reply")]
+#[case::partial(b"{\"status\":\"waiting\"}".to_vec(), "no-reply")]
+#[case::valid_frame_without_newline(b"{\"status\":\"posted\",\"comment_url\":\"https://example.test/c\"}".to_vec(), "no-reply")]
+#[case::legacy_ok_response(b"{\"outcome\":\"ok\"}".to_vec(), "unexpected")]
 #[case::malformed(b"not json\n".to_vec(), "unexpected")]
 #[case::oversized(vec![b'x'; MAX_AWAIT_FRAME_BYTES + 1], "large")]
 #[tokio::test]
@@ -105,14 +107,73 @@ async fn rejects_incomplete_or_invalid_frames(#[case] bytes: Vec<u8>, #[case] ex
         .await
         .expect_err("invalid stream");
     assert!(match expected {
-        "daemon" => matches!(error, ClientError::Daemon(_)),
-        "lost" => matches!(error, ClientError::ConnectionLost),
+        "daemon" => matches!(
+            &error,
+            ClientError::Daemon(message) if message == "unknown comment identifier"
+        ),
+        "no-reply" => matches!(error, ClientError::NoInitialReply),
         "unexpected" => matches!(error, ClientError::UnexpectedResponse),
         "large" => matches!(error, ClientError::ReplyTooLarge),
         _ => false,
     });
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
+}
+
+#[tokio::test]
+async fn reports_a_legacy_daemon_rejection_as_an_await_rejection() -> Result<(), ClientError> {
+    const REJECTION: &str = concat!(
+        "invalid request: unknown variant `await`, expected one of ",
+        "`put`, `list`, `bump`, `bust`, `del`, `hist` at line 1 column 1"
+    );
+    let bytes = serde_json::to_vec(&Response::error(REJECTION))?;
+    // One-shot replies carry no trailing newline; that is how a daemon that
+    // predates the streaming protocol closes an await request.
+    assert_ne!(bytes.last(), Some(&b'\n'));
+
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let error = receive(&mut bytes.as_slice(), &mut stdout, &mut stderr)
+        .await
+        .expect_err("legacy rejection");
+
+    assert!(matches!(
+        error,
+        ClientError::AwaitRejected(message) if message == REJECTION
+    ));
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_ending_after_a_frame_reports_a_lost_connection() -> Result<(), ClientError> {
+    let bytes = frames(&[AwaitEvent::Waiting { eta_seconds: 60 }])?;
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+
+    let error = receive(&mut bytes.as_slice(), &mut stdout, &mut stderr)
+        .await
+        .expect_err("lost after a frame");
+
+    assert!(matches!(error, ClientError::ConnectionLost));
+    assert!(stdout.is_empty());
+    assert_eq!(stderr, b"1m 00s remaining\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn unterminated_frame_after_a_wait_reports_a_lost_connection() -> Result<(), ClientError> {
+    let mut bytes = frames(&[AwaitEvent::Waiting { eta_seconds: 60 }])?;
+    bytes.extend_from_slice(b"{\"status\":\"posted\",");
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+
+    let error = receive(&mut bytes.as_slice(), &mut stdout, &mut stderr)
+        .await
+        .expect_err("lost mid-frame");
+
+    assert!(matches!(error, ClientError::ConnectionLost));
+    assert!(stdout.is_empty());
+    assert_eq!(stderr, b"1m 00s remaining\n");
+    Ok(())
 }
 
 struct BrokenPipe;

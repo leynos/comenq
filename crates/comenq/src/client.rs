@@ -57,9 +57,29 @@ pub enum ClientError {
     /// The daemon reply exceeds the protocol size limit.
     #[error("daemon reply exceeds the protocol size limit")]
     ReplyTooLarge,
-    /// The streaming connection ended before a terminal frame.
+    /// The streaming connection ended after a frame but before a terminal one.
+    ///
+    /// Only reported once the daemon has sent at least one await frame, so a
+    /// lost posting connection is never confused with a daemon that never
+    /// spoke the streaming protocol.
     #[error("connection lost before posting completed")]
     ConnectionLost,
+    /// The daemon rejected the await request before streaming any event.
+    ///
+    /// An older daemon answers an unknown request variant with a one-shot
+    /// [`Response::Error`], which arrives in place of the first await frame.
+    #[error(
+        "daemon rejected the await request: {0} (comenqd may predate await; run comenq and comenqd from the same release)"
+    )]
+    AwaitRejected(String),
+    /// The daemon closed the await connection before sending any reply.
+    ///
+    /// An empty or unparseable first reply most often means the daemon predates
+    /// the streaming protocol and closed the connection instead of answering.
+    #[error(
+        "daemon closed the connection without a reply (possible protocol mismatch with an older daemon; run comenq and comenqd from the same release)"
+    )]
+    NoInitialReply,
     /// The daemon did not finish its reply before the client deadline.
     #[error("timed out waiting for daemon reply")]
     ReplyTimeout,

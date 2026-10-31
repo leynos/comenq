@@ -4,6 +4,7 @@ use super::{CLIENT_REPLY_TIMEOUT, ClientError, connect_first, write_line};
 use crate::output::{render_remaining, report_interval, terminal_safe};
 use comenq_lib::protocol::{
     AWAIT_IDLE_TIMEOUT_SECS, AwaitEvent, MAX_AWAIT_FRAME_BYTES, MAX_REQUEST_BYTES, Request,
+    Response,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -107,19 +108,52 @@ pub(super) async fn receive(
     let mut countdown: Option<Countdown> = None;
     let mut deadline = CLIENT_REPLY_TIMEOUT;
     loop {
-        let event = next_event(reader, &mut countdown, stderr, deadline).await?;
-        deadline = Duration::from_secs(AWAIT_IDLE_TIMEOUT_SECS);
-        match event {
-            AwaitEvent::Posted { comment_url } => {
-                let _ = write_line(stdout, &terminal_safe(&comment_url))?;
-                return Ok(());
+        match next_event(reader, &mut countdown, stderr, deadline).await? {
+            FrameOutcome::Frame(event) => {
+                deadline = Duration::from_secs(AWAIT_IDLE_TIMEOUT_SECS);
+                match event {
+                    AwaitEvent::Posted { comment_url } => {
+                        let _ = write_line(stdout, &terminal_safe(&comment_url))?;
+                        return Ok(());
+                    }
+                    AwaitEvent::Error { message } => return Err(ClientError::Daemon(message)),
+                    AwaitEvent::Waiting { eta_seconds } => {
+                        Countdown::observe(&mut countdown, eta_seconds, stderr)?;
+                    }
+                }
             }
-            AwaitEvent::Error { message } => return Err(ClientError::Daemon(message)),
-            AwaitEvent::Waiting { eta_seconds } => {
-                Countdown::observe(&mut countdown, eta_seconds, stderr)?;
+            // A countdown can only exist once the daemon has sent a frame, so
+            // its absence identifies a stream that ended before the first one.
+            FrameOutcome::Ended(bytes) if countdown.is_none() => {
+                return Err(classify_initial_end(&bytes));
             }
+            FrameOutcome::Ended(_) => return Err(ClientError::ConnectionLost),
         }
     }
+}
+
+/// Classify a stream that ended before its first await frame.
+///
+/// An older daemon answers the unknown `await` request variant with a one-shot
+/// [`Response::Error`] instead of a newline-terminated [`AwaitEvent`]. Detecting
+/// that wire shape keeps a protocol mismatch distinct from a genuinely empty or
+/// corrupt reply.
+fn classify_initial_end(bytes: &[u8]) -> ClientError {
+    match serde_json::from_slice::<Response>(bytes) {
+        Ok(Response::Error { message }) => ClientError::AwaitRejected(message),
+        // A successful one-shot reply cannot answer a streaming request.
+        Ok(Response::Ok { .. }) => ClientError::UnexpectedResponse,
+        Err(_) => ClientError::NoInitialReply,
+    }
+}
+
+/// One read outcome: a decoded frame, or a stream that ended before a
+/// newline-terminated frame arrived.
+enum FrameOutcome {
+    /// A complete, decodable await event.
+    Frame(AwaitEvent),
+    /// EOF without a trailing newline, carrying the bytes read so far.
+    Ended(Vec<u8>),
 }
 
 /// Read the next event while preserving partial frames across countdown ticks.
@@ -128,7 +162,7 @@ async fn next_event(
     countdown: &mut Option<Countdown>,
     stderr: &mut impl Write,
     deadline: Duration,
-) -> Result<AwaitEvent, ClientError> {
+) -> Result<FrameOutcome, ClientError> {
     // Keep the same read future alive across countdown ticks: cancelling a
     // partially consumed frame would lose its prefix.
     let frame = tokio::time::timeout(deadline, read_frame(reader));
@@ -154,7 +188,12 @@ async fn report_tick(at: Option<Instant>) {
 }
 
 /// Read and validate one capped newline-delimited await event.
-async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<AwaitEvent, ClientError> {
+///
+/// A stream that ends without a trailing newline is reported as
+/// [`FrameOutcome::Ended`] with the bytes read so far; [`receive`] decides
+/// whether that means a rejected request, an unsupported daemon or a lost
+/// connection.
+async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<FrameOutcome, ClientError> {
     let mut bytes = Vec::new();
     let mut limited = (&mut *reader).take((MAX_AWAIT_FRAME_BYTES + 1) as u64);
     limited
@@ -165,7 +204,9 @@ async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<AwaitEve
         return Err(ClientError::ReplyTooLarge);
     }
     if bytes.last() != Some(&b'\n') {
-        return Err(ClientError::ConnectionLost);
+        return Ok(FrameOutcome::Ended(bytes));
     }
-    serde_json::from_slice(&bytes).map_err(|_| ClientError::UnexpectedResponse)
+    serde_json::from_slice(&bytes)
+        .map(FrameOutcome::Frame)
+        .map_err(|_| ClientError::UnexpectedResponse)
 }
