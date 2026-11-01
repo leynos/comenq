@@ -9,7 +9,7 @@ use ortho_config::figment::{
     providers::Serialized,
     value::{Dict, Value},
 };
-use std::collections::HashMap;
+use std::ffi::OsString;
 
 /// `Config` fields that a `COMENQD_*` environment variable may override.
 ///
@@ -44,18 +44,70 @@ pub(super) fn socket_path_defaults(env: &dyn Env) -> Serialized<Dict> {
     Serialized::defaults(values)
 }
 
-/// Provider for `COMENQD_*` overrides read through `env`.
+/// Source of environment variable names and values as native OS strings.
+///
+/// [`mockable::Env::all`] collects through `std::env::vars`, which panics when
+/// any name or value in the process environment is not valid Unicode. The
+/// daemon must not fail startup because an unrelated variable carries raw
+/// bytes, so [`env_overrides`] enumerates through this narrower port instead,
+/// as the `figment::providers::Env` provider it replaces did.
+pub(super) trait EnvVars: Send + Sync {
+    /// Every variable visible to the process, as OS string pairs.
+    fn vars_os(&self) -> Vec<(OsString, OsString)>;
+}
+
+/// Production [`EnvVars`] backed by [`std::env::vars_os`].
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct SystemEnvVars;
+
+impl EnvVars for SystemEnvVars {
+    fn vars_os(&self) -> Vec<(OsString, OsString)> {
+        std::env::vars_os().collect()
+    }
+}
+
+/// Adapter presenting an injected [`Env`] as an [`EnvVars`] source.
+///
+/// The injected provider can only represent Unicode values, which is all a
+/// test supplies. Production never routes through this adapter.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) struct EnvVarsFromEnv<'a> {
+    env: &'a dyn Env,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> EnvVarsFromEnv<'a> {
+    /// Borrow `env` as an [`EnvVars`] source.
+    pub(super) fn new(env: &'a dyn Env) -> Self {
+        Self { env }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl EnvVars for EnvVarsFromEnv<'_> {
+    fn vars_os(&self) -> Vec<(OsString, OsString)> {
+        self.env
+            .all()
+            .into_iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect()
+    }
+}
+
+/// Provider for `COMENQD_*` overrides read through `vars`.
 ///
 /// Names match without regard to case, as the previous
 /// `figment::providers::Env::prefixed("COMENQD_")` provider did: Figment
 /// compares its keys through `UncasedStr`, so an installation that exports
-/// `comenqd_socket_path` keeps its override.
+/// `comenqd_socket_path` keeps its override. Names and values are converted
+/// with [`OsString::to_string_lossy`], matching that provider's handling of
+/// entries the operating system allows but Unicode cannot represent.
 ///
 /// Values use Figment's TOML-like syntax, so numbers and arrays keep their
 /// previous meaning. Empty values are passed through because they are
 /// legitimate overrides that validation may reject later.
-pub(super) fn env_overrides(env: &dyn Env) -> Serialized<Dict> {
-    let available = env.all();
+pub(super) fn env_overrides(vars: &dyn EnvVars) -> Serialized<Dict> {
+    let available = collect_overrides(vars);
     let values = ENV_OVERRIDE_FIELDS
         .iter()
         .filter_map(|field| {
@@ -66,12 +118,27 @@ pub(super) fn env_overrides(env: &dyn Env) -> Serialized<Dict> {
     Serialized::defaults(values)
 }
 
+/// Convert the environment to trimmed Unicode name/value pairs.
+///
+/// Trimming mirrors Figment, which trimmed names before matching them.
+fn collect_overrides(vars: &dyn EnvVars) -> Vec<(String, String)> {
+    vars.vars_os()
+        .into_iter()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().trim().to_owned(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .collect()
+}
+
 /// Return the value of `COMENQD_<FIELD>` regardless of case.
 ///
 /// An installation that defines several casings gets the documented upper-case
 /// name because ASCII ordering sorts it first, so the result is deterministic
-/// rather than dependent on hash iteration order.
-fn lookup_override<'a>(available: &'a HashMap<String, String>, field: &str) -> Option<&'a str> {
+/// rather than dependent on enumeration order.
+fn lookup_override<'a>(available: &'a [(String, String)], field: &str) -> Option<&'a str> {
     let expected = format!("COMENQD_{}", field.to_ascii_uppercase());
     available
         .iter()

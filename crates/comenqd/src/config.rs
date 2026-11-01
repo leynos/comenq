@@ -18,7 +18,9 @@ mod token_resolution;
 mod tokens;
 pub use tokens::NamedToken;
 
-use env_layer::{env_overrides, socket_path_defaults};
+#[cfg(any(test, feature = "test-support"))]
+use env_layer::EnvVarsFromEnv;
+use env_layer::{EnvVars, SystemEnvVars, env_overrides, socket_path_defaults};
 
 #[cfg(test)]
 use single_token::MAX_GITHUB_TOKEN_FILE_BYTES;
@@ -251,7 +253,8 @@ impl Config {
     /// ```
     pub fn load() -> OrthoResult<Self> {
         let args = CliArgs::parse();
-        Self::from_file_with_cli(&args.config, &args, &DefaultEnv)
+        Self::from_file_with_sources(&args.config, &args, &DefaultEnv, &SystemEnvVars)
+            .map(|(config, _)| config)
     }
 
     /// Load runtime configuration and resolve its GitHub token pool once.
@@ -269,7 +272,7 @@ impl Config {
     /// ```
     pub fn load_with_tokens() -> OrthoResult<(Self, Vec<NamedToken>)> {
         let args = CliArgs::parse();
-        Self::from_file_with_cli_and_tokens(&args.config, &args, &DefaultEnv)
+        Self::from_file_with_sources(&args.config, &args, &DefaultEnv, &SystemEnvVars)
     }
 
     /// Test-only helper that loads the configuration from the specified path,
@@ -295,7 +298,8 @@ impl Config {
         expect(dead_code, reason = "test-only helper")
     )]
     pub fn from_file(path: &Path) -> OrthoResult<Self> {
-        Self::from_file_with_env(path, &DefaultEnv)
+        Self::from_file_with_sources(path, &CliArgs::default(), &DefaultEnv, &SystemEnvVars)
+            .map(|(config, _)| config)
     }
 
     /// Test-only helper that loads the configuration from `path` using the
@@ -317,14 +321,41 @@ impl Config {
         Self::from_file_with_cli(path, &CliArgs::default(), env)
     }
 
+    /// Load from `path` and `cli`, reading `COMENQD_*` overrides from `env`.
+    ///
+    /// An injected provider can only enumerate its own values, which is what
+    /// tests need; it is never the production path.
+    #[cfg(any(test, feature = "test-support"))]
     fn from_file_with_cli(path: &Path, cli: &CliArgs, env: &dyn Env) -> OrthoResult<Self> {
-        Self::from_file_with_cli_and_tokens(path, cli, env).map(|(config, _)| config)
+        let vars = EnvVarsFromEnv::new(env);
+        Self::from_file_with_sources(path, cli, env, &vars).map(|(config, _)| config)
     }
 
+    /// Load from `path` and `cli`, reading `COMENQD_*` overrides from `env`.
+    ///
+    /// See [`Config::from_file_with_cli`]; this variant also returns the
+    /// resolved token pool.
+    #[cfg(test)]
     fn from_file_with_cli_and_tokens(
         path: &Path,
         cli: &CliArgs,
         env: &dyn Env,
+    ) -> OrthoResult<(Self, Vec<NamedToken>)> {
+        let vars = EnvVarsFromEnv::new(env);
+        Self::from_file_with_sources(path, cli, env, &vars)
+    }
+
+    /// Load from `path` and `cli` using both environment sources.
+    ///
+    /// [`Config::socket_path`]'s default and the token-file `${VAR}`
+    /// expansion need only Unicode values and use `env`; the `COMENQD_*`
+    /// override layer enumerates through `vars`, which in production reads OS
+    /// strings so an unrelated non-Unicode variable cannot abort startup.
+    fn from_file_with_sources(
+        path: &Path,
+        cli: &CliArgs,
+        env: &dyn Env,
+        vars: &dyn EnvVars,
     ) -> OrthoResult<(Self, Vec<NamedToken>)> {
         let file = ortho_config::load_config_file(path)?.ok_or_else(|| {
             Arc::new(ortho_config::OrthoError::File {
@@ -339,7 +370,7 @@ impl Config {
         // Later merges win, so the order is default socket, file, environment.
         let fig = Figment::from(socket_path_defaults(env))
             .merge(file)
-            .merge(env_overrides(env));
+            .merge(env_overrides(vars));
         let mut cfg: Self = fig.extract().map_err(ortho_config::OrthoError::from)?;
 
         Self::apply_cli_overrides(&mut cfg, cli);
