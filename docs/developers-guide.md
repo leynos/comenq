@@ -145,9 +145,13 @@ its tokens when called.
 
 Environment access goes through `mockable::Env`. Production loading uses
 `mockable::DefaultEnv`; tests inject `test_support::mock_env` instead of
-mutating process-wide variables. The loader reads only the documented upper-case
-`COMENQD_<FIELD>` names, so differently cased variables are ignored. The
-`${VAR}` token-path expansion also uses the injected provider.
+mutating process-wide variables. The loader matches the documented
+`COMENQD_<FIELD>` names without regard to case, preserving the behaviour of the
+Figment provider it replaces; when an installation defines several casings, the
+upper-case spelling wins. The `${VAR}` token-path expansion also uses the
+injected provider. The client reads `COMENQ_SOCKET` through an OS-string
+accessor backed by `std::env::var_os` in production, so a socket path that is
+not valid UTF-8 is honoured rather than discarded.
 
 The loader always injects `socket_path` as its lowest-precedence Figment layer,
 resolved through that provider. Direct Serde deserialization of `Config`

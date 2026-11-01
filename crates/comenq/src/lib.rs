@@ -7,11 +7,13 @@
 
 use clap::{Parser, Subcommand, builder::ValueHint};
 use mockable::{DefaultEnv, Env};
+use os_env::{DefaultOsEnv, EnvOsString, OsEnv};
 use std::{fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
 #[doc(hidden)]
 pub mod client;
+mod os_env;
 mod output;
 
 pub use client::{ClientError, run, run_with_env};
@@ -250,7 +252,7 @@ impl Args {
     /// ```
     #[must_use]
     pub fn socket_candidates(&self) -> Vec<PathBuf> {
-        self.socket_candidates_with_env(&DefaultEnv)
+        self.socket_candidates_with_os_env(&DefaultEnv, &DefaultOsEnv)
     }
 
     /// Socket paths to try using the provided environment.
@@ -271,11 +273,26 @@ impl Args {
     /// ```
     #[must_use]
     pub fn socket_candidates_with_env(&self, env: &dyn Env) -> Vec<PathBuf> {
+        self.socket_candidates_with_os_env(env, &EnvOsString::new(env))
+    }
+
+    /// Socket paths to try using the provided environment providers.
+    ///
+    /// `os_env` supplies `COMENQ_SOCKET` because a valid Unix socket path may
+    /// contain bytes that are not valid UTF-8. Reading it through
+    /// [`Env`](mockable::Env) alone would report such a value as unset and
+    /// silently discover a different daemon.
+    pub(crate) fn socket_candidates_with_os_env(
+        &self,
+        env: &dyn Env,
+        os_env: &dyn OsEnv,
+    ) -> Vec<PathBuf> {
         if let Some(explicit) = &self.socket {
             return vec![explicit.clone()];
         }
 
-        env.string("COMENQ_SOCKET")
+        os_env
+            .os_string("COMENQ_SOCKET")
             .filter(|socket| !socket.is_empty())
             .map(PathBuf::from)
             .map_or_else(

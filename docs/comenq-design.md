@@ -913,8 +913,10 @@ Configuration is loaded using the `ortho_config` crate. The daemon binary calls
 CLI arguments. CLI arguments have the highest precedence, followed by
 environment variables, and finally the configuration file. Environment reads go
 through an injected `mockable::Env` provider, using `DefaultEnv` in production.
-Only the documented upper-case `COMENQD_<FIELD>` names are read, so differently
-cased variables no longer override configuration. The `${VAR}` token-path
+Documented `COMENQD_<FIELD>` names are matched without regard to case, as the
+previous Figment provider did; the upper-case spelling wins if several casings
+are present. The client reads `COMENQ_SOCKET` through an OS-string accessor so
+a socket path that is not valid UTF-8 is honoured. The `${VAR}` token-path
 expansion uses the same provider. Missing optional fields are replaced with
 defaults. The daemon socket default is resolved through the provider and sits
 below the file layer; direct Serde deserialization without `socket_path` falls

@@ -18,6 +18,7 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
+use crate::os_env::{DefaultOsEnv, EnvOsString, OsEnv};
 use crate::output::{render_entry, render_history as render_history_line, render_put};
 use crate::{Args, Command};
 
@@ -123,7 +124,7 @@ async fn transact_with_timeout(
 /// # }
 /// ```
 pub async fn run(args: Args) -> Result<(), ClientError> {
-    run_with_env(args, &DefaultEnv).await
+    run_with_os_env(args, &DefaultEnv, &DefaultOsEnv).await
 }
 
 /// Execute a parsed command using the supplied environment provider.
@@ -147,7 +148,13 @@ pub async fn run(args: Args) -> Result<(), ClientError> {
 /// # }
 /// ```
 pub async fn run_with_env(args: Args, env: &dyn Env) -> Result<(), ClientError> {
-    let candidates = args.socket_candidates_with_env(env);
+    run_with_os_env(args, env, &EnvOsString::new(env)).await
+}
+
+/// Execute a parsed command using both the injected Unicode and OS-string
+/// environment providers.
+async fn run_with_os_env(args: Args, env: &dyn Env, os_env: &dyn OsEnv) -> Result<(), ClientError> {
+    let candidates = args.socket_candidates_with_os_env(env, os_env);
     if let Command::Await { id } = &args.command {
         return await_with_writers(
             &candidates,

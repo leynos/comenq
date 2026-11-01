@@ -212,6 +212,36 @@ fn empty_socket_env_var_uses_discovery() {
     );
 }
 
+/// A socket path may hold bytes that are not valid UTF-8. Reading the
+/// override as Unicode alone would report it unset and silently connect to a
+/// discovered daemon instead.
+#[cfg(unix)]
+#[test]
+fn non_unicode_socket_env_var_remains_the_sole_candidate() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    use crate::os_env::OsEnv;
+
+    struct FixedOsEnv(Option<OsString>);
+
+    impl OsEnv for FixedOsEnv {
+        fn os_string(&self, _key: &str) -> Option<OsString> {
+            self.0.clone()
+        }
+    }
+
+    let socket = PathBuf::from(OsString::from_vec(b"/tmp/comenq-\xff.sock".to_vec()));
+    let os_env = FixedOsEnv(Some(socket.clone().into_os_string()));
+    let env = mock_env([] as [(&str, &str); 0]);
+    let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
+
+    assert_eq!(
+        args.socket_candidates_with_os_env(&env, &os_env),
+        vec![socket]
+    );
+}
+
 #[test]
 fn socket_env_var_is_described_without_a_clap_env_binding() {
     let help = Args::command().render_help().to_string();
