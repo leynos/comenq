@@ -30,22 +30,23 @@ async fn waiters_share_a_projection_and_mutations_invalidate_it() {
         Arc::new(FixedClock),
     )
     .expect("queue");
-    let (entry, _) = queue
-        .put(
-            CommentRequest {
-                owner: "o".into(),
-                repo: "r".into(),
-                pr_number: 1,
-                body: "cache".into(),
-            },
-            false,
-        )
+    let request = CommentRequest {
+        owner: "o".into(),
+        repo: "r".into(),
+        pr_number: 1,
+        body: "cache".into(),
+    };
+    let scheduled = queue
+        .put(comenq_domain::PutComment {
+            comment: crate::queue::convert::comment_from_request(&request),
+            immediate: false,
+        })
         .await
         .expect("put");
     let mut waiters = Vec::new();
     for _ in 0..64 {
         let queue = queue.clone();
-        let id = entry.id.clone();
+        let id = scheduled.entry.id.as_str().to_owned();
         waiters.push(tokio::spawn(
             async move { queue.resolve_await(&id, None).await },
         ));
@@ -62,9 +63,12 @@ async fn waiters_share_a_projection_and_mutations_invalidate_it() {
     }
     let first_builds = queue.store.lock().expect("lock").projection_builds;
     assert_eq!(first_builds, 1);
-    queue.bump(&entry.id).await.expect("mutation");
+    queue
+        .bump(scheduled.entry.id.as_str())
+        .await
+        .expect("mutation");
     let updated = queue
-        .resolve_await(&entry.id, None)
+        .resolve_await(scheduled.entry.id.as_str(), None)
         .await
         .expect("lookup after mutation");
     assert!(matches!(
@@ -92,8 +96,17 @@ async fn history_scan_does_not_hold_the_queue_lock_and_rechecks_mutations() {
         pr_number: 1,
         body: "unlocked history scan".into(),
     };
-    let (first, _) = queue.put(request.clone(), true).await.expect("initial put");
-    queue.del(&first.id).await.expect("delete initial entry");
+    let first = queue
+        .put(comenq_domain::PutComment {
+            comment: crate::queue::convert::comment_from_request(&request),
+            immediate: true,
+        })
+        .await
+        .expect("initial put");
+    queue
+        .del(first.entry.id.as_str())
+        .await
+        .expect("delete initial entry");
 
     let (started_tx, started_rx) = oneshot::channel();
     let started_tx = Arc::new(Mutex::new(Some(started_tx)));
@@ -122,7 +135,7 @@ async fn history_scan_does_not_hold_the_queue_lock_and_rechecks_mutations() {
         }
     };
     let wait_queue = Arc::clone(&queue);
-    let id = first.id.clone();
+    let id = first.entry.id.as_str().to_owned();
     let waiter = tokio::spawn(async move {
         wait_queue
             .resolve_await_store_with_history(&id, None, history_lookup)
@@ -132,13 +145,16 @@ async fn history_scan_does_not_hold_the_queue_lock_and_rechecks_mutations() {
 
     let posted_url = "https://github.com/o/r/issues/1#issuecomment-42";
     let enqueue_and_complete = tokio::time::timeout(Duration::from_secs(2), async {
-        let (replacement, _) = queue
-            .put(request, true)
+        let replacement = queue
+            .put(comenq_domain::PutComment {
+                comment: crate::queue::convert::comment_from_request(&request),
+                immediate: true,
+            })
             .await
             .expect("enqueue replacement during scan");
-        assert_eq!(replacement.id, first.id);
+        assert_eq!(replacement.entry.id.as_str(), first.entry.id.as_str());
         queue
-            .complete(&replacement, "hash", posted_url)
+            .complete_entry(&replacement.entry, "hash", Some(posted_url.into()))
             .await
             .expect("complete replacement during scan");
     })

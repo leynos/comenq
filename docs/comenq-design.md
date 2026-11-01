@@ -105,6 +105,43 @@ when the queue changes.
   listener or the worker after a panic loses no pending requests: the store
   itself is the single source of truth, not an in-memory buffer.
 
+### Domain service and ports
+
+The `comenq-domain` crate, whose only dependency is `thiserror`, holds the
+queue's rules so that they can be tested without a socket, a filesystem, or the
+JSON protocol. It defines commands (`claim_next_due`, `put`, `bump`, `bust`,
+`del`, `release_claim`, `complete`) and queries (`list`, `next_due`), the queue
+entry and scheduling values, entry-state transitions, and `QueueError`. It
+imports neither serde, paths or filesystem errors, Tokio, protocol types,
+metrics, nor daemon configuration.
+
+`QueueService` depends on three ports. `QueueRepository` supplies entries,
+persists changes, records the successful-post and failed-attempt markers, mints
+claim tokens, and journals completions. `WallClock` supplies Unix seconds and
+is read once per operation. `FlutterSampler` supplies the bounded random delay
+sampled at enqueue time. `comenqd` implements these ports with `QueueStore`,
+the system clock, and the random sampler; the domain never observes their
+concrete types.
+
+Scheduling is a pure projection of the stored entries and the posting policy. A
+deferred enqueue waits one cooldown plus its stored flutter. The cooldown
+anchor is the later of the most recent successful post and the most recent
+failed attempt, so a retry cannot start earlier than a full cooldown after
+either event. The projected posting time is the later of the entry's due time,
+its not-before floor, and the current instant; the ETA is that time minus the
+current instant. Entries are ordered by explicit position, enqueue time, then
+identifier. A claim anywhere in the queue suppresses dequeueing, so only one
+worker can hold an in-flight entry.
+
+The runtime composes a short-lived `QueueService` over borrowed adapters inside
+each serialized queue operation. Read-modify-write sequences therefore still
+run under the existing store mutex, while the domain stays free of locking and
+I/O. Converting JSON requests to domain commands, and domain errors and
+scheduled entries back to protocol responses, happens only in
+`listener::protocol`. Await subscription, history pagination, and their file
+cursors remain outside the domain: they coordinate concurrent readers and
+persistence snapshots rather than express queue policy.
+
 ### 1.2. Core Technology Stack: Crate Selection and Justification
 
 The selection of foundational Rust libraries (crates) is critical to building a
