@@ -303,6 +303,37 @@ fn comma_separated_token_files_are_not_split() {
     );
 }
 
+/// An unrelated variable that is not valid Unicode does not abort loading.
+///
+/// Collecting the process environment through `std::env::vars` panics when any
+/// entry carries raw bytes, which is easy to hit: another program in the
+/// service's environment need only export a byte-valued path. The loader
+/// enumerates through `std::env::vars_os` instead, so such a variable is
+/// ignored on both sides of the merge. The `COMENQD_*` value alongside it
+/// shows the environment layer still ran, which a panic-only assertion would
+/// not distinguish from the layer being skipped.
+#[cfg(unix)]
+#[test]
+fn non_unicode_environment_entry_does_not_break_loading() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempdir().expect("create tempdir");
+    let config = write_config(&dir, "github_token='file-token'");
+    let queue = PathBuf::from("/tmp/non-unicode-queue");
+    let raw_value = OsStr::from_bytes(b"\xff\xfe-not-unicode");
+
+    let resolved = load_in_child(
+        &config,
+        &[
+            ("COMENQD_UNRELATED_SETTING", raw_value),
+            ("COMENQD_QUEUE_PATH", queue.as_os_str()),
+        ],
+        "non-Unicode environment case",
+    );
+
+    assert_eq!(resolved.queue_path, queue);
+}
+
 /// An array literal is the supported spelling for a sequence.
 #[test]
 fn array_literal_populates_the_pool() {

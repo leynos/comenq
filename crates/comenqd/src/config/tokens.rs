@@ -7,6 +7,7 @@ use super::single_token::{
     MAX_GITHUB_TOKEN_FILE_BYTES, TokenFileReadError, TokenPathError, expand_token_path,
     read_token_file,
 };
+use mockable::Env;
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
@@ -24,20 +25,24 @@ pub struct NamedToken {
 ///
 /// Reads each path in `files`, naming the token after its file; each file
 /// must hold a non-empty token. When `files` is empty, `inline` forms a
-/// pool of one named `default`.
+/// pool of one named `default`. Path placeholders are expanded through `env`.
 ///
 /// # Examples
 ///
 /// With no token files, the inline token forms a one-entry pool:
 ///
 /// ```rust,ignore
-/// let pool = resolve_pool(&[], "inline-token")?;
+/// let pool = resolve_pool(&[], "inline-token", &DefaultEnv)?;
 /// assert_eq!(pool.len(), 1);
 /// assert_eq!(pool[0].name, "default");
 /// assert_eq!(pool[0].token, "inline-token");
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<NamedToken>> {
+pub(super) fn resolve_pool(
+    files: &[PathBuf],
+    inline: &str,
+    env: &dyn Env,
+) -> io::Result<Vec<NamedToken>> {
     if files.is_empty() {
         return Ok(vec![NamedToken {
             name: "default".to_owned(),
@@ -48,7 +53,7 @@ pub(super) fn resolve_pool(files: &[PathBuf], inline: &str) -> io::Result<Vec<Na
     files.iter().try_fold(
         Vec::with_capacity(files.len()),
         |mut tokens, configured_path| {
-            let file = expand_token_path(configured_path).map_err(token_path_io_error)?;
+            let file = expand_token_path(configured_path, env).map_err(token_path_io_error)?;
             let token =
                 read_token_file(&file).map_err(|error| token_file_io_error(&file, error))?;
             let token = token.trim();

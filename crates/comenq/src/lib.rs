@@ -6,14 +6,17 @@
 //! failures. History requests may follow several paged replies.
 
 use clap::{Parser, Subcommand, builder::ValueHint};
+use mockable::{DefaultEnv, Env};
+use os_env::{DefaultOsEnv, EnvOsString, OsEnv};
 use std::{fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
 #[doc(hidden)]
 pub mod client;
+mod os_env;
 mod output;
 
-pub use client::{ClientError, run};
+pub use client::{ClientError, run, run_with_env};
 pub use output::{format_age, format_eta, one_line_summary, render_remaining, report_interval};
 
 /// A GitHub repository slug in `owner/repo` format.
@@ -102,19 +105,18 @@ impl fmt::Display for RepoSlug {
 #[derive(Debug, Clone, Parser)]
 #[command(name = "comenq", about = "Queue and manage GitHub PR comments")]
 pub struct Args {
-    /// Path to the daemon's Unix Domain Socket.
+    /// Path to the daemon's Unix Domain Socket, selected with `--socket` or
+    /// `COMENQ_SOCKET`.
     ///
     /// When omitted and `XDG_RUNTIME_DIR` is set to a non-empty absolute path,
     /// the client tries the per-user runtime path
     /// (`$XDG_RUNTIME_DIR/comenq/comenq.sock`) and then the system path,
     /// connecting to the first socket that accepts. Otherwise, it falls back
     /// to the system socket. This finds a user-hosted daemon automatically
-    /// without letting a stale socket file shadow a healthy daemon. May be
-    /// overridden with the `COMENQ_SOCKET` environment variable or this flag.
-    // The candidates are resolved at connect time rather than through
-    // clap's `default_value_os_t`, which caches the computed value in a
-    // process-wide static and would ignore later environment changes.
-    #[arg(long, global = true, value_hint = ValueHint::FilePath, env = "COMENQ_SOCKET")]
+    /// without letting a stale socket file shadow a healthy daemon.
+    // Resolve the variable when the command runs so parsing stays independent
+    // of process-wide environment state.
+    #[arg(long, global = true, value_hint = ValueHint::FilePath)]
     pub socket: Option<PathBuf>,
 
     /// Queue operation to perform.
@@ -222,10 +224,10 @@ impl Command {
 impl Args {
     /// Socket paths to try in order, honouring an explicit override.
     ///
-    /// An explicit `--socket` (or `COMENQ_SOCKET`) yields exactly that
-    /// path; otherwise the discovery candidates from
-    /// [`comenq_transport::socket_candidates`] are returned. Callers connect to
-    /// each in turn so a stale socket file cannot shadow a live daemon.
+    /// An explicit `--socket` wins over `COMENQ_SOCKET`; an unset or empty
+    /// variable uses the discovery candidates from
+    /// [`comenq_transport::socket_candidates`]. Callers connect to each in
+    /// turn so a stale socket file cannot shadow a live daemon.
     ///
     /// # Examples
     ///
@@ -250,11 +252,53 @@ impl Args {
     /// ```
     #[must_use]
     pub fn socket_candidates(&self) -> Vec<PathBuf> {
-        self.socket
-            .clone()
-            .map_or_else(comenq_transport::socket_candidates, |explicit| {
-                vec![explicit]
-            })
+        self.socket_candidates_with_os_env(&DefaultEnv, &DefaultOsEnv)
+    }
+
+    /// Socket paths to try using the provided environment.
+    ///
+    /// Precedence is an explicit `--socket`, a non-empty `COMENQ_SOCKET`, then
+    /// the per-user and system discovery candidates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use clap::Parser;
+    /// use comenq::Args;
+    /// use mockable::DefaultEnv;
+    ///
+    /// let args = Args::try_parse_from(["comenq", "list"]).expect("arguments parse");
+    /// let candidates = args.socket_candidates_with_env(&DefaultEnv);
+    /// assert!(!candidates.is_empty());
+    /// ```
+    #[must_use]
+    pub fn socket_candidates_with_env(&self, env: &dyn Env) -> Vec<PathBuf> {
+        self.socket_candidates_with_os_env(env, &EnvOsString::new(env))
+    }
+
+    /// Socket paths to try using the provided environment providers.
+    ///
+    /// `os_env` supplies `COMENQ_SOCKET` because a valid Unix socket path may
+    /// contain bytes that are not valid UTF-8. Reading it through
+    /// [`Env`](mockable::Env) alone would report such a value as unset and
+    /// silently discover a different daemon.
+    pub(crate) fn socket_candidates_with_os_env(
+        &self,
+        env: &dyn Env,
+        os_env: &dyn OsEnv,
+    ) -> Vec<PathBuf> {
+        if let Some(explicit) = &self.socket {
+            return vec![explicit.clone()];
+        }
+
+        os_env
+            .os_string("COMENQ_SOCKET")
+            .filter(|socket| !socket.is_empty())
+            .map(PathBuf::from)
+            .map_or_else(
+                || comenq_transport::socket_candidates_with_env(env),
+                |socket| vec![socket],
+            )
     }
 }
 

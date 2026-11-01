@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 tokio = { workspace = true }
 clap = { workspace = true }
+mockable = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 comenq-lib = { path = "../.." }
@@ -24,7 +25,6 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 rstest = { workspace = true }
-serial_test = "3"
 tempfile = { workspace = true }
 test-support = { workspace = true }
 

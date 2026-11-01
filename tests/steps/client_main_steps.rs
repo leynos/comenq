@@ -1,11 +1,12 @@
 //! Behavioural test steps for the client binary's interaction with the daemon.
 use anyhow::Context as _;
-use comenq::{Args, ClientError, Command, run};
+use comenq::{Args, ClientError, Command, run_with_env};
 use comenq_lib::protocol::{PendingEntry, Request, Response};
 use cucumber::{World, given, then, when};
+use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
-use test_support::EnvVarGuard;
+use test_support::mock_env;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
@@ -13,7 +14,7 @@ use tokio::net::UnixListener;
 pub struct ClientWorld {
     args: Option<Args>,
     tempdir: Option<TempDir>,
-    runtime_dir_guard: Option<EnvVarGuard>,
+    env_values: HashMap<String, String>,
     server: Option<tokio::task::JoinHandle<anyhow::Result<Vec<u8>>>>,
     result: Option<Result<(), ClientError>>,
 }
@@ -87,12 +88,13 @@ fn user_runtime_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
             now: false,
         },
     });
-    world.runtime_dir_guard = Some(EnvVarGuard::set(
-        "XDG_RUNTIME_DIR",
+    world.env_values.insert(
+        "XDG_RUNTIME_DIR".to_owned(),
         dir.path()
             .to_str()
-            .context("runtime directory path is UTF-8")?,
-    ));
+            .context("runtime directory path is UTF-8")?
+            .to_owned(),
+    );
     world.tempdir = Some(dir);
     world.server = Some(handle);
     Ok(())
@@ -110,7 +112,8 @@ fn no_daemon(world: &mut ClientWorld) -> anyhow::Result<()> {
 #[when("the client sends the request")]
 async fn send_request(world: &mut ClientWorld) -> anyhow::Result<()> {
     let args = world.args.clone().context("args")?;
-    world.result = Some(run(args).await);
+    let env = mock_env(&world.env_values);
+    world.result = Some(run_with_env(args, &env).await);
     Ok(())
 }
 

@@ -19,7 +19,10 @@ and
 system default otherwise. `comenq_transport::socket_candidates()` returns the
 user path first, then `/run/comenq/comenq.sock`, without duplicates. The client
 probes those candidates by connecting rather than checking for socket files. An
-explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate.
+explicit `--socket` or `COMENQ_SOCKET` value becomes the sole candidate. Each
+of these functions has a `_with_env` variant that reads an injected
+`mockable::Env`, letting tests exercise runtime-directory behaviour without
+mutating process-wide state.
 
 The supervisor starts the listener and worker against the same
 `Arc<SharedQueue>`. `SharedQueue` serializes short filesystem-backed
@@ -140,6 +143,33 @@ compatibility entry points for callers that compose those steps themselves;
 `Config::load()` returns only the configuration, and `daemon::run()` resolves
 its tokens when called.
 
+Environment access goes through `mockable::Env`. Production loading uses
+`mockable::DefaultEnv`; tests inject `test_support::mock_env` instead of
+mutating process-wide variables. Enumerating the whole environment is the one
+operation the injected provider cannot serve: `mockable::Env::all` collects
+through `std::env::vars`, which panics when any entry is not valid Unicode, so
+one unrelated variable carrying raw bytes would abort startup. The loader
+therefore reads the `COMENQD_*` layer through a narrower `EnvVars` port:
+`SystemEnvVars` enumerates `std::env::vars_os` in production, and
+`EnvVarsFromEnv` adapts an injected provider for tests. Names and values are
+converted with `to_string_lossy`, as the Figment provider the loader replaces
+did. The loader matches the documented `COMENQD_<FIELD>` names without regard
+to case, preserving that provider's behaviour; when an installation defines
+several casings, the upper-case spelling wins. The `${VAR}` token-path
+expansion also uses the injected provider. The client reads `COMENQ_SOCKET`
+through an OS-string accessor backed by `std::env::var_os` in production, so a
+socket path that is not valid UTF-8 is honoured rather than discarded.
+
+The loader always injects `socket_path` as its lowest-precedence Figment layer,
+resolved through that provider. Direct Serde deserialization of `Config`
+instead falls back to the deterministic system-wide
+`comenq_transport::DEFAULT_SOCKET_PATH`; it never reads the process environment.
+
+Public `_with_env` variants expose the same seam: `comenq::run_with_env`,
+`comenq::Args::socket_candidates_with_env`, and
+`Config::github_tokens_with_env`. Their production wrappers pass
+`mockable::DefaultEnv`.
+
 `Config::github_tokens()` is a fallible resolver, not an accessor for a cached
 pool. Each call reads and validates the configured token files again. The
 `NamedToken` values returned by the resolver own both the token string and its
@@ -154,10 +184,10 @@ explicit CLI `--github-token` overrides every source; otherwise
 single-token settings resolve to a one-element pool when no list is configured.
 
 Tests and integrations built with the `test-support` feature can use
-`Config::from_file(path)` to load a particular file while retaining the
-`COMENQD_*` environment merge. Both entry points return a configuration error
-when the file is missing or invalid, or when no usable GitHub credential is
-available.
+`Config::from_file(path)` for ambient environment values, or
+`Config::from_file_with_env(path, env)` to inject them. Both entry points
+return a configuration error when the file is missing or invalid, or when no
+usable GitHub credential is available.
 
 Structured tracing records socket probes, the selected credential source (but
 never the token value), listener transactions and blocking queue-store
@@ -273,19 +303,19 @@ validates its generated packages during the build-and-package jobs. See the
 release topology and system-package details.
 
 The `test-support` workspace crate owns helpers shared by unit, integration,
-and behavioural tests, including temporary daemon configuration, environment
-guards, logging capture, socket polling, and mock GitHub clients. The `comenqd`
-`test-support` feature exposes only the daemon integration seams needed by
-external tests. Production code must not depend on that feature being enabled.
+and behavioural tests, including temporary daemon configuration, mock
+environment providers, logging capture, socket polling, and mock GitHub
+clients. The `comenqd` `test-support` feature exposes only the daemon
+integration seams needed by external tests. Production code must not depend on
+that feature being enabled.
 
-Tests that mutate process-wide environment variables use `serial_test` together
-with `test_support::EnvVarGuard`. Mark every such test `#[serial_test::serial]`
-so it cannot race another environment-mutating test, and let the guard restore
-the previous value. `proptest` exercises cooldown arithmetic across arbitrary
-`u64` values: a selected flutter must never shorten the base cooldown or exceed
-the base plus the configured flutter, using saturating addition at overflow.
-Prefer the shared helpers over duplicating fixtures in an individual crate.
-Further patterns are documented in
+Environment-dependent tests use `test_support::mock_env` and the `_with_env`
+entry points instead of mutating process-wide variables, so they can run
+concurrently. `proptest` exercises cooldown arithmetic across arbitrary `u64`
+values: a selected flutter must never shorten the base cooldown or exceed the
+base plus the configured flutter, using saturating addition at overflow. Prefer
+the shared helpers over duplicating fixtures in an individual crate. Further
+patterns are documented in
 [the Cucumber guide](behavioural-testing-in-rust-with-cucumber.md) and
 [Rust testing with rstest fixtures](rust-testing-with-rstest-fixtures.md).
 
