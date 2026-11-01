@@ -913,6 +913,10 @@ Configuration is loaded using the `ortho_config` crate. The daemon binary calls
 CLI arguments. CLI arguments have the highest precedence, followed by
 environment variables, and finally the configuration file. Environment reads go
 through an injected `mockable::Env` provider, using `DefaultEnv` in production.
+The `COMENQD_*` layer is enumerated through a separate OS-string port
+(`std::env::vars_os` in production) rather than `mockable::Env::all`, because
+that method collects through `std::env::vars` and panics on any non-Unicode
+entry; a single unrelated byte-valued variable would otherwise abort startup.
 Documented `COMENQD_<FIELD>` names are matched without regard to case, as the
 previous Figment provider did; the upper-case spelling wins if several casings
 are present. The client reads `COMENQ_SOCKET` through an OS-string accessor so

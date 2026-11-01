@@ -89,10 +89,11 @@ absolute path. It falls back to `/run/comenq/comenq.sock` when the user socket
 cannot be used, so a stale user socket does not hide a healthy system service.
 
 A non-Unicode `XDG_RUNTIME_DIR` is treated as absent, so the system socket is
-used. Environment variable names are matched without regard to case, as in
-earlier releases; the documented spellings are `COMENQ_SOCKET` and the
-upper-case `COMENQD_*` names. `COMENQ_SOCKET` may name a path that is not valid
-UTF-8.
+used. The daemon matches `COMENQD_*` configuration overrides without regard to
+case, as in earlier releases; the documented spellings are the upper-case
+names. The client looks up `COMENQ_SOCKET` and `XDG_RUNTIME_DIR` by their exact
+names, so a lower-case `comenq_socket` is ignored. `COMENQ_SOCKET` may name a
+path that is not valid UTF-8.
 
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
 instead. Otherwise, use the queue-management subcommands:
