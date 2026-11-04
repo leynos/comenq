@@ -34,6 +34,7 @@ harness = false
 [workspace]
 members = [
     "crates/comenq",
+    "crates/comenq-domain",
     "crates/comenqd",
     "crates/comenq-transport",
     "crates/test-utils",

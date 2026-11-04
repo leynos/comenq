@@ -5,76 +5,23 @@
 //! flutter was fixed when it was enqueued, so the projected schedule reported
 //! to clients matches what the worker executes.
 
-use crate::config::Config;
 use crate::metrics;
 use crate::queue::SharedQueue;
+use crate::queue::convert::request_from_comment;
 use anyhow::{Context, Result};
-use comenq_lib::CommentRequest;
-use octocrab::Octocrab;
 use std::sync::Arc;
 use std::time::Duration;
-use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
+mod posting;
+use posting::post_comment_with_metrics;
 mod tokens;
 pub(crate) use tokens::build_octocrab;
 use tokens::next_token_index;
 pub use tokens::{TokenClient, token_hash};
 
 const RETRY_OVERFLOW_FALLBACK: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
-/// Errors returned when posting a comment to GitHub.
-#[derive(Debug, Error)]
-enum PostCommentError {
-    /// The GitHub API request failed.
-    #[error(transparent)]
-    Api(#[from] octocrab::Error),
-    /// The request timed out.
-    #[error("timeout")]
-    Timeout,
-}
-
-/// Submit a comment to GitHub with the configured API deadline.
-///
-/// A deadline expiry is kept distinct from an API response failure so the
-/// worker can report a bounded outcome and retry the queued entry.
-async fn post_comment(
-    octocrab: &Octocrab,
-    request: &CommentRequest,
-    config: &Config,
-) -> Result<String, PostCommentError> {
-    let issues = octocrab.issues(&request.owner, &request.repo);
-    let fut = issues.create_comment(request.pr_number, &request.body);
-    match tokio::time::timeout(Duration::from_secs(config.github_api_timeout_secs), fut).await {
-        Ok(res) => res
-            .map(|comment| comment.html_url.to_string())
-            .map_err(PostCommentError::Api),
-        Err(_) => Err(PostCommentError::Timeout),
-    }
-}
-
-/// Post one queued request while recording its duration and bounded outcome.
-#[tracing::instrument(
-    skip(octocrab, request, config),
-    fields(task = "worker", outcome = tracing::field::Empty)
-)]
-async fn post_comment_with_metrics(
-    octocrab: &Octocrab,
-    request: &CommentRequest,
-    config: &Config,
-) -> Result<String, PostCommentError> {
-    let start = Instant::now();
-    let result = post_comment(octocrab, request, config).await;
-    metrics::record_github_post_duration(start.elapsed());
-    let outcome = match &result {
-        Ok(_) => "success",
-        Err(PostCommentError::Api(_)) => "api_error",
-        Err(PostCommentError::Timeout) => "timeout",
-    };
-    tracing::Span::current().record("outcome", outcome);
-    metrics::record_github_post_outcome(outcome);
-    result
-}
 
 /// Hooks used to observe worker progress during tests.
 ///
@@ -312,8 +259,8 @@ pub async fn run_worker(
     queue.recover_worker_state().await?;
     let config = queue.config().clone();
     loop {
-        let due = queue.claim_next_due().await?;
-        let Some((entry, wait_seconds)) = due else {
+        let due = queue.claim_next_due_domain().await?;
+        let Some(scheduled) = due else {
             control.notify_drained();
             tokio::select! {
                 biased;
@@ -321,6 +268,8 @@ pub async fn run_worker(
                 () = queue.changed() => continue,
             }
         };
+        let wait_seconds = scheduled.eta_seconds;
+        let entry = scheduled.entry;
         if wait_seconds > 0 {
             metrics::record_cooldown_wait(wait_seconds);
             if wait_for_scheduled_entry(&queue, wait_seconds, &mut control).await {
@@ -344,22 +293,25 @@ pub async fn run_worker(
             last_hash.as_deref(),
         );
         let client = clients.get(index).context("token index in range")?;
-        match post_comment_with_metrics(&client.octocrab, &entry.request, &config).await {
+        let request = request_from_comment(&entry.comment);
+        match post_comment_with_metrics(&client.octocrab, &request, &config).await {
             Ok(comment_url) => {
-                queue.complete(&entry, &client.hash, &comment_url).await?;
+                queue
+                    .complete_entry(&entry, &client.hash, Some(comment_url))
+                    .await?;
             }
             Err(e) => {
                 tracing::error!(
                     error = %e,
                     id = %entry.id,
                     token = %client.name,
-                    owner = %entry.request.owner,
-                    repo = %entry.request.repo,
-                    pr = entry.request.pr_number,
+                    owner = %entry.comment.owner,
+                    repo = %entry.comment.repo,
+                    pr = entry.comment.pr_number,
                     "GitHub API call failed; will retry after cooldown",
                 );
                 if let Err(error) = queue
-                    .record_failure(&entry, &client.hash, &e.to_string())
+                    .record_failure_for(&entry, &client.hash, &e.to_string())
                     .await
                 {
                     tracing::error!(
@@ -368,8 +320,10 @@ pub async fn run_worker(
                         "Failed to record the posting failure in the history log",
                     );
                 }
-                if let Some(claim_token) = entry.claim_token.as_deref() {
-                    queue.release_claim(&entry.id, claim_token).await?;
+                if let Some(claim_token) = entry.claim_token.as_ref() {
+                    queue
+                        .release_claim(entry.id.as_str(), claim_token.as_str())
+                        .await?;
                 }
                 control.notify_idle();
                 // Pace retries so a persistently failing API is not hammered.

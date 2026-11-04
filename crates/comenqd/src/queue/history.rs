@@ -1,10 +1,13 @@
 //! Posting-history operations on shared queue state.
 
+use comenq_domain::QueuedEntry;
+
 use crate::store::{
     HistoryPage, HistoryPosition, HistoryRecord, Result as StoreResult, StoredEntry,
 };
 
 use super::SharedQueue;
+use super::convert::stored_from_queued;
 
 /// Maximum records loaded for one listener history page before byte sizing.
 const HISTORY_READ_PAGE_SIZE: usize = 64;
@@ -35,6 +38,17 @@ impl SharedQueue {
             error,
         ))
         .await
+    }
+
+    /// Append a failed attempt for a domain entry while keeping it queued.
+    pub(crate) async fn record_failure_for(
+        &self,
+        entry: &QueuedEntry,
+        token_hash: &str,
+        error: &str,
+    ) -> StoreResult<()> {
+        let entry = stored_from_queued(entry);
+        self.record_failure(&entry, token_hash, error).await
     }
 
     /// Hash of the token used by the most recent posting attempt, if present.

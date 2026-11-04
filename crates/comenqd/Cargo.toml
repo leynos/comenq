@@ -22,6 +22,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 color-eyre = { workspace = true }
 comenq-lib = { path = "../.." }
+comenq-domain = { path = "../comenq-domain" }
 comenq-transport = { path = "../comenq-transport" }
 ortho_config = { workspace = true }
 test-support = { workspace = true, optional = true }

@@ -2,8 +2,10 @@
 
 use super::SharedQueue;
 use super::await_lookup::{AwaitSchedule, is_state_mutation};
+use super::{QueueResult, UnixClock, queue_error_category};
 use crate::metrics;
 use crate::store::{QueueStore, Result as StoreResult, StoreError};
+use comenq_domain::{FlutterSampler, QueueError, QueuePolicy};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,6 +37,46 @@ impl QueueState {
     }
 }
 
+/// Failure type accepted by the serialized store boundary.
+pub(super) trait StoreFailure: std::fmt::Display + Send + 'static {
+    /// Return a bounded classification that does not expose stored values.
+    fn category(&self) -> &'static str;
+
+    /// Whether this error represents an unexpected persistence or task failure.
+    fn is_unexpected(&self) -> bool;
+
+    /// Wrap a blocking-task join failure in this error type.
+    fn from_join(error: tokio::task::JoinError) -> Self;
+}
+
+impl StoreFailure for StoreError {
+    fn category(&self) -> &'static str {
+        StoreError::category(self)
+    }
+
+    fn is_unexpected(&self) -> bool {
+        StoreError::is_unexpected(self)
+    }
+
+    fn from_join(error: tokio::task::JoinError) -> Self {
+        StoreError::BlockingTask(error)
+    }
+}
+
+impl StoreFailure for QueueError<StoreError> {
+    fn category(&self) -> &'static str {
+        queue_error_category(self)
+    }
+
+    fn is_unexpected(&self) -> bool {
+        self.repository().is_some_and(StoreError::is_unexpected)
+    }
+
+    fn from_join(error: tokio::task::JoinError) -> Self {
+        QueueError::Repository(StoreError::BlockingTask(error))
+    }
+}
+
 impl SharedQueue {
     /// Adapt existing store operations to the shared state boundary.
     pub(super) async fn with_store<T, F>(&self, operation: &'static str, work: F) -> StoreResult<T>
@@ -46,11 +88,33 @@ impl SharedQueue {
             .await
     }
 
-    /// Run synchronous store work outside Tokio's asynchronous executor.
-    pub(super) async fn with_state<T, F>(&self, operation: &'static str, work: F) -> StoreResult<T>
+    /// Run synchronous work while holding the queue lock and domain ports.
+    pub(super) async fn with_service<T, F>(
+        &self,
+        operation: &'static str,
+        work: F,
+    ) -> QueueResult<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut QueueState) -> StoreResult<T> + Send + 'static,
+        F: FnOnce(&QueueStore, &dyn UnixClock, &dyn FlutterSampler, QueuePolicy) -> QueueResult<T>
+            + Send
+            + 'static,
+    {
+        let clock = Arc::clone(&self.clock);
+        let sampler = Arc::clone(&self.flutter_sampler);
+        let policy = self.policy;
+        self.with_state(operation, move |state| {
+            work(&state.store, clock.as_ref(), sampler.as_ref(), policy)
+        })
+        .await
+    }
+
+    /// Run synchronous store work outside Tokio's asynchronous executor.
+    pub(super) async fn with_state<T, E, F>(&self, operation: &'static str, work: F) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: StoreFailure,
+        F: FnOnce(&mut QueueState) -> Result<T, E> + Send + 'static,
     {
         let started = Instant::now();
         let store = Arc::clone(&self.store);
@@ -79,7 +143,7 @@ impl SharedQueue {
             result
         })
         .await
-        .unwrap_or_else(|error| Err(StoreError::BlockingTask(error)));
+        .unwrap_or_else(|error| Err(E::from_join(error)));
         let duration = started.elapsed();
         let elapsed_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         span.record("elapsed_ms", elapsed_ms);
