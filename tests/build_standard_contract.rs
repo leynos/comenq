@@ -54,7 +54,7 @@ use make::{
     Assignment, Host, assigned_rustflags, commands_from, development_problems, held_out_problems,
     held_out_target_count, test_policy_problem,
 };
-use process::real_make;
+use process::{real_make, real_make_with_env};
 
 /// Text handed to a case, wrapped so that a case reads as data and the test
 /// signatures name what they take rather than passing bare strings around.
@@ -287,6 +287,27 @@ fn a_continued_command_is_one_command() -> Result<(), String> {
 #[test]
 fn every_rustflags_source_is_consistent_with_the_pin() -> Result<(), String> {
     none_of(&config_problems(CONFIG, Pin::read(TOOLCHAIN)?)?)
+}
+
+/// Scenario: a caller exports `WHITAKER` as a path that is not named `whitaker`.
+///
+/// Invariant: the dry run pins the executable, so the commands judged are the same as without the
+/// override. Removing the pin from `real_make_with_env` makes the output differ and this fail.
+#[test]
+fn a_callers_whitaker_override_does_not_change_the_judged_commands() -> Result<(), String> {
+    let plain = real_make(make::Target("lint"), Host::Linux)?;
+    let overridden = real_make_with_env(
+        make::Target("lint"),
+        Host::Linux,
+        &[("WHITAKER", "/usr/local/bin/my-whitaker")],
+    )?;
+    if plain == overridden {
+        Ok(())
+    } else {
+        Err(format!(
+            "the override changed the dry run:\n{plain}\n{overridden}"
+        ))
+    }
 }
 
 #[test]

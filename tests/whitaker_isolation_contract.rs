@@ -28,7 +28,13 @@ fn runs_whitaker(command: &str) -> bool {
 /// Returns the `make -n lint` line that runs Whitaker, or an empty line when `make` fails or the
 /// recipe runs none, which `isolation_problems` then reports.
 fn whitaker_line() -> String {
+    whitaker_line_with_env(&[])
+}
+
+/// Like [`whitaker_line`], with extra environment variables for the `make` process.
+fn whitaker_line_with_env(envs: &[(&str, &str)]) -> String {
     let output = Command::new("make")
+        .envs(envs.iter().copied())
         // Pin the executable so a caller's WHITAKER override cannot change what is judged.
         .args(["-n", "-B", "WHITAKER=whitaker", "lint"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -87,6 +93,18 @@ fn isolation_problems(line: &str) -> Vec<String> {
 fn make_lint_isolates_whitaker_with_the_literal_rustflags() {
     let problems = isolation_problems(&whitaker_line());
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Scenario: a caller exports `WHITAKER` as a path that is not named `whitaker`.
+///
+/// Invariant: the dry run pins the executable, so the line judged is the same as without the
+/// override. Removing the pin from `whitaker_line_with_env` makes the line empty and this fail.
+#[test]
+fn a_callers_whitaker_override_does_not_change_the_judged_line() {
+    let plain = whitaker_line();
+    let overridden = whitaker_line_with_env(&[("WHITAKER", "/usr/local/bin/my-whitaker")]);
+    assert!(!plain.is_empty(), "the recipe must run Whitaker");
+    assert_eq!(plain, overridden);
 }
 
 /// Scenario: Whitaker commands that assign no, inherited or development `RUSTFLAGS`.
