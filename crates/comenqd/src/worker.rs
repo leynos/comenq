@@ -5,15 +5,13 @@
 //! flutter was fixed when it was enqueued, so the projected schedule reported
 //! to clients matches what the worker executes.
 
-#![expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 use crate::config::Config;
 use crate::metrics;
 use crate::queue::SharedQueue;
 use anyhow::{Context, Result};
 use comenq_lib::CommentRequest;
 use octocrab::Octocrab;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
@@ -39,6 +37,7 @@ enum PostCommentError {
 ///
 /// A deadline expiry is kept distinct from an API response failure so the
 /// worker can report a bounded outcome and retry the queued entry.
+#[expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -59,6 +58,7 @@ async fn post_comment(
     skip(octocrab, request, config),
     fields(task = "worker", outcome = tracing::field::Empty)
 )]
+#[expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 async fn post_comment_with_metrics(
     octocrab: &Octocrab,
     request: &CommentRequest,

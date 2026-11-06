@@ -27,6 +27,8 @@ pub fn real_make(target: Target<'_>, host: Host) -> Result<String, String> {
         .args([
             "-n",
             "-B",
+            // Pin the executable so a caller's WHITAKER override cannot change what is judged.
+            "WHITAKER=whitaker",
             &format!("BUILD_HOST_OS={}", host.make_value()),
             name,
         ])

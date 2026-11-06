@@ -29,7 +29,8 @@ fn runs_whitaker(command: &str) -> bool {
 /// recipe runs none, which `isolation_problems` then reports.
 fn whitaker_line() -> String {
     let output = Command::new("make")
-        .args(["-n", "-B", "lint"])
+        // Pin the executable so a caller's WHITAKER override cannot change what is judged.
+        .args(["-n", "-B", "WHITAKER=whitaker", "lint"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .map_or_else(
