@@ -97,6 +97,10 @@ jobs:
           # CodeScene. Main owns both, in coverage-main.yml, and
           # `make test-workflow-contracts` holds the split.
           with-ratchet: 'true'
+          # The toolchain bump lowered measured coverage from 90.59% (main) to 88.84% with
+          # the instrumentation of nightly-2026-10-30 and no test removed (488 tests on main
+          # and on the bump alone), so the ratchet starts from a new baseline file: v2.
+          baseline-rust-file: .coverage-baseline-v2.rust
           publish-artefact: 'false'
       - name: Run the cucumber scenarios
         if: ${{ !cancelled() }}

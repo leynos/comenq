@@ -22,11 +22,28 @@ use super::make::{Host, Target};
 ///
 /// Returns the reason when `make` cannot run or the target is not defined.
 pub fn real_make(target: Target<'_>, host: Host) -> Result<String, String> {
+    real_make_with_env(target, host, &[])
+}
+
+/// Like [`real_make`], with extra environment variables for the `make` process, so a test can
+/// show that a caller's environment does not change what is judged.
+///
+/// # Errors
+///
+/// Returns the reason when `make` cannot run or the target is not defined.
+pub fn real_make_with_env(
+    target: Target<'_>,
+    host: Host,
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
     let name = target.name();
     let output = Command::new("make")
+        .envs(envs.iter().copied())
         .args([
             "-n",
             "-B",
+            // Pin the executable so a caller's WHITAKER override cannot change what is judged.
+            "WHITAKER=whitaker",
             &format!("BUILD_HOST_OS={}", host.make_value()),
             name,
         ])
