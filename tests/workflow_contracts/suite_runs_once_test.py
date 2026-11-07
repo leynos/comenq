@@ -603,6 +603,7 @@ def _fake_database(output: MakeOutput) -> MakeDatabase:
     """Return a runner that answers every makefile with ``output``."""
 
     def run(_makefile: str) -> MakeOutput:
+        """Ignore the makefile text and return the canned ``output``."""
         return output
 
     return run

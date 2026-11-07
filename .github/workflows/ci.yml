@@ -51,13 +51,15 @@ jobs:
           # nightly predates. Run the installer on the runner's stable
           # toolchain to satisfy both paths.
           RUSTUP_TOOLCHAIN: stable
-      - name: Lint
-        run: make lint
+      # `make lint` runs the docstring gate through `uv tool run`, so uv must be
+      # set up before it.
       - name: Setup uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           python-version: '3.13'
           enable-cache: true
+      - name: Lint
+        run: make lint
       - name: Set up isolated Rust for Merman
         run: rustup toolchain install 1.95.0 --profile minimal
       - name: Install Merman CLI
