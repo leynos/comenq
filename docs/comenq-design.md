@@ -147,7 +147,10 @@ The CLI has a global optional `--socket` override (also available through
 `await`, and `hist`. `put` accepts `<owner/repo> <pr_number> <comment_body>`
 and an optional `--now`; the other commands accept no positional arguments
 (`list`) or an eight-character entry identifier (`bump`, `bust`, `del`, and
-`await`). `hist` accepts an optional `-n` or `--limit` count.
+`await`). `hist` accepts an optional `-n` or `--limit` count. Clap does not bind
+`COMENQ_SOCKET` as an argument environment variable, so `--help` does not show
+`[env: COMENQ_SOCKET]`; the client resolves the variable at execution time
+through its injected environment provider.
 
 The following code shows the shape of the shipped `Args` parser and its
 subcommands. The implementation delegates protocol and socket work to the
@@ -164,7 +167,9 @@ use std::path::PathBuf;
 #[command(name = "comenq")]
 pub struct Args {
     /// Path to the daemon's Unix Domain Socket.
-    #[arg(long, global = true, env = "COMENQ_SOCKET")]
+    ///
+    /// `COMENQ_SOCKET` is resolved at execution time, not during parsing.
+    #[arg(long, global = true)]
     pub socket: Option<PathBuf>,
 
     /// Queue operation to perform.
@@ -906,16 +911,30 @@ Configuration is loaded using the `ortho_config` crate. The daemon binary calls
 `Config::load_with_tokens()`, which merges values from
 `/etc/comenqd/config.toml`, `COMENQD_*` environment variables, and any supplied
 CLI arguments. CLI arguments have the highest precedence, followed by
-environment variables, and finally the configuration file. Missing optional
-fields are replaced with defaults. Configuration fails unless it can resolve
-either a non-empty `github_token_files` pool or a usable single token. A
-non-empty `github_token_files` pool takes precedence over the single-token
-settings; every listed file is checked at startup. Otherwise,
-`github_token_file` is read at startup and its trimmed contents take precedence
-over the configured token unless `--github-token` is supplied. Invalid TOML
-also results in a configuration error. The daemon binary passes the owned,
-resolved token pool to `daemon::run_with_tokens()` for client construction, so
-it does not read the token files again during startup.
+environment variables, and finally the configuration file. Environment reads go
+through an injected `mockable::Env` provider, using `DefaultEnv` in production.
+The `COMENQD_*` layer is enumerated through a separate OS-string port
+(`std::env::vars_os` in production) rather than `mockable::Env::all`, because
+that method collects through `std::env::vars` and panics on any non-Unicode
+entry; a single unrelated byte-valued variable would otherwise abort startup.
+Documented `COMENQD_<FIELD>` names are matched without regard to case, as the
+previous Figment provider did; the upper-case spelling wins if several casings
+are present. The client reads `COMENQ_SOCKET` through an OS-string accessor so
+a socket path that is not valid UTF-8 is honoured. The `${VAR}` token-path
+expansion uses the same provider. Missing optional fields are replaced with
+defaults. The daemon socket default is resolved through the provider and sits
+below the file layer; direct Serde deserialization without `socket_path` falls
+back to the system path without reading the process environment. A non-Unicode
+`XDG_RUNTIME_DIR` is treated as absent, so the system socket is used.
+Configuration fails unless it can resolve either a non-empty
+`github_token_files` pool or a usable single token. A non-empty
+`github_token_files` pool takes precedence over the single-token settings;
+every listed file is checked at startup. Otherwise, `github_token_file` is read
+at startup and its trimmed contents take precedence over the configured token
+unless `--github-token` is supplied. Invalid TOML also results in a
+configuration error. The daemon binary passes the owned, resolved token pool to
+`daemon::run_with_tokens()` for client construction, so it does not read the
+token files again during startup.
 
 Logging verbosity is controlled by the `RUST_LOG` environment variable, not a
 daemon configuration field. Robust logging is non-negotiable for a background
