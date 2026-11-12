@@ -197,6 +197,12 @@ async fn run_with_writer<W: Write>(args: Args, writer: &mut W) -> Result<(), Cli
     render_reply(&args.command, response, unix_now(), writer)
 }
 
+/// Follow `hist` cursors until the snapshot is exhausted.
+///
+/// Each page is rendered as it arrives, so a reader sees older records before
+/// later pages finish. An empty snapshot still renders one page so the caller
+/// can print its "no history" message. A cursor that repeats would loop
+/// forever, so repetition is treated as an unexpected protocol response.
 async fn run_history_pages(
     candidates: &[PathBuf],
     limit: Option<usize>,
@@ -322,6 +328,10 @@ fn render_history_reply<W: Write>(
     render_history_entries(history, now, writer)
 }
 
+/// Render each history record in order, stopping at a closed output pipe.
+///
+/// Returns `false` when the writer stopped accepting output, letting the
+/// caller finish successfully rather than report a broken pipe as an error.
 fn render_history_entries<W: Write>(
     history: &[HistoryEntry],
     now: u64,
@@ -335,6 +345,10 @@ fn render_history_entries<W: Write>(
     Ok(true)
 }
 
+/// Current Unix time in seconds, or zero if the clock predates the epoch.
+///
+/// Zero keeps rendering deterministic on a misconfigured clock instead of
+/// panicking inside a display path.
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

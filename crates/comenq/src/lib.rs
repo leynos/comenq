@@ -76,6 +76,10 @@ pub enum RepoSlugParseError {
 impl FromStr for RepoSlug {
     type Err = RepoSlugParseError;
 
+    /// Parse `owner/repo`, trimming surrounding whitespace.
+    ///
+    /// Exactly one slash separates the segments; either segment may contain
+    /// any other character.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         let (owner, repo) = s.split_once('/').ok_or(RepoSlugParseError::MissingSlash)?;
@@ -287,18 +291,31 @@ impl Args {
         env: &dyn Env,
         os_env: &dyn OsEnv,
     ) -> Vec<PathBuf> {
-        if let Some(explicit) = &self.socket {
-            return vec![explicit.clone()];
-        }
-
-        os_env
-            .os_string("COMENQ_SOCKET")
-            .filter(|socket| !socket.is_empty())
-            .map(PathBuf::from)
-            .map_or_else(
-                || comenq_transport::socket_candidates_with_env(env),
-                |socket| vec![socket],
-            )
+        let (source, candidates) = if let Some(explicit) = &self.socket {
+            ("argument", vec![explicit.clone()])
+        } else {
+            os_env
+                .os_string("COMENQ_SOCKET")
+                .filter(|socket| !socket.is_empty())
+                .map_or_else(
+                    || {
+                        (
+                            "discovery",
+                            comenq_transport::socket_candidates_with_env(env),
+                        )
+                    },
+                    |socket| ("environment", vec![PathBuf::from(socket)]),
+                )
+        };
+        // Only the bounded decision is recorded. Socket paths come from the
+        // environment or arguments, so logging them would leak raw values.
+        tracing::debug!(
+            operation = "socket_candidates",
+            source,
+            candidate_count = candidates.len(),
+            "resolved client socket candidates"
+        );
+        candidates
     }
 }
 

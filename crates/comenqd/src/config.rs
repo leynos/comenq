@@ -139,22 +139,27 @@ fn system_socket_path() -> PathBuf {
     PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)
 }
 
+/// Serde fallback for [`Config::queue_path`].
 fn default_queue_path() -> PathBuf {
     PathBuf::from(DEFAULT_QUEUE_PATH)
 }
 
+/// Serde fallback for [`Config::cooldown_period_seconds`].
 fn default_cooldown() -> u64 {
     DEFAULT_COOLDOWN
 }
 
+/// Serde fallback for [`Config::cooldown_flutter_seconds`].
 fn default_cooldown_flutter() -> u64 {
     DEFAULT_COOLDOWN_FLUTTER
 }
 
+/// Serde fallback for [`Config::restart_min_delay_ms`].
 fn default_restart_min_delay_ms() -> u64 {
     DEFAULT_RESTART_MIN_DELAY_MS
 }
 
+/// Serde fallback for [`Config::github_api_timeout_secs`].
 fn default_github_api_timeout_secs() -> u64 {
     DEFAULT_GITHUB_API_TIMEOUT_SECS
 }
@@ -280,6 +285,13 @@ impl Config {
         vars: &dyn EnvVars,
     ) -> OrthoResult<(Self, Vec<NamedToken>)> {
         let file = ortho_config::load_config_file(path)?.ok_or_else(|| {
+            tracing::warn!(
+                operation = "config_load",
+                source = "file",
+                outcome = "error",
+                error_category = "missing",
+                "configuration file not found"
+            );
             Arc::new(ortho_config::OrthoError::File {
                 path: path.to_path_buf(),
                 source: Box::new(io::Error::new(
@@ -293,10 +305,28 @@ impl Config {
         let fig = Figment::from(socket_path_defaults(env))
             .merge(file)
             .merge(env_overrides(vars));
-        let mut cfg: Self = fig.extract().map_err(ortho_config::OrthoError::from)?;
+        let mut cfg: Self = match fig.extract() {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                tracing::warn!(
+                    operation = "config_load",
+                    source = "merged",
+                    outcome = "error",
+                    error_category = "invalid",
+                    "merged configuration rejected"
+                );
+                return Err(Arc::new(ortho_config::OrthoError::from(error)));
+            }
+        };
 
         Self::apply_cli_overrides(&mut cfg, cli);
         let tokens = cfg.resolve_github_token(cli.github_token.is_some(), env)?;
+        tracing::debug!(
+            operation = "config_load",
+            source = "merged",
+            outcome = "ok",
+            "daemon configuration loaded"
+        );
         Ok((cfg, tokens))
     }
 

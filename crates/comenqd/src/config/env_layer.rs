@@ -35,7 +35,22 @@ pub(super) const ENV_OVERRIDE_FIELDS: [&str; 9] = [
 /// file and environment layers. Serde's static fallback only applies to
 /// direct deserialization that bypasses the loader.
 pub(super) fn socket_path_defaults(env: &dyn Env) -> Serialized<Dict> {
-    let path = comenq_transport::default_socket_path_with_env(env);
+    let user_socket = comenq_transport::user_socket_path_with_env(env);
+    // Only the bounded outcome of the decision is recorded. The path itself
+    // is derived from the environment, so logging it would leak raw values.
+    tracing::debug!(
+        operation = "config_load",
+        source = "socket-path-default",
+        fallback_reason = if user_socket.is_some() {
+            "none"
+        } else {
+            "runtime-directory-unavailable"
+        },
+        outcome = "resolved",
+        "resolved the default daemon socket path"
+    );
+    let path = user_socket
+        .unwrap_or_else(|| std::path::PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH));
     let mut values = Dict::new();
     values.insert(
         "socket_path".to_owned(),
@@ -115,6 +130,15 @@ pub(super) fn env_overrides(vars: &dyn EnvVars) -> Serialized<Dict> {
             Some(((*field).to_owned(), parse_env_value(raw)))
         })
         .collect::<Dict>();
+    // Record how many documented overrides the environment supplied, never
+    // the names or values: a value may be a credential.
+    tracing::debug!(
+        operation = "config_load",
+        source = "environment",
+        overrides = values.len(),
+        outcome = if values.is_empty() { "none" } else { "applied" },
+        "resolved COMENQD_* overrides"
+    );
     Serialized::defaults(values)
 }
 
@@ -155,5 +179,90 @@ fn parse_env_value(raw: &str) -> Value {
     match raw.parse::<Value>() {
         Ok(value) => value,
         Err(never) => match never {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Property tests for case-insensitive override lookup.
+
+    use super::{ENV_OVERRIDE_FIELDS, EnvVars, env_overrides, lookup_override, parse_env_value};
+    use proptest::prelude::*;
+    use std::ffi::OsString;
+
+    /// Environment port over a fixed list of OS-string pairs.
+    struct FixedVars(Vec<(OsString, OsString)>);
+
+    impl EnvVars for FixedVars {
+        fn vars_os(&self) -> Vec<(OsString, OsString)> {
+            self.0.clone()
+        }
+    }
+
+    /// Apply the requested case flips to the ASCII letters of `name`.
+    ///
+    /// Non-letters are left alone, so a flip list longer than the name is
+    /// harmless. The result always matches `name` case-insensitively.
+    fn case_variant(name: &str, flips: &[bool]) -> String {
+        name.chars()
+            .enumerate()
+            .map(|(index, ch)| match flips.get(index).copied() {
+                Some(true) if ch.is_ascii_alphabetic() => {
+                    if ch.is_ascii_lowercase() {
+                        ch.to_ascii_uppercase()
+                    } else {
+                        ch.to_ascii_lowercase()
+                    }
+                }
+                _ => ch,
+            })
+            .collect()
+    }
+
+    proptest! {
+        /// Whatever casing the environment uses, and whatever order the entries
+        /// are enumerated in, the documented upper-case name wins.
+        ///
+        /// This is the invariant installations rely on when several casings of
+        /// one variable are exported: the result must not depend on hash or
+        /// enumeration order.
+        #[test]
+        fn upper_case_override_wins_for_every_case_variant_and_order(
+            field in prop::sample::select(ENV_OVERRIDE_FIELDS.to_vec()),
+            flips in prop::collection::vec(any::<bool>(), 1..32),
+            reverse in any::<bool>(),
+            variant_value in "[a-z0-9]{1,12}",
+            upper_value in "[A-Z0-9]{1,12}",
+        ) {
+            let upper_name = format!("COMENQD_{}", field.to_ascii_uppercase());
+            let variant = case_variant(&upper_name, &flips);
+            prop_assume!(variant != upper_name);
+            prop_assume!(variant_value != upper_value);
+
+            let mut available = vec![
+                (variant, variant_value),
+                (upper_name, upper_value.clone()),
+            ];
+            if reverse {
+                available.reverse();
+            }
+
+            prop_assert_eq!(
+                lookup_override(&available, field),
+                Some(upper_value.as_str())
+            );
+
+            let vars = FixedVars(
+                available
+                    .iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                    .collect(),
+            );
+            let overrides = env_overrides(&vars).value;
+            prop_assert_eq!(
+                overrides.get(field).cloned(),
+                Some(parse_env_value(&upper_value))
+            );
+        }
     }
 }

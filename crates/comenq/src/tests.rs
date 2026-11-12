@@ -4,6 +4,12 @@ use super::{Args, Command, RepoSlug, RepoSlugParseError};
 use clap::{CommandFactory, Parser};
 use comenq_lib::protocol::Request;
 use rstest::rstest;
+#[cfg(unix)]
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 use test_support::mock_env;
 
@@ -218,9 +224,6 @@ fn empty_socket_env_var_uses_discovery() {
 #[cfg(unix)]
 #[test]
 fn non_unicode_socket_env_var_remains_the_sole_candidate() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt as _;
-
     use crate::os_env::OsEnv;
 
     struct FixedOsEnv(Option<OsString>);
@@ -238,6 +241,87 @@ fn non_unicode_socket_env_var_remains_the_sole_candidate() {
 
     assert_eq!(
         args.socket_candidates_with_os_env(&env, &os_env),
+        vec![socket]
+    );
+}
+
+/// Build a provider whose Unicode and OS-string views disagree.
+///
+/// `unicode` is what [`mockable::Env::string`] reports; `os_strings` is what
+/// [`mockable::Env::os_string`] reports. A key present only in `unicode`
+/// models a value a Unicode-only provider can see, while a key absent from
+/// `os_strings` models a variable whose raw bytes that provider cannot
+/// represent and therefore reports as unset. Keeping the two views separate
+/// lets a test state exactly which port a decision must consult.
+#[cfg(unix)]
+fn split_env(
+    unicode: impl IntoIterator<Item = (&'static str, &'static str)>,
+    os_strings: impl IntoIterator<Item = (&'static str, OsString)>,
+) -> mockable::MockEnv {
+    let unicode = unicode
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect::<HashMap<_, _>>();
+    let os_strings = os_strings
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect::<HashMap<_, _>>();
+
+    let mut env = mockable::MockEnv::new();
+    env.expect_string()
+        .returning(move |key| unicode.get(key).cloned())
+        .times(..);
+    env.expect_os_string()
+        .returning(move |key| os_strings.get(key).cloned())
+        .times(..);
+    env
+}
+
+/// A non-Unicode `XDG_RUNTIME_DIR` is absent from the OS-string view, so the
+/// transport falls back to the system socket.
+///
+/// The Unicode view deliberately reports a usable directory: the test fails if
+/// discovery reads that lossy view instead of the OS-string one, which is what
+/// a provider backed by `std::env::var_os` presents for raw bytes.
+#[cfg(unix)]
+#[test]
+fn non_unicode_runtime_dir_falls_back_to_the_system_socket() {
+    use crate::os_env::EnvOsString;
+
+    let env = split_env([("XDG_RUNTIME_DIR", "/run/user/1000")], []);
+    let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
+
+    assert_eq!(
+        args.socket_candidates_with_os_env(&env, &EnvOsString::new(&env)),
+        vec![PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)]
+    );
+}
+
+/// The OS-string port decides `COMENQ_SOCKET`, not the Unicode view.
+///
+/// The two views disagree: the Unicode value names a different, valid socket.
+/// Honouring the Unicode value would connect to the wrong daemon while the
+/// real, non-Unicode override is silently discarded.
+#[cfg(unix)]
+#[test]
+fn non_unicode_socket_override_beats_the_unicode_view() {
+    use crate::os_env::EnvOsString;
+
+    let socket = PathBuf::from(OsString::from_vec(b"/tmp/comenq-\xff.sock".to_vec()));
+    let env = split_env(
+        [
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("COMENQ_SOCKET", "/tmp/decoy.sock"),
+        ],
+        [
+            ("XDG_RUNTIME_DIR", OsString::from("/run/user/1000")),
+            ("COMENQ_SOCKET", socket.clone().into_os_string()),
+        ],
+    );
+    let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
+
+    assert_eq!(
+        args.socket_candidates_with_os_env(&env, &EnvOsString::new(&env)),
         vec![socket]
     );
 }
