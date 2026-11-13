@@ -3,8 +3,14 @@
 use super::super::{run_with_env, run_with_writer};
 use crate::{Args, Command};
 use comenq_lib::protocol::{HistoryEntry, Request, Response};
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 use tempfile::tempdir;
 use test_support::mock_env;
+#[cfg(unix)]
+use test_support::split_env;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
@@ -94,6 +100,47 @@ async fn run_with_env_sends_a_hist_request() {
             cursor: None,
         }
     );
+}
+
+/// A non-Unicode `COMENQ_SOCKET` must select that exact socket when the
+/// command runs, even though the Unicode view reports a decoy path.
+///
+/// The daemon receives a `list` request, proving the client connected to the
+/// injected runtime socket rather than to a discovered or decoy one.
+#[cfg(unix)]
+#[tokio::test]
+async fn run_with_env_connects_to_a_non_unicode_socket_override() {
+    let dir = tempdir().expect("temp dir");
+    let socket = dir
+        .path()
+        .join(OsString::from_vec(b"comenq-\xff.sock".to_vec()));
+    let listener = UnixListener::bind(&socket).expect("bind socket");
+    let accept = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await.expect("read request");
+        let request = serde_json::from_slice::<Request>(&bytes).expect("decode request");
+        stream
+            .write_all(&serde_json::to_vec(&Response::entries(Vec::new())).expect("encode reply"))
+            .await
+            .expect("write reply");
+        request
+    });
+
+    let env = split_env(
+        [("COMENQ_SOCKET", "/tmp/decoy.sock")],
+        [("COMENQ_SOCKET", socket.into_os_string())],
+    );
+    let args = Args {
+        socket: None,
+        command: Command::List,
+    };
+
+    run_with_env(args, &env)
+        .await
+        .expect("list request succeeds");
+
+    assert_eq!(accept.await.expect("join daemon"), Request::List);
 }
 
 #[tokio::test]

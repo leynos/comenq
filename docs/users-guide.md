@@ -126,7 +126,9 @@ used. The daemon matches `COMENQD_*` configuration overrides without regard to
 case, as in earlier releases; the documented spellings are the upper-case
 names. The client looks up `COMENQ_SOCKET` and `XDG_RUNTIME_DIR` by their exact
 names, so a lower-case `comenq_socket` is ignored. `COMENQ_SOCKET` may name a
-path that is not valid UTF-8.
+path that is not valid UTF-8. It is read when the command runs and is not bound
+by the argument parser, so `--help` lists it only in the `--socket` description
+and never as an environment fallback.
 
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
 instead. Otherwise, use the queue-management subcommands:
@@ -313,5 +315,6 @@ the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
 [Comenq design](comenq-design.md). For an existing deployment, see the
-migration guides for [0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md),
-and [0.3.0](migration-0.3.0.md).
+migration guides for
+[0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md), [0.3.0](migration-0.3.0.md),
+and [0.4.0](migration-0.4.0.md).

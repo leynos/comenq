@@ -9,7 +9,7 @@ pub use workflow::uses_shared_release_actions;
 
 // Re-exports from daemon module (added in main)
 pub use daemon::{TestConfig, octocrab_for, octocrab_with_token, temp_config};
-pub use env::mock_env;
+pub use env::{mock_env, split_env};
 
 // Re-exports from util module with documentation (from your branch)
 /// Maximum number of times to poll for an expected file.

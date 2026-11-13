@@ -57,6 +57,53 @@ where
     env
 }
 
+/// Build an independent [`MockEnv`] whose Unicode and OS-string views differ.
+///
+/// `unicode` is what [`mockable::Env::string`] reports; `os_strings` is what
+/// [`mockable::Env::os_string`] reports. A key present only in `unicode`
+/// models a value a Unicode-only provider can see, while a key absent from
+/// `os_strings` models a variable whose raw bytes that provider cannot
+/// represent and therefore reports as unset. Keeping the two views separate
+/// lets a test state exactly which port a decision must consult.
+///
+/// # Examples
+///
+/// ```rust
+/// use mockable::Env as _;
+/// use std::ffi::OsString;
+/// use test_support::split_env;
+///
+/// let env = split_env(
+///     [("COMENQ_SOCKET", "/tmp/decoy.sock")],
+///     Vec::<(&str, OsString)>::new(),
+/// );
+/// assert_eq!(env.string("COMENQ_SOCKET").as_deref(), Some("/tmp/decoy.sock"));
+/// assert_eq!(env.os_string("COMENQ_SOCKET"), None);
+/// ```
+#[must_use]
+pub fn split_env(
+    unicode: impl IntoIterator<Item = (&'static str, &'static str)>,
+    os_strings: impl IntoIterator<Item = (&'static str, OsString)>,
+) -> MockEnv {
+    let unicode = unicode
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect::<HashMap<_, _>>();
+    let os_strings = os_strings
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect::<HashMap<_, _>>();
+
+    let mut env = MockEnv::new();
+    env.expect_string()
+        .returning(move |key| unicode.get(key).cloned())
+        .times(..);
+    env.expect_os_string()
+        .returning(move |key| os_strings.get(key).cloned())
+        .times(..);
+    env
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the mock environment helper.

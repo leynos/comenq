@@ -5,13 +5,13 @@ use clap::{CommandFactory, Parser};
 use comenq_lib::protocol::Request;
 use rstest::rstest;
 #[cfg(unix)]
-use std::collections::HashMap;
-#[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 use test_support::mock_env;
+#[cfg(unix)]
+use test_support::split_env;
 
 #[rstest]
 #[case("octocat/hello-world", 1, "Hi")]
@@ -245,38 +245,6 @@ fn non_unicode_socket_env_var_remains_the_sole_candidate() {
     );
 }
 
-/// Build a provider whose Unicode and OS-string views disagree.
-///
-/// `unicode` is what [`mockable::Env::string`] reports; `os_strings` is what
-/// [`mockable::Env::os_string`] reports. A key present only in `unicode`
-/// models a value a Unicode-only provider can see, while a key absent from
-/// `os_strings` models a variable whose raw bytes that provider cannot
-/// represent and therefore reports as unset. Keeping the two views separate
-/// lets a test state exactly which port a decision must consult.
-#[cfg(unix)]
-fn split_env(
-    unicode: impl IntoIterator<Item = (&'static str, &'static str)>,
-    os_strings: impl IntoIterator<Item = (&'static str, OsString)>,
-) -> mockable::MockEnv {
-    let unicode = unicode
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect::<HashMap<_, _>>();
-    let os_strings = os_strings
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value))
-        .collect::<HashMap<_, _>>();
-
-    let mut env = mockable::MockEnv::new();
-    env.expect_string()
-        .returning(move |key| unicode.get(key).cloned())
-        .times(..);
-    env.expect_os_string()
-        .returning(move |key| os_strings.get(key).cloned())
-        .times(..);
-    env
-}
-
 /// A non-Unicode `XDG_RUNTIME_DIR` is absent from the OS-string view, so the
 /// transport falls back to the system socket.
 ///
@@ -305,8 +273,6 @@ fn non_unicode_runtime_dir_falls_back_to_the_system_socket() {
 #[cfg(unix)]
 #[test]
 fn non_unicode_socket_override_beats_the_unicode_view() {
-    use crate::os_env::EnvOsString;
-
     let socket = PathBuf::from(OsString::from_vec(b"/tmp/comenq-\xff.sock".to_vec()));
     let env = split_env(
         [
@@ -320,9 +286,25 @@ fn non_unicode_socket_override_beats_the_unicode_view() {
     );
     let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
 
+    assert_eq!(args.socket_candidates_with_env(&env), vec![socket]);
+}
+
+/// An empty override is not an override, whichever view reports it.
+///
+/// Both views agree that the variable is present but empty, so discovery must
+/// supply the candidates rather than a path built from an empty string.
+#[cfg(unix)]
+#[test]
+fn empty_socket_override_falls_back_to_discovery() {
+    let env = split_env(
+        [("COMENQ_SOCKET", "")],
+        [("COMENQ_SOCKET", OsString::new())],
+    );
+    let args = Args::try_parse_from(["comenq", "list"]).expect("valid arguments should parse");
+
     assert_eq!(
-        args.socket_candidates_with_os_env(&env, &EnvOsString::new(&env)),
-        vec![socket]
+        args.socket_candidates_with_env(&env),
+        vec![PathBuf::from(comenq_transport::DEFAULT_SOCKET_PATH)]
     );
 }
 
