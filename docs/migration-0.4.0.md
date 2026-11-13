@@ -27,7 +27,7 @@ case. When an installation exports several casings of one name, the documented
 upper-case spelling supplies the value, so the result no longer depends on
 enumeration order. Precedence remains command-line flag > environment >
 configuration file > built-in default. The [users' guide](users-guide.md) lists
-the recognised variables.
+the recognized variables.
 
 ## Library entry points
 
