@@ -55,7 +55,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Rust
-        uses: leynos/shared-actions/.github/actions/setup-rust@0eabb6bc07148981de5da395e30cd78d83f5c7c2
+        uses: leynos/shared-actions/.github/actions/setup-rust@c444bcb1180d5a9e7cc01db2c81e108fd50f26f7
         with:
           install-mold: 'true'
       - name: Install nextest
@@ -69,7 +69,7 @@ jobs:
           # linker. Assigning RUSTFLAGS displaces every `rustflags` table in
           # .cargo/config.toml.
           RUSTFLAGS: -D warnings
-        uses: leynos/shared-actions/.github/actions/generate-coverage@0eabb6bc07148981de5da395e30cd78d83f5c7c2
+        uses: leynos/shared-actions/.github/actions/generate-coverage@c444bcb1180d5a9e7cc01db2c81e108fd50f26f7
         with:
           output-path: lcov.info
           format: lcov
@@ -82,7 +82,7 @@ jobs:
           baseline-rust-file: .coverage-baseline-v2.rust
       - name: Upload coverage data to CodeScene
         if: github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@0eabb6bc07148981de5da395e30cd78d83f5c7c2
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c444bcb1180d5a9e7cc01db2c81e108fd50f26f7
         with:
           path: lcov.info
           format: lcov
