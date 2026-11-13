@@ -88,7 +88,7 @@ exist for `--config`, `--github-token`, `--github-token-file`, `--socket-path`,
 `--queue-path`, `--cooldown-period-seconds`, and `--github-api-timeout-secs`;
 every other setting is file- or environment-only.
 
-These nine variables are recognised:
+These nine variables are recognized:
 
 | Variable                           | Configuration key          | Default                                                                      |
 | ---------------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
