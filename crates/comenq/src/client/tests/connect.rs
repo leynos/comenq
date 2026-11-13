@@ -39,6 +39,20 @@ async fn connect_first_reports_failure_when_all_candidates_fail() {
     assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
 }
 
+/// An empty candidate list must surface as a connection error rather than
+/// panicking while formatting the missing last error.
+#[tokio::test]
+async fn connect_first_without_candidates_reports_not_found() {
+    let err = connect_first(&[])
+        .await
+        .expect_err("no candidates should fail");
+
+    let ClientError::Connect(source) = err else {
+        panic!("expected connection error, got {err:?}");
+    };
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+}
+
 /// Public execution can be spawned without retaining a non-Send stdout guard.
 #[test]
 fn public_run_future_is_send() {

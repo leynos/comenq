@@ -20,10 +20,9 @@
 //! Every other tier — defaults, file, environment — is pinned in
 //! `crates/comenqd/tests/config_environment.rs`, which runs the loader in a
 //! child process whose environment is cleared and rebuilt, and is therefore
-//! immune to both cases above. Figment's `Env` provider reads
-//! `std::env::vars_os()` directly and offers no injection seam, so in-process
-//! assertions below the command-line tier cannot be made deterministic without
-//! the process-environment mutation issue #237 §5 forbids.
+//! immune to both cases above. These in-process tests inject an empty
+//! environment through [`test_support::mock_env`], so a stray `COMENQD_*`
+//! variable in the developer's shell cannot influence them either.
 
 use super::super::{CliArgs, Config};
 use clap::Parser as _;
@@ -31,6 +30,7 @@ use rstest::rstest;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
+use test_support::mock_env;
 
 /// Base configuration used by the tier tests.
 const BASE_CONFIG: &str = "github_token='file-token'";
@@ -72,7 +72,6 @@ struct TierCase {
     cli_value: "/run/comenq/comenq.sock",
     expected: "/run/comenq/comenq.sock",
 })]
-#[serial_test::serial]
 fn socket_path_resolves_to_the_highest_present_tier(#[case] case: TierCase) {
     let dir = tempdir().expect("create tempdir");
     let path = write_config(
@@ -82,13 +81,13 @@ fn socket_path_resolves_to_the_highest_present_tier(#[case] case: TierCase) {
     let path_str = path.to_str().expect("temp path is UTF-8");
     let args = cli(&["--config", path_str, "--socket-path", case.cli_value]);
 
-    let cfg = Config::from_file_with_cli(&args.config, &args).expect("load config");
+    let cfg = Config::from_file_with_cli(&args.config, &args, &mock_env([] as [(&str, &str); 0]))
+        .expect("load config");
 
     assert_eq!(cfg.socket_path, PathBuf::from(case.expected));
 }
 
 #[rstest]
-#[serial_test::serial]
 fn command_line_cooldown_equal_to_the_default_still_wins() {
     // The v0.10.0 §2 defect suppressed a command-line value that merely
     // restated the clap default, letting a lower tier win. This repository
@@ -103,13 +102,13 @@ fn command_line_cooldown_equal_to_the_default_still_wins() {
         "960",
     ]);
 
-    let cfg = Config::from_file_with_cli(&args.config, &args).expect("load config");
+    let cfg = Config::from_file_with_cli(&args.config, &args, &mock_env([] as [(&str, &str); 0]))
+        .expect("load config");
 
     assert_eq!(cfg.cooldown_period_seconds, 960);
 }
 
 #[rstest]
-#[serial_test::serial]
 fn command_line_scalar_values_parse_into_their_fields() {
     // Parsing of a command-line scalar into its field type, pinned separately
     // from the precedence claim above.
@@ -124,14 +123,14 @@ fn command_line_scalar_values_parse_into_their_fields() {
         "99",
     ]);
 
-    let cfg = Config::from_file_with_cli(&args.config, &args).expect("load config");
+    let cfg = Config::from_file_with_cli(&args.config, &args, &mock_env([] as [(&str, &str); 0]))
+        .expect("load config");
 
     assert_eq!(cfg.cooldown_period_seconds, 420);
     assert_eq!(cfg.github_api_timeout_secs, 99);
 }
 
 #[rstest]
-#[serial_test::serial]
 fn command_line_comma_separated_token_file_is_not_split_into_a_pool() {
     // `--github-token-file` sets a single path and clears the pool, and a
     // comma is part of that path rather than a separator. The fixture file is
@@ -149,7 +148,8 @@ fn command_line_comma_separated_token_file_is_not_split_into_a_pool() {
         comma_named.to_str().expect("token path is UTF-8"),
     ]);
 
-    let cfg = Config::from_file_with_cli(&args.config, &args).expect("load config");
+    let cfg = Config::from_file_with_cli(&args.config, &args, &mock_env([] as [(&str, &str); 0]))
+        .expect("load config");
 
     assert_eq!(cfg.github_token_file, Some(comma_named));
     assert!(

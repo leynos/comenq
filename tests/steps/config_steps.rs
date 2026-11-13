@@ -2,20 +2,20 @@
 
 use anyhow::Context as _;
 use cucumber::{World, given, then, when};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 use comenqd::config::Config;
-use test_support::EnvVarGuard;
+use test_support::mock_env;
 
 #[derive(Debug, Default, World)]
 pub struct ConfigWorld {
     dir: Option<TempDir>,
     path: Option<PathBuf>,
     result: Option<ortho_config::OrthoResult<Config>>,
-    env_guard: Option<EnvVarGuard>,
-    socket_guard: Option<EnvVarGuard>,
+    env_values: HashMap<String, String>,
 }
 
 /// Create a tempdir containing a `config.toml` with `content`.
@@ -35,7 +35,6 @@ fn config_file_with_token(world: &mut ConfigWorld, token: String) -> anyhow::Res
     let (dir, path) = write_temp_config(&format!("github_token='{token}'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
-    world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
     Ok(())
 }
 
@@ -64,7 +63,6 @@ fn config_without_socket(world: &mut ConfigWorld, token: String) -> anyhow::Resu
     let (dir, path) = write_temp_config(&format!("github_token='{token}'\nqueue_path='/tmp/q'"))?;
     world.dir = Some(dir);
     world.path = Some(path);
-    world.socket_guard = Some(EnvVarGuard::remove("COMENQD_SOCKET_PATH"));
     Ok(())
 }
 
@@ -106,13 +104,9 @@ fn missing_configuration_file(world: &mut ConfigWorld) {
     world.path = Some(PathBuf::from("/nonexistent/nowhere.toml"));
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "cucumber requires owned values"
-)]
 #[given(regex = r#"^environment variable \"(.+)\" is \"(.+)\"$"#)]
 fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
-    world.env_guard = Some(EnvVarGuard::set(&key, &value));
+    world.env_values.insert(key, value);
 }
 
 #[given(regex = r#"^environment variable \"(.+)\" is unset$"#)]
@@ -121,13 +115,14 @@ fn set_env_var(world: &mut ConfigWorld, key: String, value: String) {
     reason = "cucumber requires owned values"
 )]
 fn unset_env_var(world: &mut ConfigWorld, key: String) {
-    world.env_guard = Some(EnvVarGuard::remove(&key));
+    world.env_values.remove(&key);
 }
 
 #[when("the config is loaded")]
 fn load_config(world: &mut ConfigWorld) -> anyhow::Result<()> {
     let path = world.path.as_ref().context("path set")?;
-    world.result = Some(Config::from_file(path));
+    let env = mock_env(&world.env_values);
+    world.result = Some(Config::from_file_with_env(path, &env));
     Ok(())
 }
 
@@ -164,16 +159,5 @@ fn cooldown_period_seconds_is(world: &mut ConfigWorld, expected: u64) {
     match world.result.take() {
         Some(Ok(cfg)) => assert_eq!(cfg.cooldown_period_seconds, expected),
         other => panic!("expected success, got {other:?}"),
-    }
-}
-
-impl Drop for ConfigWorld {
-    fn drop(&mut self) {
-        if let Some(_guard) = self.env_guard.take() {
-            // dropping the guard restores the previous state
-        }
-        if let Some(_guard) = self.socket_guard.take() {
-            // dropping the guard restores the previous state
-        }
     }
 }

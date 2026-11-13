@@ -3,6 +3,7 @@
 use super::single_token::{expand_env_prefix, read_github_token_file};
 use super::tokens;
 use super::{Config, NamedToken};
+use mockable::{DefaultEnv, Env};
 use ortho_config::OrthoResult;
 use std::io;
 use std::sync::Arc;
@@ -10,10 +11,11 @@ use std::sync::Arc;
 impl Config {
     /// Resolve the effective GitHub token, reading `github_token_file` when
     /// set and validating that a non-empty token is available.
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, env))]
     pub(super) fn resolve_github_token(
         &mut self,
         has_cli_token: bool,
+        env: &dyn Env,
     ) -> OrthoResult<Vec<NamedToken>> {
         if has_cli_token {
             // An explicit command-line token is the strongest credential
@@ -23,10 +25,10 @@ impl Config {
             tracing::debug!(credential_source = "cli", "Using GitHub credential");
         } else if !self.github_token_files.is_empty() {
             return self
-                .github_tokens()
+                .github_tokens_with_env(env)
                 .map_err(|error| validation("github_token_files", error.to_string()));
         } else if let Some(file) = &self.github_token_file {
-            let path = expand_env_prefix(file)?;
+            let path = expand_env_prefix(file, env)?;
             tracing::debug!(
                 credential_source = "file",
                 path = %path.display(),
@@ -53,11 +55,11 @@ impl Config {
                 "provide github_token, github_token_file, or github_token_files".to_owned(),
             ));
         }
-        self.github_tokens()
+        self.github_tokens_with_env(env)
             .map_err(|error| validation("github_token", error.to_string()))
     }
 
-    /// Resolve the ordered rotation pool, falling back to the single token.
+    /// Resolve the ordered rotation pool from the ambient environment.
     ///
     /// Each configured token file is read and validated at startup. With no
     /// token files, the existing inline or single-file token is a pool of one.
@@ -71,13 +73,22 @@ impl Config {
     /// assert!(!tokens.is_empty());
     /// ```
     pub fn github_tokens(&self) -> io::Result<Vec<NamedToken>> {
+        self.github_tokens_with_env(&DefaultEnv)
+    }
+
+    /// Resolve the ordered rotation pool using environment values from `env`.
+    ///
+    /// This is the injectable form of [`Config::github_tokens`]; callers that
+    /// already hold an environment provider should use it to keep token-path
+    /// expansion independent of process-wide state.
+    pub fn github_tokens_with_env(&self, env: &dyn Env) -> io::Result<Vec<NamedToken>> {
         if self.github_token_files.is_empty() && self.github_token.trim().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "GitHub token is empty",
             ));
         }
-        tokens::resolve_pool(&self.github_token_files, &self.github_token)
+        tokens::resolve_pool(&self.github_token_files, &self.github_token, env)
     }
 }
 

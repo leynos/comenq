@@ -5,10 +5,9 @@ use clap::Parser as _;
 use rstest::rstest;
 use std::fs;
 use tempfile::tempdir;
-use test_support::EnvVarGuard;
+use test_support::mock_env;
 
 #[rstest]
-#[serial_test::serial]
 fn cli_token_overrides_token_file() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -30,13 +29,13 @@ fn cli_token_overrides_token_file() {
     ])
     .expect("parse daemon CLI token options");
 
-    let cfg = Config::from_file_with_cli(&path, &cli).expect("load config");
+    let cfg = Config::from_file_with_cli(&path, &cli, &mock_env([] as [(&str, &str); 0]))
+        .expect("load config");
 
     assert_eq!(cfg.github_token, "cli-token");
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_file_overrides_inline_token() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -50,12 +49,12 @@ fn token_file_overrides_inline_token() {
         ),
     )
     .expect("write config fixture");
-    let cfg = Config::from_file(&path).expect("load config");
+    let cfg =
+        Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).expect("load config");
     assert_eq!(cfg.github_token, "s3cret");
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_file_alone_suffices() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -66,12 +65,12 @@ fn token_file_alone_suffices() {
         format!("github_token_file='{}'", token_path.display()),
     )
     .expect("write config fixture");
-    let cfg = Config::from_file(&path).expect("load config");
+    let cfg =
+        Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).expect("load config");
     assert_eq!(cfg.github_token, "s3cret");
 }
 
 #[rstest]
-#[serial_test::serial]
 fn empty_token_file_errors() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -85,11 +84,10 @@ fn empty_token_file_errors() {
         ),
     )
     .expect("write config fixture");
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn oversized_token_file_errors() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -105,11 +103,10 @@ fn oversized_token_file_errors() {
     )
     .expect("write config fixture");
 
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_file_expands_credentials_directory() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("token");
@@ -117,16 +114,15 @@ fn token_file_expands_credentials_directory() {
     let path = dir.path().join("config.toml");
     fs::write(&path, "github_token_file='${CREDENTIALS_DIRECTORY}/token'")
         .expect("write config fixture");
-    let _guard = EnvVarGuard::set(
+    let env = mock_env([(
         "CREDENTIALS_DIRECTORY",
         dir.path().to_str().expect("tempdir path is UTF-8"),
-    );
-    let cfg = Config::from_file(&path).expect("load config");
+    )]);
+    let cfg = Config::from_file_with_env(&path, &env).expect("load config");
     assert_eq!(cfg.github_token, "cred-token");
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_file_with_unset_placeholder_errors() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -138,12 +134,10 @@ fn token_file_with_unset_placeholder_errors() {
         ),
     )
     .expect("write config fixture");
-    let _guard = EnvVarGuard::remove("COMENQD_TEST_UNSET_VARIABLE");
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn missing_token_file_with_inline_token_errors() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -153,5 +147,5 @@ fn missing_token_file_with_inline_token_errors() {
     )
     .expect("write config fixture");
 
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }

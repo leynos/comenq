@@ -4,11 +4,35 @@ use super::super::{CliArgs, Config, MAX_GITHUB_TOKEN_FILE_BYTES};
 use clap::Parser as _;
 use rstest::rstest;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
-use test_support::EnvVarGuard;
+use test_support::mock_env;
+
+/// A configuration with neither an inline token nor a token file cannot
+/// produce a pool, and must report the failure without consulting the
+/// process environment.
+#[test]
+fn github_tokens_with_env_rejects_an_empty_pool() {
+    let config = Config {
+        github_token: String::new(),
+        github_token_file: None,
+        github_token_files: Vec::new(),
+        socket_path: PathBuf::from("/tmp/socket"),
+        queue_path: PathBuf::from("/tmp/queue"),
+        cooldown_period_seconds: 0,
+        cooldown_flutter_seconds: 0,
+        restart_min_delay_ms: 0,
+        github_api_timeout_secs: 0,
+    };
+
+    let error = config
+        .github_tokens_with_env(&mock_env([] as [(&str, &str); 0]))
+        .expect_err("an empty token pool must be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
 
 #[rstest]
-#[serial_test::serial]
 fn token_files_form_the_rotation_pool() {
     let dir = tempdir().expect("create tempdir");
     let first = dir.path().join("pandalump-token");
@@ -25,7 +49,8 @@ fn token_files_form_the_rotation_pool() {
         ),
     )
     .expect("write config fixture");
-    let cfg = Config::from_file(&path).expect("load config");
+    let cfg =
+        Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).expect("load config");
     let tokens = cfg.github_tokens().expect("resolve tokens");
     let summary: Vec<(&str, &str)> = tokens
         .iter()
@@ -41,7 +66,6 @@ fn token_files_form_the_rotation_pool() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens() {
     let dir = tempdir().expect("create tempdir");
     let first = dir.path().join("first-token");
@@ -49,9 +73,12 @@ fn token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens() {
     fs::write(&first, "shared-secret\n").expect("write first token");
     fs::write(&second, "  shared-secret \n").expect("write second token");
 
-    let error =
-        super::super::tokens::resolve_pool(&[first.clone(), second.clone()], "inline-token")
-            .expect_err("duplicate trimmed tokens must be rejected");
+    let error = super::super::tokens::resolve_pool(
+        &[first.clone(), second.clone()],
+        "inline-token",
+        &mock_env([] as [(&str, &str); 0]),
+    )
+    .expect_err("duplicate trimmed tokens must be rejected");
 
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(error.to_string().contains(&first.display().to_string()));
@@ -60,7 +87,6 @@ fn token_pool_rejects_duplicate_trimmed_values_without_disclosing_tokens() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_takes_precedence_over_single_token_sources() {
     let dir = tempdir().expect("create tempdir");
     let pool_token = dir.path().join("pool-token");
@@ -75,8 +101,12 @@ fn token_pool_takes_precedence_over_single_token_sources() {
     )
     .expect("write config fixture");
 
-    let (cfg, tokens) = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default())
-        .expect("pool should override single-token sources");
+    let (cfg, tokens) = Config::from_file_with_cli_and_tokens(
+        &path,
+        &CliArgs::default(),
+        &mock_env([] as [(&str, &str); 0]),
+    )
+    .expect("pool should override single-token sources");
 
     assert_eq!(cfg.github_token, "inline-token");
     assert_eq!(tokens.len(), 1);
@@ -84,7 +114,6 @@ fn token_pool_takes_precedence_over_single_token_sources() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn cli_token_overrides_an_invalid_configured_pool() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -98,8 +127,9 @@ fn cli_token_overrides_an_invalid_configured_pool() {
     ])
     .expect("parse CLI token");
 
-    let (cfg, tokens) = Config::from_file_with_cli_and_tokens(&path, &cli)
-        .expect("CLI token should clear the pool");
+    let (cfg, tokens) =
+        Config::from_file_with_cli_and_tokens(&path, &cli, &mock_env([] as [(&str, &str); 0]))
+            .expect("CLI token should clear the pool");
 
     assert!(cfg.github_token_files.is_empty());
     assert_eq!(tokens.len(), 1);
@@ -108,7 +138,6 @@ fn cli_token_overrides_an_invalid_configured_pool() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn cli_token_file_overrides_a_configured_pool() {
     let dir = tempdir().expect("create tempdir");
     let cli_token = dir.path().join("cli-token");
@@ -124,8 +153,9 @@ fn cli_token_file_overrides_a_configured_pool() {
     ])
     .expect("parse CLI token-file override");
 
-    let (cfg, tokens) = Config::from_file_with_cli_and_tokens(&path, &cli)
-        .expect("CLI token file should clear the pool");
+    let (cfg, tokens) =
+        Config::from_file_with_cli_and_tokens(&path, &cli, &mock_env([] as [(&str, &str); 0]))
+            .expect("CLI token file should clear the pool");
 
     assert!(cfg.github_token_files.is_empty());
     assert_eq!(cfg.github_token, "cli-file-token");
@@ -133,7 +163,6 @@ fn cli_token_file_overrides_a_configured_pool() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_expands_a_leading_environment_placeholder() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("pool-token");
@@ -144,19 +173,18 @@ fn token_pool_expands_a_leading_environment_placeholder() {
         "github_token_files=['${COMENQD_TOKEN_POOL_DIR}/pool-token']",
     )
     .expect("write config fixture");
-    let _guard = EnvVarGuard::set(
+    let env = mock_env([(
         "COMENQD_TOKEN_POOL_DIR",
         dir.path().to_str().expect("tempdir path is UTF-8"),
-    );
+    )]);
 
-    let (_, tokens) = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default())
+    let (_, tokens) = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default(), &env)
         .expect("resolve token pool path");
 
     assert_eq!(tokens[0].token, "expanded-token");
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_rejects_an_unset_environment_placeholder() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -165,13 +193,11 @@ fn token_pool_rejects_an_unset_environment_placeholder() {
         "github_token_files=['${COMENQD_MISSING_TOKEN_POOL_DIR}/pool-token']",
     )
     .expect("write config fixture");
-    let _guard = EnvVarGuard::remove("COMENQD_MISSING_TOKEN_POOL_DIR");
 
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_rejects_an_unterminated_environment_placeholder() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -181,8 +207,12 @@ fn token_pool_rejects_an_unterminated_environment_placeholder() {
     )
     .expect("write config fixture");
 
-    let error = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default())
-        .expect_err("an unterminated placeholder must fail config resolution");
+    let error = Config::from_file_with_cli_and_tokens(
+        &path,
+        &CliArgs::default(),
+        &mock_env([] as [(&str, &str); 0]),
+    )
+    .expect_err("an unterminated placeholder must fail config resolution");
 
     assert!(
         error
@@ -192,7 +222,6 @@ fn token_pool_rejects_an_unterminated_environment_placeholder() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_pool_rejects_an_oversized_file() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("pool-token");
@@ -205,11 +234,10 @@ fn token_pool_rejects_an_oversized_file() {
     )
     .expect("write config fixture");
 
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn loaded_token_pool_is_owned_and_does_not_follow_later_file_changes() {
     let dir = tempdir().expect("create tempdir");
     let token_path = dir.path().join("pool-token");
@@ -221,8 +249,12 @@ fn loaded_token_pool_is_owned_and_does_not_follow_later_file_changes() {
     )
     .expect("write config fixture");
 
-    let (config, tokens) = Config::from_file_with_cli_and_tokens(&path, &CliArgs::default())
-        .expect("load config and token pool together");
+    let (config, tokens) = Config::from_file_with_cli_and_tokens(
+        &path,
+        &CliArgs::default(),
+        &mock_env([] as [(&str, &str); 0]),
+    )
+    .expect("load config and token pool together");
     fs::write(&token_path, "changed-token").expect("replace pool token after loading");
 
     assert_eq!(tokens[0].token, "startup-token");
@@ -233,7 +265,6 @@ fn loaded_token_pool_is_owned_and_does_not_follow_later_file_changes() {
 }
 
 #[rstest]
-#[serial_test::serial]
 fn token_files_suffice_without_an_inline_token() {
     let dir = tempdir().expect("create tempdir");
     let file = dir.path().join("only-token");
@@ -241,12 +272,12 @@ fn token_files_suffice_without_an_inline_token() {
     let path = dir.path().join("config.toml");
     fs::write(&path, format!("github_token_files=['{}']", file.display()))
         .expect("write config fixture");
-    let cfg = Config::from_file(&path).expect("token files alone should satisfy validation");
+    let cfg = Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0]))
+        .expect("token files alone should satisfy validation");
     assert!(cfg.github_token.is_empty());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn empty_rotation_token_file_errors() {
     let dir = tempdir().expect("create tempdir");
     let file = dir.path().join("empty-token");
@@ -254,11 +285,10 @@ fn empty_rotation_token_file_errors() {
     let path = dir.path().join("config.toml");
     fs::write(&path, format!("github_token_files=['{}']", file.display()))
         .expect("write config fixture");
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn missing_rotation_token_file_errors() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
@@ -270,16 +300,16 @@ fn missing_rotation_token_file_errors() {
         ),
     )
     .expect("write config fixture");
-    assert!(Config::from_file(&path).is_err());
+    assert!(Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).is_err());
 }
 
 #[rstest]
-#[serial_test::serial]
 fn single_inline_token_forms_a_default_pool() {
     let dir = tempdir().expect("create tempdir");
     let path = dir.path().join("config.toml");
     fs::write(&path, "github_token='abc'").expect("write config fixture");
-    let cfg = Config::from_file(&path).expect("load config");
+    let cfg =
+        Config::from_file_with_env(&path, &mock_env([] as [(&str, &str); 0])).expect("load config");
     let tokens = cfg.github_tokens().expect("resolve tokens");
     assert_eq!(tokens.len(), 1);
     let named = tokens.first().expect("single token");

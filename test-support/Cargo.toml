@@ -11,10 +11,10 @@ wiremock = "^0.6"
 serde_yaml = { workspace = true }
 serde = { workspace = true }
 tracing-subscriber = { workspace = true }
+mockable = { workspace = true, features = ["mock"] }
 
 [dev-dependencies]
 rstest = { workspace = true }
-serial_test = "3"
 
 [lints]
 workspace = true

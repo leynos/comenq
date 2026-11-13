@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 tokio = { workspace = true }
 clap = { workspace = true }
+mockable = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 octocrab = { workspace = true }
@@ -36,7 +37,6 @@ metrics-exporter-prometheus = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true } # latest 3.x at time of writing; update as new patch versions release
-serial_test = "3"
 test-support = { workspace = true }
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

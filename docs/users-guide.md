@@ -79,6 +79,39 @@ comenqd --config /etc/comenqd/config.toml \
 The file path overrides configured single-token paths and a token pool;
 `--github-token` still wins if both CLI options are supplied.
 
+## Configure the daemon
+
+The daemon merges its configuration from four sources. Each later source
+overrides the ones before it, so the precedence is command-line flag >
+`COMENQD_*` environment variable > configuration file > built-in default. Flags
+exist for `--config`, `--github-token`, `--github-token-file`, `--socket-path`,
+`--queue-path`, `--cooldown-period-seconds`, and `--github-api-timeout-secs`;
+every other setting is file- or environment-only.
+
+These nine variables are recognized:
+
+| Variable                           | Configuration key          | Default                                                                      |
+| ---------------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
+| `COMENQD_GITHUB_TOKEN`             | `github_token`             | empty; another token source is required                                      |
+| `COMENQD_GITHUB_TOKEN_FILE`        | `github_token_file`        | unset                                                                        |
+| `COMENQD_GITHUB_TOKEN_FILES`       | `github_token_files`       | empty list                                                                   |
+| `COMENQD_SOCKET_PATH`              | `socket_path`              | `$XDG_RUNTIME_DIR/comenq/comenq.sock` when usable, otherwise the system path |
+| `COMENQD_QUEUE_PATH`               | `queue_path`               | `/var/lib/comenq/queue`                                                      |
+| `COMENQD_COOLDOWN_PERIOD_SECONDS`  | `cooldown_period_seconds`  | `960`                                                                        |
+| `COMENQD_COOLDOWN_FLUTTER_SECONDS` | `cooldown_flutter_seconds` | `0`                                                                          |
+| `COMENQD_RESTART_MIN_DELAY_MS`     | `restart_min_delay_ms`     | `100`                                                                        |
+| `COMENQD_GITHUB_API_TIMEOUT_SECS`  | `github_api_timeout_secs`  | `30`                                                                         |
+
+Values use TOML syntax. Numbers need no quotes, and
+`COMENQD_GITHUB_TOKEN_FILES` must be a TOML array such as
+`["/path/one", "/path/two"]`; a comma-separated value is rejected as an invalid
+configuration. Empty values are passed through so validation can reject them
+with a clear message instead of treating them as unset.
+
+Name matching ignores ASCII case, as in earlier releases. When an installation
+exports several casings of one variable, the documented upper-case spelling
+supplies the value, so the result does not depend on hash or enumeration order.
+
 ## Connect the client
 
 For a user service, `RuntimeDirectory=comenq` creates
@@ -87,6 +120,15 @@ For a user service, `RuntimeDirectory=comenq` creates
 client probes that socket first when `XDG_RUNTIME_DIR` contains a non-empty
 absolute path. It falls back to `/run/comenq/comenq.sock` when the user socket
 cannot be used, so a stale user socket does not hide a healthy system service.
+
+A non-Unicode `XDG_RUNTIME_DIR` is treated as absent, so the system socket is
+used. The daemon matches `COMENQD_*` configuration overrides without regard to
+case, as in earlier releases; the documented spellings are the upper-case
+names. The client looks up `COMENQ_SOCKET` and `XDG_RUNTIME_DIR` by their exact
+names, so a lower-case `comenq_socket` is ignored. `COMENQ_SOCKET` may name a
+path that is not valid UTF-8. It is read when the command runs and is not bound
+by the argument parser, so `--help` lists it only in the `--socket` description
+and never as an environment fallback.
 
 Use `--socket PATH` or `COMENQ_SOCKET=PATH` to select exactly one socket
 instead. Otherwise, use the queue-management subcommands:
@@ -273,5 +315,6 @@ the TOML file or through `COMENQD_COOLDOWN_FLUTTER_SECONDS`.
 
 For the complete configuration model and service architecture, see
 [Comenq design](comenq-design.md). For an existing deployment, see the
-migration guides for [0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md),
-and [0.3.0](migration-0.3.0.md).
+migration guides for
+[0.1.0](migration-0.1.0.md), [0.2.0](migration-0.2.0.md), [0.3.0](migration-0.3.0.md),
+and [0.4.0](migration-0.4.0.md).
