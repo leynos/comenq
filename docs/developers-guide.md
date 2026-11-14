@@ -383,15 +383,21 @@ fails unless Whitaker clears the encoded flags and assigns the literal
 
 ### Cranelift
 
-Exception: Cranelift is not the development-profile backend. The repository pins
-`nightly-2026-10-30` (no Cranelift measurement was taken on it, and the
-exception has no deferral date: it holds while that CI step builds on stable),
-but the CI step `cargo +1.95.0 install merman-cli`, which runs from the
-checkout, builds on a stable toolchain against `.cargo/config.toml`, and stable
-Cargo refuses a `[profile.dev] codegen-backend` key ("config profile `dev` is
-not valid"), so selecting the backend would break that build (recorded
-2026-09-29). That build assigns `RUSTFLAGS`, so the nightly-only `-Zthreads`
-flag never reaches it. Revisit if that build moves to the pinned nightly.
+Exception: Cranelift is not the development-profile backend. Measured on
+`nightly-2026-11-12` on 2026-11-13 (the repository now pins
+`nightly-2026-11-13`), with the whole workspace suite run under Cranelift
+(`cargo test --workspace --all-features --no-fail-fast`): 549 tests passed and
+4 failed. All four are task-panic tests that depend on unwinding, which
+Cranelift cannot do: `util::join_err_maps_panic_and_cancel::case_2_panicked`
+(it fails in the `util`, `daemon` and `retry_helper` test binaries of
+`comenqd`, at `crates/comenqd/tests/util.rs:305`, where a panicking task's
+`JoinError` is mapped) and
+`listener::observability::protocol_and_blocking_store_spans_record_bounded_fields`
+(`crates/comenqd/src/listener/observability.rs:134`, the same family). Revisit
+when Cranelift gains panic unwinding or those tests stop relying on it, and
+re-measure the whole suite then. The `cargo +1.95.0 install merman-cli` CI step
+is a separate matter: it runs on its own stable toolchain and takes no
+repository build flags.
 
 ## Spelling gate
 
