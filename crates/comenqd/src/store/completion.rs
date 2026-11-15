@@ -59,41 +59,83 @@ impl QueueStore {
 
     /// Finish a persisted completion record, if a previous cleanup stopped early.
     pub(super) fn reconcile_completion(&self) -> Result<()> {
-        let text = match fs::read_to_string(&self.completion_path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
+        let Some(record) = self.read_completion_record()? else {
+            return Ok(());
         };
-        let record: CompletionRecord = serde_json::from_str(&text)?;
         let entry_path = self.entry_path(&record.id)?;
-        if let Some(history) = &record.history {
-            self.append_completion_history(history, record.history_offset.unwrap_or(0))?;
-            self.clear_await_deletion(&record.id, &history.incarnation)?;
-        }
-        let remove_entry = match self.find(&record.id) {
-            Ok(entry) => record
-                .claim_token
-                .as_deref()
-                .is_none_or(|token| entry.claim_token.as_deref() == Some(token)),
-            Err(StoreError::UnknownId(_)) => false,
-            Err(error) => return Err(error),
-        };
-        if remove_entry {
-            match fs::remove_file(&entry_path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(StoreError::Io(error)),
-            }
+        self.apply_completion_history(&record)?;
+        if self.completion_owns_entry(&record)? {
+            remove_entry_file(&entry_path)?;
         }
         self.write_atomic(
             &self.last_post_path,
             record.posted_at.to_string().as_bytes(),
         )?;
+        self.remove_completion_record()
+    }
+
+    /// Replay the history entry of `record`, if it has one, and clear the
+    /// matching deletion marker.
+    ///
+    /// Scope: used by `reconcile_completion` only.
+    fn apply_completion_history(&self, record: &CompletionRecord) -> Result<()> {
+        let Some(history) = &record.history else {
+            return Ok(());
+        };
+        self.append_completion_history(history, record.history_offset.unwrap_or(0))?;
+        self.clear_await_deletion(&record.id, &history.incarnation)
+    }
+
+    /// Remove the completion record and persist the removal by syncing its
+    /// parent directory.
+    ///
+    /// Scope: the last step of `reconcile_completion`.
+    fn remove_completion_record(&self) -> Result<()> {
         fs::remove_file(&self.completion_path)?;
         let parent = self.completion_path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "completion path has no parent")
         })?;
         fs::File::open(parent)?.sync_all()?;
         Ok(())
+    }
+
+    /// Read the persisted completion record.
+    ///
+    /// Returns `Ok(None)` when no record exists, so there is nothing to
+    /// reconcile; a read or parse failure is returned as an error. Scope: used
+    /// by `reconcile_completion` only.
+    fn read_completion_record(&self) -> Result<Option<CompletionRecord>> {
+        let text = match fs::read_to_string(&self.completion_path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(serde_json::from_str(&text)?))
+    }
+
+    /// Decide whether completing `record` should remove the queued entry.
+    ///
+    /// True when the entry still exists and either the record carries no claim
+    /// token or the entry's token matches it; false when the entry is gone or
+    /// was claimed afresh. Lookup errors other than an unknown identifier are
+    /// returned. Scope: used by `reconcile_completion` only.
+    fn completion_owns_entry(&self, record: &CompletionRecord) -> Result<bool> {
+        match self.find(&record.id) {
+            Ok(entry) => Ok(record
+                .claim_token
+                .as_deref()
+                .is_none_or(|token| entry.claim_token.as_deref() == Some(token))),
+            Err(StoreError::UnknownId(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Remove the entry file at `path`, treating a missing file as already removed.
+fn remove_entry_file(path: &std::path::Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StoreError::Io(error)),
     }
 }

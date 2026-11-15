@@ -9,6 +9,23 @@ use std::path::PathBuf;
 /// Sub-directory holding deletion markers for deterministic identifiers.
 pub(super) const AWAIT_DELETIONS_DIR: &str = "await-deletions";
 
+/// Remove the deletion marker at `path` if it exists.
+///
+/// Returns `Ok(true)` when a marker was found and removed, `Ok(false)` when
+/// none existed, and the I/O error for any other failure. Scope: used by
+/// reconciliation only; it does not sync the parent directory, so the caller
+/// does that once after the last removal.
+fn remove_marker_if_present(path: &std::path::Path) -> Result<bool> {
+    match fs::read(path) {
+        Ok(_) => {
+            fs::remove_file(path)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Incarnation hidden by the latest successful deletion of an entry.
 #[derive(Debug, Deserialize, Serialize)]
 struct AwaitDeletionRecord {
@@ -61,24 +78,25 @@ impl QueueStore {
 
     /// Clear a deletion marker left before a crash that did not remove its entry.
     pub(super) fn reconcile_await_deletions(&self) -> Result<()> {
-        let mut removed_marker = false;
-        for entry in self.entries()? {
-            let path = self.await_deletion_path(&entry.id)?;
-            match fs::read(&path) {
-                Ok(_) => {
-                    fs::remove_file(path)?;
-                    removed_marker = true;
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        if removed_marker {
+        if self.remove_markers_of_queued_entries()? {
             // Persist reconciliation before a later completion can outlive the
             // entry while a resurrected tombstone still hides its URL.
             fs::File::open(&self.await_deletions_dir)?.sync_all()?;
         }
         Ok(())
+    }
+
+    /// Remove the deletion marker of every queued entry that still has one.
+    ///
+    /// Returns whether any marker was removed, so the caller knows whether the
+    /// directory needs syncing. Scope: used by `reconcile_await_deletions` only.
+    fn remove_markers_of_queued_entries(&self) -> Result<bool> {
+        let mut removed_marker = false;
+        for entry in self.entries()? {
+            let path = self.await_deletion_path(&entry.id)?;
+            removed_marker |= remove_marker_if_present(&path)?;
+        }
+        Ok(removed_marker)
     }
 
     /// Resolve an identifier's durable deletion marker path.
