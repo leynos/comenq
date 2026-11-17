@@ -5,6 +5,7 @@ use crate::{
     ClaimToken, FlutterSampler, PutComment, QueueError, QueuePolicy, QueueService, activity_anchor,
     derive_entry_id, project_schedule,
 };
+use rstest::rstest;
 
 #[test]
 fn put_projects_cooldown_plus_flutter() {
@@ -66,7 +67,7 @@ fn immediate_put_bypasses_only_the_enqueue_floor() {
 }
 
 #[test]
-fn deferred_put_respects_the_previous_activity_anchor() {
+fn deferred_put_sets_its_not_before_floor() {
     let fixture = Fixture::new(4_000, 0);
     fixture.repository.set_last_post(Some(1_000));
     fixture.repository.set_last_attempt(Some(4_000));
@@ -77,6 +78,27 @@ fn deferred_put_respects_the_previous_activity_anchor() {
 
     assert_eq!(scheduled.eta_seconds, 600);
     assert_eq!(scheduled.entry.not_before, 4_600);
+}
+
+/// An immediate put has no not-before floor, so only the activity anchor can
+/// hold it back; each marker supplies the later timestamp in turn.
+#[rstest]
+#[case::attempt_later(1_000, 4_000)]
+#[case::post_later(4_000, 1_000)]
+fn immediate_put_respects_the_previous_activity_anchor(
+    #[case] last_post: u64,
+    #[case] last_attempt: u64,
+) {
+    let fixture = Fixture::new(4_000, 0);
+    fixture.repository.set_last_post(Some(last_post));
+    fixture.repository.set_last_attempt(Some(last_attempt));
+    let scheduled = unwrap_ok(fixture.service().put(PutComment {
+        comment: comment(),
+        immediate: true,
+    }));
+
+    assert_eq!(scheduled.entry.not_before, 0);
+    assert_eq!(scheduled.eta_seconds, 600);
 }
 
 #[test]

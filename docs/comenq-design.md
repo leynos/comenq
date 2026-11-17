@@ -130,8 +130,10 @@ failed attempt, so a retry cannot start earlier than a full cooldown after
 either event. The projected posting time is the later of the entry's due time,
 its not-before floor, and the current instant; the ETA is that time minus the
 current instant. Entries are ordered by explicit position, enqueue time, then
-identifier. A claim anywhere in the queue suppresses dequeueing, so only one
-worker can hold an in-flight entry.
+identifier. While a claimed entry stays queued, its claim suppresses further
+dequeueing, so only one worker can hold an in-flight entry. Removing a claimed
+entry removes its claim with it, so that exclusion lasts only as long as the
+entry remains queued.
 
 The runtime composes a short-lived `QueueService` over borrowed adapters inside
 each serialized queue operation. Read-modify-write sequences therefore still
