@@ -10,6 +10,7 @@ path = "src/lib.rs"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

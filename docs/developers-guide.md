@@ -33,6 +33,14 @@ stored layout. Await subscription, history paging, and their file cursors
 remain adapter concerns because they coordinate readers rather than express
 queue policy.
 
+`comenq-domain` tests carry `proptest` properties beside the example-based
+cases: projected waits are monotone and respect each entry's floor,
+`entry_order` is a total order agreeing with `(order, enqueued_at, id)`,
+derived identifiers are stable eight-digit lowercase hex, and generated command
+sequences neither leave two claims nor clear a claim with a stale token.
+`proptest` is a dev-dependency only, so `thiserror` remains the crate's sole
+runtime dependency.
+
 `comenq_transport::user_socket_path()` returns a per-user socket only when
 `XDG_RUNTIME_DIR` is a non-empty absolute path.
 `comenq_transport::default_socket_path()` selects that path for a daemon or the
