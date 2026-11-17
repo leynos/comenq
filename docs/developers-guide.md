@@ -311,11 +311,14 @@ that feature being enabled.
 
 Environment-dependent tests use `test_support::mock_env` and the `_with_env`
 entry points instead of mutating process-wide variables, so they can run
-concurrently. `proptest` exercises cooldown arithmetic across arbitrary `u64`
-values: a selected flutter must never shorten the base cooldown or exceed the
-base plus the configured flutter, using saturating addition at overflow. Prefer
-the shared helpers over duplicating fixtures in an individual crate. Further
-patterns are documented in
+concurrently. The injected provider owns no process-wide state, so a test needs
+no guard object and no release ordering: a world keeps its values in a map and
+passes them to the loader, and setting one key twice cannot reinstate an
+earlier value when the fixture is dropped. `proptest` exercises cooldown
+arithmetic across arbitrary `u64` values: a selected flutter must never shorten
+the base cooldown or exceed the base plus the configured flutter, using
+saturating addition at overflow. Prefer the shared helpers over duplicating
+fixtures in an individual crate. Further patterns are documented in
 [the Cucumber guide](behavioural-testing-in-rust-with-cucumber.md) and
 [Rust testing with rstest fixtures](rust-testing-with-rstest-fixtures.md).
 
