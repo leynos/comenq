@@ -61,7 +61,18 @@ pub trait QueueRepository {
     /// Mint an opaque token for one claim.
     fn mint_claim_token(&self) -> ClaimToken;
 
-    /// Record a successful post and retire the claimed entry.
+    /// Record a successful post and retire the entry it completes.
+    ///
+    /// The post is recorded unconditionally, because it happened whatever the
+    /// queue now holds. Retiring the entry is conditional: implementations
+    /// remove a queued entry only while its stored claim token still matches
+    /// the token carried by `completion`. A replacement entry that reuses the
+    /// identifier after the completed one was removed keeps its own claim, so
+    /// a late completion cannot retire work the queue has not posted.
+    ///
+    /// A completion without a claim token belongs to the legacy store path,
+    /// which retires the identified entry without a token check; callers in
+    /// the domain always supply the token they claimed with.
     fn complete(&self, completion: &Completion) -> Result<(), Self::Error>;
 }
 

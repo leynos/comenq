@@ -9,7 +9,7 @@ use super::support::{FixedClock, FixedFlutter, Fixture, MemoryRepository};
 use crate::policy::entry_order;
 use crate::{
     Comment, EntryId, EntryLifetime, PutComment, QueuePolicy, QueueService, QueuedEntry,
-    derive_entry_id, project_schedule,
+    ReleaseOutcome, derive_entry_id, project_schedule,
 };
 use proptest::prelude::*;
 use std::cmp::Ordering;
@@ -144,38 +144,56 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 /// The service composed over the fixture's in-memory ports.
 type TestService<'a> = QueueService<&'a MemoryRepository, &'a FixedClock, &'a FixedFlutter>;
 
+/// The entry a stale release targeted, with the outcome it reported.
+type StaleRelease = Option<(QueuedEntry, ReleaseOutcome)>;
+
 /// Apply one command, ignoring the errors a generated sequence may provoke.
-fn apply_op(op: Op, service: &TestService<'_>, claimed: &mut Vec<QueuedEntry>, puts: &mut u64) {
+///
+/// A release reports the entry it targeted before the call and what the
+/// service made of it, so the caller can compare the stored claim afterwards.
+fn apply_op(
+    op: Op,
+    service: &TestService<'_>,
+    claimed: &mut Vec<QueuedEntry>,
+    puts: &mut u64,
+) -> StaleRelease {
     match op {
         Op::Put { immediate } => {
             let body = format!("comment-{puts}");
             *puts = puts.saturating_add(1);
             let comment = Comment::new("octocat", "hello-world", 7, body);
             let _ = service.put(PutComment { comment, immediate });
+            None
         }
         Op::Claim => {
             if let Ok(Some(scheduled)) = service.claim_next_due() {
                 claimed.push(scheduled.entry);
             }
+            None
         }
         Op::Complete => {
             if let Some(entry) = claimed.pop() {
                 let _ = service.complete(entry, "token-hash".to_owned(), None);
             }
+            None
         }
-        Op::ReleaseStale => {
-            if let Some(entry) = claimed.last() {
-                let _ = service.release_claim(entry.id.as_str(), "unminted-token");
-            }
-        }
+        Op::ReleaseStale => claimed.last().cloned().and_then(|entry| {
+            let outcome = service
+                .release_claim(entry.id.as_str(), "unminted-token")
+                .ok()?;
+            Some((entry, outcome))
+        }),
         Op::Bump => {
             let _ = service.bump(&known_id(claimed));
+            None
         }
         Op::Bust => {
             let _ = service.bust(&known_id(claimed));
+            None
         }
         Op::Del => {
             let _ = service.del(&known_id(claimed));
+            None
         }
     }
 }
@@ -201,17 +219,14 @@ proptest! {
         let mut puts = 0_u64;
 
         for op in ops {
-            let stale_target = match op {
-                Op::ReleaseStale => claimed.first().cloned(),
-                _ => None,
-            };
-            apply_op(op, &service, &mut claimed, &mut puts);
+            let release = apply_op(op, &service, &mut claimed, &mut puts);
 
             let entries = fixture.repository.stored_entries();
             let claims = entries.iter().filter(|entry| entry.is_claimed()).count();
             prop_assert!(claims <= 1);
 
-            if let Some(target) = stale_target {
+            if let Some((target, outcome)) = release {
+                prop_assert_eq!(outcome, ReleaseOutcome::Stale);
                 let stored = entries.iter().find(|entry| entry.id == target.id);
                 if let Some(entry) = stored {
                     prop_assert_eq!(&entry.claim_token, &target.claim_token);

@@ -170,3 +170,26 @@ fn completion_keeps_a_replacement_claim() {
     assert_eq!(fixture.repository.stored_entries(), vec![replacement]);
     assert_eq!(fixture.repository.completions().len(), 1);
 }
+
+/// A tokenless completion is the legacy store path: the caller names an entry
+/// it never claimed, and the repository retires that entry without a token
+/// check while still recording the post.
+#[test]
+fn completion_without_a_claim_retires_the_named_entry() {
+    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
+    let entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
+    fixture.repository.seed(entry.clone());
+
+    unwrap_ok(
+        fixture
+            .service()
+            .complete(entry, "token-hash".to_owned(), None),
+    );
+
+    assert!(fixture.repository.stored_entries().is_empty());
+    assert_eq!(
+        fixture.repository.last_post().expect("last post"),
+        Some(1_000)
+    );
+    assert_eq!(fixture.repository.completions().len(), 1);
+}
