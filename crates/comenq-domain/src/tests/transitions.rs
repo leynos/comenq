@@ -171,9 +171,9 @@ fn completion_keeps_a_replacement_claim() {
     assert_eq!(fixture.repository.completions().len(), 1);
 }
 
-/// A tokenless completion is the legacy store path: the caller names an entry
-/// it never claimed, and the repository retires that entry without a token
-/// check while still recording the post.
+/// A tokenless completion is the compatibility shape: the caller names an
+/// entry it never claimed, and the repository retires that entry without a
+/// token check while still recording the post.
 #[test]
 fn completion_without_a_claim_retires_the_named_entry() {
     let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));

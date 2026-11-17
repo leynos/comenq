@@ -79,8 +79,10 @@ pub trait QueueRepository {
     /// unknown-identifier error and records nothing: no post, no completion
     /// and no history. When the entry does exist, the repository records the
     /// post and retires it without a token check, so a tokenless completion
-    /// gives no protection against a replacement. That is the legacy recovery
-    /// behaviour, and it must be preserved.
+    /// gives no protection against a replacement. This compatibility behaviour
+    /// must be preserved. It is distinct from replay of a persisted completion
+    /// record at startup, which the adapter reconciles directly and which does
+    /// not pass through this method.
     fn complete(&self, completion: &Completion) -> Result<(), Self::Error>;
 }
 
