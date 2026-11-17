@@ -27,6 +27,7 @@ pub(super) enum PostCommentError {
 ///
 /// A deadline expiry is kept distinct from an API response failure so the
 /// worker can report a bounded outcome and retry the queued entry.
+#[expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 async fn post_comment(
     octocrab: &Octocrab,
     request: &CommentRequest,
@@ -43,6 +44,7 @@ async fn post_comment(
 }
 
 /// Post one queued request while recording its duration and bounded outcome.
+#[expect(clippy::result_large_err, reason = "octocrab's large Error type")]
 #[tracing::instrument(
     skip(octocrab, request, config),
     fields(task = "worker", outcome = tracing::field::Empty)
