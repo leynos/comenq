@@ -1,7 +1,9 @@
 //! Claim, completion, and recovery tests for the persistent queue.
 
 use super::{ids, immediate, open_store, request};
+use crate::queue::convert::queued_from_stored;
 use crate::store::HistoryRecord;
+use comenq_domain::{Completion, QueueRepository};
 use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;
@@ -207,6 +209,42 @@ fn completion_is_idempotent_after_delete_and_records_the_post_without_removing_a
     store
         .complete_claim(&claimed, 4242)
         .expect("stale completion is harmless");
+    assert_eq!(ids(&store), vec![replacement.id]);
+    assert_eq!(store.last_post().expect("last post"), Some(4242));
+}
+
+/// The port's token rule, exercised through the production adapter rather than
+/// the store's own completion helpers: a completion carrying the token of an
+/// entry that has since been replaced records the post and leaves the
+/// replacement queued.
+#[rstest]
+fn repository_completion_with_a_stale_token_keeps_the_replacement() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("put");
+    let (claimed, _) = store
+        .claim_next_due(600, 1000)
+        .expect("claim")
+        .expect("due entry");
+    let posted = queued_from_stored(claimed).expect("convert the claim");
+    store.del(&entry.id).expect("delete in-flight entry");
+    let replacement = store
+        .put(request("claim"), &immediate(0), 1000)
+        .expect("replace");
+
+    QueueRepository::complete(
+        &store,
+        &Completion {
+            entry: posted,
+            token_hash: "token-hash".to_owned(),
+            comment_url: None,
+            posted_at: 4242,
+        },
+    )
+    .expect("stale completion is harmless");
+
     assert_eq!(ids(&store), vec![replacement.id]);
     assert_eq!(store.last_post().expect("last post"), Some(4242));
 }

@@ -49,6 +49,8 @@ pub struct MemoryState {
     pub failure: Option<&'static str>,
     next_lifetime: u64,
     next_claim: u64,
+    /// Mutating port operations served so far, for read-only assertions.
+    writes: u64,
 }
 
 /// Repository double with per-operation failure injection.
@@ -96,6 +98,20 @@ impl MemoryRepository {
         self.state().completions.clone()
     }
 
+    /// Count the mutating port operations served so far.
+    ///
+    /// Seeding and marker setup are arrangement, not repository operations, so
+    /// they do not count.
+    #[must_use]
+    pub fn write_count(&self) -> u64 {
+        self.state().writes
+    }
+
+    /// Count one mutating port operation.
+    fn record_write(state: &mut MemoryState) {
+        state.writes = state.writes.saturating_add(1);
+    }
+
     fn state(&self) -> MutexGuard<'_, MemoryState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -131,6 +147,7 @@ impl QueueRepository for MemoryRepository {
         };
         state.next_lifetime = state.next_lifetime.saturating_add(1);
         state.entries.push(queued.clone());
+        Self::record_write(&mut state);
         Ok(queued)
     }
 
@@ -139,6 +156,7 @@ impl QueueRepository for MemoryRepository {
         check(&state, "save")?;
         state.entries.retain(|stored| stored.id != entry.id);
         state.entries.push(entry.clone());
+        Self::record_write(&mut state);
         Ok(())
     }
 
@@ -146,6 +164,7 @@ impl QueueRepository for MemoryRepository {
         let mut state = self.state();
         check(&state, "remove")?;
         state.entries.retain(|entry| entry.id != *id);
+        Self::record_write(&mut state);
         Ok(())
     }
 
@@ -165,12 +184,14 @@ impl QueueRepository for MemoryRepository {
         let mut state = self.state();
         check(&state, "record_attempt")?;
         state.last_attempt = Some(state.last_attempt.unwrap_or(0).max(attempted_at));
+        Self::record_write(&mut state);
         Ok(())
     }
 
     fn mint_claim_token(&self) -> ClaimToken {
         let mut state = self.state();
         state.next_claim = state.next_claim.saturating_add(1);
+        Self::record_write(&mut state);
         ClaimToken::new(format!("token-{}", state.next_claim))
     }
 
@@ -197,6 +218,7 @@ impl QueueRepository for MemoryRepository {
                 .retain(|entry| entry.id != completion.entry.id);
         }
         state.completions.push(completion.clone());
+        Self::record_write(&mut state);
         Ok(())
     }
 }

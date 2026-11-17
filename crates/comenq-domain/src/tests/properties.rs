@@ -5,13 +5,14 @@
 //! untested corner of the range still fails. `proptest` is a dev-dependency,
 //! leaving `thiserror` the crate's only runtime dependency.
 
-use super::support::{FixedClock, FixedFlutter, Fixture, MemoryRepository};
+use super::support::Fixture;
 use crate::policy::entry_order;
 use crate::{
-    Comment, EntryId, EntryLifetime, PutComment, QueuePolicy, QueueService, QueuedEntry,
+    Comment, EntryId, EntryLifetime, PutComment, QueuePolicy, QueueRepository, QueuedEntry,
     ReleaseOutcome, derive_entry_id, project_schedule,
 };
 use proptest::prelude::*;
+use proptest::test_runner::TestCaseError;
 use std::cmp::Ordering;
 
 /// An eight-digit hexadecimal identifier, the only form the domain accepts.
@@ -141,59 +142,79 @@ fn op_strategy() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// The service composed over the fixture's in-memory ports.
-type TestService<'a> = QueueService<&'a MemoryRepository, &'a FixedClock, &'a FixedFlutter>;
-
-/// The entry a stale release targeted, with the outcome it reported.
-type StaleRelease = Option<(QueuedEntry, ReleaseOutcome)>;
+/// What a stale release saw and reported.
+#[derive(Debug)]
+struct StaleRelease {
+    /// The entry the release named.
+    id: EntryId,
+    /// The stored entry immediately before the call, absent if it was gone.
+    stored_before: Option<QueuedEntry>,
+    /// What the service reported for the release.
+    outcome: ReleaseOutcome,
+}
 
 /// Apply one command, ignoring the errors a generated sequence may provoke.
 ///
-/// A release reports the entry it targeted before the call and what the
-/// service made of it, so the caller can compare the stored claim afterwards.
+/// A stale release is the exception: it reports its target's stored state
+/// immediately before the call, so the caller can compare the stored entry
+/// afterwards. A repository error during that release is returned rather than
+/// swallowed, because a swallowed error would leave the property asserting
+/// nothing at all.
 fn apply_op(
     op: Op,
-    service: &TestService<'_>,
+    fixture: &Fixture,
     claimed: &mut Vec<QueuedEntry>,
     puts: &mut u64,
-) -> StaleRelease {
+) -> Result<Option<StaleRelease>, String> {
+    let service = fixture.service();
     match op {
         Op::Put { immediate } => {
             let body = format!("comment-{puts}");
             *puts = puts.saturating_add(1);
             let comment = Comment::new("octocat", "hello-world", 7, body);
             let _ = service.put(PutComment { comment, immediate });
-            None
+            Ok(None)
         }
         Op::Claim => {
             if let Ok(Some(scheduled)) = service.claim_next_due() {
                 claimed.push(scheduled.entry);
             }
-            None
+            Ok(None)
         }
         Op::Complete => {
             if let Some(entry) = claimed.pop() {
                 let _ = service.complete(entry, "token-hash".to_owned(), None);
             }
-            None
+            Ok(None)
         }
-        Op::ReleaseStale => claimed.last().cloned().and_then(|entry| {
+        Op::ReleaseStale => {
+            let Some(entry) = claimed.last() else {
+                return Ok(None);
+            };
+            let stored_before = fixture
+                .repository
+                .find(&entry.id)
+                .map_err(|error| format!("lookup before the stale release failed: {error:?}"))?;
             let outcome = service
                 .release_claim(entry.id.as_str(), "unminted-token")
-                .ok()?;
-            Some((entry, outcome))
-        }),
+                .map_err(|error| format!("the stale release failed: {error:?}"))?;
+            Ok(Some(StaleRelease {
+                id: entry.id.clone(),
+                stored_before,
+                outcome,
+            }))
+        }
         Op::Bump => {
             let _ = service.bump(&known_id(claimed));
-            None
+            Ok(None)
         }
         Op::Bust => {
             let _ = service.bust(&known_id(claimed));
-            None
+            Ok(None)
         }
         Op::Del => {
             let _ = service.del(&known_id(claimed));
-            None
+            Ok(None)
         }
     }
 }
@@ -214,23 +235,30 @@ proptest! {
         ops in prop::collection::vec(op_strategy(), 1..12),
     ) {
         let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
-        let service = fixture.service();
         let mut claimed = Vec::new();
         let mut puts = 0_u64;
 
         for op in ops {
-            let release = apply_op(op, &service, &mut claimed, &mut puts);
+            let release = match apply_op(op, &fixture, &mut claimed, &mut puts) {
+                Ok(release) => release,
+                Err(error) => return Err(TestCaseError::fail(error)),
+            };
 
             let entries = fixture.repository.stored_entries();
             let claims = entries.iter().filter(|entry| entry.is_claimed()).count();
             prop_assert!(claims <= 1);
 
-            if let Some((target, outcome)) = release {
-                prop_assert_eq!(outcome, ReleaseOutcome::Stale);
-                let stored = entries.iter().find(|entry| entry.id == target.id);
-                if let Some(entry) = stored {
-                    prop_assert_eq!(&entry.claim_token, &target.claim_token);
-                }
+            if let Some(release) = release {
+                prop_assert_eq!(release.outcome, ReleaseOutcome::Stale);
+                let stored_after = match fixture.repository.find(&release.id) {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        return Err(TestCaseError::fail(format!(
+                            "lookup after the stale release failed: {error:?}"
+                        )));
+                    }
+                };
+                prop_assert_eq!(stored_after, release.stored_before);
             }
         }
     }

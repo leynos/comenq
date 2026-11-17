@@ -214,7 +214,15 @@ where
         Ok(ReleaseOutcome::Released)
     }
 
-    /// Record a successful post for a claimed entry.
+    /// Record a successful post for `entry` and retire it where it still
+    /// carries the claim that completion belongs to.
+    ///
+    /// A worker passes the entry it claimed, so `entry` carries its claim
+    /// token and the repository removes the stored entry only while that token
+    /// still matches; a replacement that reused the identifier keeps its own
+    /// claim. A compatibility caller passes a tokenless entry, which the
+    /// repository retires without a token check, so the replacement protection
+    /// does not apply to it.
     ///
     /// # Errors
     ///
