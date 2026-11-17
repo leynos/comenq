@@ -214,20 +214,23 @@ where
         Ok(ReleaseOutcome::Released)
     }
 
-    /// Record a successful post for `entry` and retire it where it still
-    /// carries the claim that completion belongs to.
+    /// Record a successful post for `entry` and retire it where the claim still
+    /// matches.
     ///
     /// A worker passes the entry it claimed, so `entry` carries its claim
-    /// token and the repository removes the stored entry only while that token
-    /// still matches; a replacement that reused the identifier keeps its own
-    /// claim. A compatibility caller passes a tokenless entry, which the
-    /// repository retires without a token check, so the replacement protection
-    /// does not apply to it.
+    /// token: the repository records the post even if the entry is gone, and
+    /// removes the stored entry only while that token still matches, so a
+    /// replacement that reused the identifier keeps its own claim.
+    ///
+    /// A compatibility caller may pass either shape. A tokenless entry must
+    /// still be queued, and the repository retires it without a token check,
+    /// so the replacement protection does not apply to it.
     ///
     /// # Errors
     ///
     /// Returns [`QueueError::Repository`] when the completion cannot be
-    /// durably journalled.
+    /// durably journalled, and for a tokenless entry that the queue no longer
+    /// holds, in which case nothing is recorded.
     pub fn complete(
         &self,
         entry: QueuedEntry,

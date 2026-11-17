@@ -198,6 +198,17 @@ impl QueueRepository for MemoryRepository {
     fn complete(&self, completion: &Completion) -> Result<(), Self::Error> {
         let mut state = self.state();
         check(&state, "complete")?;
+        // The production store looks a tokenless entry up before journalling
+        // anything, so a completion naming a missing one fails without
+        // recording the post, the completion or a history record.
+        if completion.entry.claim_token.is_none()
+            && !state
+                .entries
+                .iter()
+                .any(|entry| entry.id == completion.entry.id)
+        {
+            return Err(TestError::new("complete of a missing tokenless entry"));
+        }
         state.last_post = Some(state.last_post.unwrap_or(0).max(completion.posted_at));
         // The production store removes an entry only when the recorded claim
         // still matches it, so a replacement sharing the identifier survives.

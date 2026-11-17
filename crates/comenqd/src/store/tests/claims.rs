@@ -1,9 +1,9 @@
 //! Claim, completion, and recovery tests for the persistent queue.
 
-use super::{ids, immediate, open_store, request};
+use super::{StoreError, ids, immediate, open_store, request};
 use crate::queue::convert::queued_from_stored;
 use crate::store::HistoryRecord;
-use comenq_domain::{Completion, QueueRepository};
+use comenq_domain::{Completion, EntryId, QueueRepository};
 use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;
@@ -247,6 +247,43 @@ fn repository_completion_with_a_stale_token_keeps_the_replacement() {
 
     assert_eq!(ids(&store), vec![replacement.id]);
     assert_eq!(store.last_post().expect("last post"), Some(4242));
+}
+
+/// The compatibility shape names an entry the store must still hold: the
+/// missing identifier is reported before anything is journalled.
+#[rstest]
+fn repository_tokenless_completion_of_a_missing_entry_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = open_store(&dir);
+    let entry = store
+        .put(request("gone"), &immediate(0), 1000)
+        .expect("put");
+    let id = EntryId::parse(&entry.id).expect("identifier");
+    let queued = QueueRepository::find(&store, &id)
+        .expect("find")
+        .expect("entry is queued");
+    store.del(&entry.id).expect("delete entry");
+
+    let error = QueueRepository::complete(
+        &store,
+        &Completion {
+            entry: queued,
+            token_hash: "token-hash".to_owned(),
+            comment_url: None,
+            posted_at: 4242,
+        },
+    )
+    .expect_err("a missing tokenless entry is refused");
+
+    assert!(matches!(error, StoreError::UnknownId(_)));
+    assert_eq!(store.last_post().expect("last post"), None);
+    assert!(
+        store
+            .history_page(None, None, 4)
+            .expect("read completed history")
+            .records
+            .is_empty()
+    );
 }
 
 #[rstest]

@@ -63,18 +63,24 @@ pub trait QueueRepository {
 
     /// Record a successful post and retire the entry it completes.
     ///
-    /// The post is recorded unconditionally, because it happened whatever the
-    /// queue now holds.
+    /// The two completion shapes carry different evidence, so they are treated
+    /// differently. Compatibility callers may supply either; a worker supplies
+    /// the claimed shape.
     ///
-    /// Retiring the entry is where the two caller shapes part. A worker
-    /// supplies the entry it claimed, so its completion carries a claim
-    /// token: implementations remove a queued entry only while its stored
-    /// claim token still matches, which is what protects a replacement entry
-    /// that reuses the identifier after the completed one was removed. A
-    /// compatibility caller cannot supply a token, and its completion is
-    /// tokenless: implementations then retire the identified entry without a
-    /// token check, so a tokenless completion does not protect a replacement.
-    /// That is the legacy recovery behaviour, and it must be preserved.
+    /// A completion carrying a claim token comes from a worker that posted the
+    /// entry it claimed. The repository records the post whether or not the
+    /// entry still exists, because the post did happen, and retires the entry
+    /// only while its stored claim token still matches. That check is what
+    /// protects a replacement entry that reused the identifier after the
+    /// completed one was removed, so a missing entry is not an error here.
+    ///
+    /// A tokenless completion names an entry the queue must still hold. When
+    /// no entry carries the identifier, the repository reports its
+    /// unknown-identifier error and records nothing: no post, no completion
+    /// and no history. When the entry does exist, the repository records the
+    /// post and retires it without a token check, so a tokenless completion
+    /// gives no protection against a replacement. That is the legacy recovery
+    /// behaviour, and it must be preserved.
     fn complete(&self, completion: &Completion) -> Result<(), Self::Error>;
 }
 

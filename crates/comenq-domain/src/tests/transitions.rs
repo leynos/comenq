@@ -1,7 +1,7 @@
 //! Claim, release, completion and removal transitions.
 
 use super::support::{Fixture, comment, seeded_entry, unwrap_ok};
-use crate::{ClaimToken, PutComment, QueuePolicy, QueueRepository, ReleaseOutcome};
+use crate::{ClaimToken, PutComment, QueueError, QueuePolicy, QueueRepository, ReleaseOutcome};
 use rstest::{fixture, rstest};
 
 /// A queue holding one entry claimed with the token `"held"`.
@@ -192,4 +192,21 @@ fn completion_without_a_claim_retires_the_named_entry() {
         Some(1_000)
     );
     assert_eq!(fixture.repository.completions().len(), 1);
+}
+
+/// A tokenless completion names an entry the queue must still hold, so a
+/// missing one is a repository failure that records nothing.
+#[test]
+fn tokenless_completion_of_a_missing_entry_is_a_repository_error() {
+    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
+    let entry = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
+
+    let error = fixture
+        .service()
+        .complete(entry, "token-hash".to_owned(), None)
+        .expect_err("a missing tokenless entry is refused");
+
+    assert!(matches!(error, QueueError::Repository(_)));
+    assert!(fixture.repository.completions().is_empty());
+    assert_eq!(fixture.repository.last_post().expect("last post"), None);
 }
