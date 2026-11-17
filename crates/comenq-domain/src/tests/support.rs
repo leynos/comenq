@@ -178,9 +178,24 @@ impl QueueRepository for MemoryRepository {
         let mut state = self.state();
         check(&state, "complete")?;
         state.last_post = Some(state.last_post.unwrap_or(0).max(completion.posted_at));
-        state
+        // The production store removes an entry only when the recorded claim
+        // still matches it, so a replacement sharing the identifier survives.
+        let applies_to_stored_entry = state
             .entries
-            .retain(|entry| entry.id != completion.entry.id);
+            .iter()
+            .find(|entry| entry.id == completion.entry.id)
+            .is_some_and(|entry| {
+                completion
+                    .entry
+                    .claim_token
+                    .as_ref()
+                    .is_none_or(|token| entry.claim_token.as_ref() == Some(token))
+            });
+        if applies_to_stored_entry {
+            state
+                .entries
+                .retain(|entry| entry.id != completion.entry.id);
+        }
         state.completions.push(completion.clone());
         Ok(())
     }

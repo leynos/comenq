@@ -151,3 +151,22 @@ fn completion_records_data_and_retires_the_entry() {
     assert_eq!(completion.posted_at, 1_000);
     assert_eq!(fixture.clock.reads(), 1);
 }
+
+#[test]
+fn completion_keeps_a_replacement_claim() {
+    let fixture = Fixture::with_policy(1_000, 0, QueuePolicy::new(0, 0));
+    let mut posted = seeded_entry("aaaaaaaa", 0, 1_000, 0, 0);
+    posted.claim_token = Some(ClaimToken::new("first"));
+    let mut replacement = posted.clone();
+    replacement.claim_token = Some(ClaimToken::new("second"));
+    fixture.repository.seed(replacement.clone());
+
+    unwrap_ok(
+        fixture
+            .service()
+            .complete(posted, "token-hash".to_owned(), None),
+    );
+
+    assert_eq!(fixture.repository.stored_entries(), vec![replacement]);
+    assert_eq!(fixture.repository.completions().len(), 1);
+}
