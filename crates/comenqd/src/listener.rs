@@ -79,28 +79,34 @@ pub fn prepare_listener(path: &Path) -> Result<UnixListener> {
     Ok(listener)
 }
 
+/// Create one socket-parent component, reporting whether this call created it.
+///
+/// An existing component is not an error: only a directory this process
+/// creates has its mode changed, so a parent prepared by an operator keeps the
+/// permissions it was given.
+fn create_socket_component(path: &Path) -> Result<bool> {
+    match stdfs::create_dir(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("creating socket directory {}", path.display()))
+        }
+    }
+}
+
+/// Restrict a socket-parent component this process created to its owner.
+fn restrict_socket_component(path: &Path) -> Result<()> {
+    stdfs::set_permissions(path, stdfs::Permissions::from_mode(0o700))
+        .with_context(|| format!("setting permissions on socket directory {}", path.display()))
+}
+
 /// Create missing socket-parent components without changing existing modes.
 fn create_socket_parent(parent: &Path) -> Result<()> {
     let mut component_path = std::path::PathBuf::new();
     for component in parent.components() {
         component_path.push(component.as_os_str());
-        let created_by_this_process = match stdfs::create_dir(&component_path) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("creating socket directory {}", component_path.display())
-                });
-            }
-        };
-        if created_by_this_process {
-            stdfs::set_permissions(&component_path, stdfs::Permissions::from_mode(0o700))
-                .with_context(|| {
-                    format!(
-                        "setting permissions on socket directory {}",
-                        component_path.display()
-                    )
-                })?;
+        if create_socket_component(&component_path)? {
+            restrict_socket_component(&component_path)?;
         }
     }
     Ok(())

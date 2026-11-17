@@ -4,7 +4,7 @@ use super::{QueueStore, Result, StoreError, StoredEntry, is_valid_id};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Sub-directory holding deletion markers for deterministic identifiers.
 pub(super) const AWAIT_DELETIONS_DIR: &str = "await-deletions";
@@ -24,6 +24,19 @@ fn remove_marker_if_present(path: &std::path::Path) -> Result<bool> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Delete a marker and sync its parent directory.
+///
+/// The parent sync makes the removal durable: a marker resurrected by a crash
+/// would keep hiding an already-posted URL.
+fn remove_marker_durably(path: &Path) -> Result<()> {
+    fs::remove_file(path)?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "deletion marker has no parent")
+    })?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 /// Incarnation hidden by the latest successful deletion of an entry.
@@ -54,26 +67,40 @@ impl QueueStore {
     pub(crate) fn clear_await_deletion(&self, id: &str, incarnation: &str) -> Result<()> {
         let path = self.await_deletion_path(id)?;
         match fs::read(&path) {
-            Ok(bytes) => {
-                let marker: AwaitDeletionRecord = serde_json::from_slice(&bytes)?;
-                let current_matches = match self.find(id) {
-                    Ok(entry) => entry.incarnation == incarnation,
-                    Err(StoreError::UnknownId(_)) => false,
-                    Err(error) => return Err(error),
-                };
-                if marker.incarnation != incarnation && !current_matches {
-                    return Ok(());
-                }
-                fs::remove_file(&path)?;
-                let parent = path.parent().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "deletion marker has no parent")
-                })?;
-                fs::File::open(parent)?.sync_all()?;
-                Ok(())
-            }
+            Ok(bytes) => self.clear_marker(&path, id, incarnation, &bytes),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Remove a marker that still describes `id`, then sync its parent.
+    ///
+    /// A marker for another incarnation is left in place: it still hides an
+    /// earlier incarnation's URL.
+    fn clear_marker(&self, path: &Path, id: &str, incarnation: &str, bytes: &[u8]) -> Result<()> {
+        let marker: AwaitDeletionRecord = serde_json::from_slice(bytes)?;
+        if !self.marker_applies(id, incarnation, &marker)? {
+            return Ok(());
+        }
+        remove_marker_durably(path)
+    }
+
+    /// Report whether `incarnation` owns either the marker or the live entry.
+    ///
+    /// The entry lookup runs unconditionally, so a storage failure surfaces
+    /// even when the marker alone would have justified the removal.
+    fn marker_applies(
+        &self,
+        id: &str,
+        incarnation: &str,
+        marker: &AwaitDeletionRecord,
+    ) -> Result<bool> {
+        let current_matches = match self.find(id) {
+            Ok(entry) => entry.incarnation == incarnation,
+            Err(StoreError::UnknownId(_)) => false,
+            Err(error) => return Err(error),
+        };
+        Ok(marker.incarnation == incarnation || current_matches)
     }
 
     /// Clear a deletion marker left before a crash that did not remove its entry.
