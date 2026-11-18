@@ -26,6 +26,7 @@ mod history_unavailable;
 mod post_span;
 mod scheduling;
 mod token_rotation;
+mod waits;
 
 pub(super) fn client_pool(octocrab: Arc<Octocrab>) -> Arc<Vec<TokenClient>> {
     Arc::new(vec![TokenClient::new("default", "t", octocrab)])
