@@ -102,12 +102,16 @@ async fn wait_for_retry_deadline(
 }
 
 /// Waits for a scheduled entry while allowing queue changes to wake the worker.
+///
+/// `wait` is the time left until the head entry becomes due. A queue change
+/// wakes the worker early, and the worker recomputes the due time on the next
+/// iteration. Returns `true` only when shutdown was requested while waiting.
 async fn wait_for_scheduled_entry(
     queue: &SharedQueue,
-    wait_seconds: u64,
+    wait: Duration,
     control: &mut WorkerControl,
 ) -> bool {
-    let sleep = tokio::time::sleep(Duration::from_secs(wait_seconds));
+    let sleep = tokio::time::sleep(wait);
     tokio::pin!(sleep);
     let changed = queue.change_notifier().notified();
     tokio::pin!(changed);
@@ -271,7 +275,8 @@ pub async fn run_worker(
         let entry = scheduled.entry;
         if wait_seconds > 0 {
             metrics::record_cooldown_wait(wait_seconds);
-            if wait_for_scheduled_entry(&queue, wait_seconds, &mut control).await {
+            let wait = Duration::from_secs(wait_seconds);
+            if wait_for_scheduled_entry(&queue, wait, &mut control).await {
                 break;
             }
             continue;
