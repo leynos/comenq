@@ -7,14 +7,14 @@ use std::time::Duration;
 use tokio::time::{interval, sleep, timeout};
 
 /// Maximum number of times to poll for an expected file.
-pub const SOCKET_RETRY_COUNT: u32 = 10;
+pub const SOCKET_RETRY_COUNT: u32 = 20;
 
 /// Delay between polls when waiting for a file to appear.
 ///
 /// Each attempt sleeps for this duration; multiply by
-/// [`SOCKET_RETRY_COUNT`] to obtain the worst-case total wait.
-/// The value is ten milliseconds.
-pub const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// [`SOCKET_RETRY_COUNT`] to obtain the worst-case total wait: 500 ms of
+/// requested sleep, excluding filesystem and scheduler overhead.
+pub const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 /// Wait for a file to appear within the given number of tries.
 ///
@@ -22,11 +22,10 @@ pub const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(10);
 ///
 /// ```rust,ignore
 /// use std::path::Path;
-/// use std::time::Duration;
-/// use test_support::wait_for_file;
+/// use test_support::{SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY, wait_for_file};
 ///
 /// let path = Path::new("/tmp/example.sock");
-/// let found = wait_for_file(path, 5, Duration::from_millis(10)).await;
+/// let found = wait_for_file(path, SOCKET_RETRY_COUNT, SOCKET_RETRY_DELAY).await;
 /// assert!(found);
 /// ```
 pub async fn wait_for_file(path: &Path, tries: u32, delay: Duration) -> bool {
