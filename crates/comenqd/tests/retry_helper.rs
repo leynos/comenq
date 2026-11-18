@@ -2,6 +2,10 @@
 
 mod util;
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -82,10 +86,6 @@ async fn retries_after_timeout_then_succeeds() {
         .with_ci(false)
         .with_coverage(false);
     let first_timeout = cfg.with_progressive_retry()[0];
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    };
     let attempts = Arc::new(AtomicU32::new(0));
     let handle_attempts = attempts.clone();
     let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || {
@@ -116,9 +116,15 @@ async fn fails_after_all_retries() {
         .with_coverage(false);
     let timeouts = cfg.with_progressive_retry();
     let final_timeout = *timeouts.last().expect("timeouts");
-    let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || async move {
-        sleep(final_timeout + Duration::from_secs(1)).await;
-        Ok(())
+    let attempts = Arc::new(AtomicU32::new(0));
+    let handle_attempts = attempts.clone();
+    let handle = tokio::spawn(timeout_with_retries(cfg, "demo", move || {
+        let attempts = handle_attempts.clone();
+        async move {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            sleep(final_timeout + Duration::from_secs(1)).await;
+            Ok(())
+        }
     }));
 
     tokio::time::advance(timeouts[0]).await;
@@ -129,5 +135,26 @@ async fn fails_after_all_retries() {
     tokio::task::yield_now().await;
 
     let err = handle.await.expect("join").expect_err("should time out");
-    assert!(err.contains("timed out"));
+    assert_eq!(err, "demo timed out after all retry attempts");
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn operation_error_is_returned_without_retry() {
+    let cfg = TimeoutConfig::new(10, TestComplexity::Simple)
+        .with_ci(false)
+        .with_coverage(false);
+    let attempts = Arc::new(AtomicU32::new(0));
+    let handle_attempts = attempts.clone();
+    let result: Result<(), String> = timeout_with_retries(cfg, "demo", move || {
+        let attempts = handle_attempts.clone();
+        async move {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err("boom".to_string())
+        }
+    })
+    .await;
+
+    assert_eq!(result, Err("boom".to_string()));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
