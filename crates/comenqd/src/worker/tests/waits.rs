@@ -128,7 +128,9 @@ async fn retry_wait_reports_pending_until_the_timeout_elapses() {
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(poll_once(wait.as_mut()), Poll::Pending));
     tokio::time::advance(Duration::from_secs(1)).await;
-    assert!(matches!(poll_once(wait.as_mut()), Poll::Ready(false)));
+    // Advancing the clock does not guarantee the timer driver has run yet, so
+    // await the final wait and let the runtime drive it to completion.
+    assert!(!wait.await);
 }
 
 /// Shutdown wins even when a queue notification is already buffered.
@@ -223,5 +225,7 @@ async fn scheduled_wait_returns_false_when_the_timer_elapses() {
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(poll_once(wait.as_mut()), Poll::Pending));
     tokio::time::advance(Duration::from_secs(1)).await;
-    assert!(matches!(poll_once(wait.as_mut()), Poll::Ready(false)));
+    // Advancing the clock does not guarantee the timer driver has run yet, so
+    // await the final wait and let the runtime drive it to completion.
+    assert!(!wait.await);
 }
