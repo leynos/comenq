@@ -153,21 +153,16 @@ where
     T: Send,
 {
     let timeouts = config.with_progressive_retry();
-    for (attempt, timeout_duration) in timeouts.iter().enumerate() {
-        let attempt_num = attempt + 1;
+    for timeout_duration in &timeouts {
         match tokio::time::timeout(*timeout_duration, operation()).await {
             Ok(Ok(result)) => return Ok(result),
             Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                if attempt_num == timeouts.len() {
-                    return Err(format!(
-                        "{operation_name} timed out after all retry attempts"
-                    ));
-                }
-            }
+            Err(_) => {}
         }
     }
-    Err(format!("{operation_name} exhausted all retry attempts"))
+    Err(format!(
+        "{operation_name} timed out after all retry attempts"
+    ))
 }
 
 #[rstest]
