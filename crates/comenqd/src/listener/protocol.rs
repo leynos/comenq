@@ -1,6 +1,7 @@
 //! Adapt JSON protocol requests and queue results at the listener boundary.
 
 use comenq_domain::{PutComment, QueueError, ScheduledEntry};
+use comenq_lib::CommentRequest;
 use comenq_lib::protocol::{
     HistoryCursor, HistoryEntry, MAX_PENDING_ENTRIES, MAX_RESPONSE_BYTES, PendingEntry, Request,
     Response,
@@ -20,57 +21,75 @@ pub(crate) async fn dispatch_request_with_error_kind(
     request: Request,
 ) -> (Response, Option<&'static str>) {
     match request {
-        Request::Put { request, immediate } => {
-            let comment = PutComment {
-                comment: comment_from_request(&request),
-                immediate,
-            };
-            match queue.put(comment).await {
-                Ok(scheduled) => (Response::entry(pending_entry(scheduled)), None),
-                Err(error) => queue_error_response(&error),
-            }
-        }
+        Request::Put { request, immediate } => dispatch_put(queue, &request, immediate).await,
         Request::Await { .. } => (
             Response::error("await requires a streaming connection"),
             Some("stream_required"),
         ),
         Request::List => match queue.list().await {
-            Ok(schedule) => match response_for_schedule(schedule) {
-                Ok(response) => {
-                    let kind =
-                        matches!(response, Response::Error { .. }).then_some("response_too_large");
-                    (response, kind)
-                }
-                Err(_) => (
-                    Response::error("failed to encode list response"),
-                    Some("response_serialization"),
-                ),
-            },
+            Ok(schedule) => classify_encoded_response(
+                response_for_schedule(schedule),
+                "failed to encode list response",
+            ),
             Err(error) => queue_error_response(&error),
         },
         Request::Bump { id } => map_queue_response(queue.bump(&id).await),
         Request::Bust { id } => map_queue_response(queue.bust(&id).await),
         Request::Del { id } => map_queue_response(queue.del(&id).await),
-        Request::Hist { limit, cursor } => {
-            let position = cursor.map(|cursor| HistoryPosition {
-                offset: cursor.offset,
-                end_offset: cursor.end_offset,
-            });
-            match queue.history_page(limit, position).await {
-                Ok(page) => match response_for_history(page) {
-                    Ok(response) => {
-                        let kind = matches!(response, Response::Error { .. })
-                            .then_some("response_too_large");
-                        (response, kind)
-                    }
-                    Err(_) => (
-                        Response::error("failed to encode history response"),
-                        Some("response_serialization"),
-                    ),
-                },
-                Err(error) => queue_error_response(&QueueError::Repository(error)),
-            }
+        Request::Hist { limit, cursor } => dispatch_history(queue, limit, cursor).await,
+    }
+}
+
+/// Queue a comment and answer with its pending entry.
+async fn dispatch_put(
+    queue: &SharedQueue,
+    request: &CommentRequest,
+    immediate: bool,
+) -> (Response, Option<&'static str>) {
+    let comment = PutComment {
+        comment: comment_from_request(request),
+        immediate,
+    };
+    match queue.put(comment).await {
+        Ok(scheduled) => (Response::entry(pending_entry(scheduled)), None),
+        Err(error) => queue_error_response(&error),
+    }
+}
+
+/// Answer with one page of posting history, continuing from `cursor`.
+async fn dispatch_history(
+    queue: &SharedQueue,
+    limit: Option<usize>,
+    cursor: Option<HistoryCursor>,
+) -> (Response, Option<&'static str>) {
+    let position = cursor.map(|cursor| HistoryPosition {
+        offset: cursor.offset,
+        end_offset: cursor.end_offset,
+    });
+    match queue.history_page(limit, position).await {
+        Ok(page) => classify_encoded_response(
+            response_for_history(page),
+            "failed to encode history response",
+        ),
+        Err(error) => queue_error_response(&QueueError::Repository(error)),
+    }
+}
+
+/// Pair an encoded response with its error kind: a size-limit error response
+/// is `response_too_large` and an encoding failure is `response_serialization`.
+fn classify_encoded_response(
+    encoded: std::result::Result<Response, serde_json::Error>,
+    encode_failure: &'static str,
+) -> (Response, Option<&'static str>) {
+    match encoded {
+        Ok(response) => {
+            let kind = matches!(response, Response::Error { .. }).then_some("response_too_large");
+            (response, kind)
         }
+        Err(_) => (
+            Response::error(encode_failure),
+            Some("response_serialization"),
+        ),
     }
 }
 
