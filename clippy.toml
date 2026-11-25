@@ -1,5 +1,7 @@
 # Align with CodeScene’s ceiling
-cognitive-complexity-threshold = 12     # default is 25
+# Cognitive complexity is not gated by Clippy: it scores code after macro
+# expansion, so it counts branching a macro generated. Whitaker's
+# `macro_aware_cognitive_complexity` gates it at 9 (see `dylint.toml`).
 
 # Tests must not change the process-wide environment or working directory: it
 # forces the runner to serialize them. Inject an environment object or isolate
