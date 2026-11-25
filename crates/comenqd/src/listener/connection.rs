@@ -93,18 +93,9 @@ async fn handle_client_inner(
     shutdown: watch::Receiver<()>,
     permits: Arc<Semaphore>,
 ) -> Result<(ClientOutcome, Option<&'static str>)> {
-    let mut buffer = Vec::with_capacity(8 * 1024);
     // Read up to LIMIT+1 to detect oversize payloads without relying on client EOF.
     let mut limited = stream.take((MAX_REQUEST_BYTES as u64) + 1);
-    tokio::time::timeout(
-        Duration::from_secs(CLIENT_READ_TIMEOUT_SECS),
-        limited.read_to_end(&mut buffer),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("client read timed out"))??;
-    if buffer.len() > MAX_REQUEST_BYTES {
-        anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
-    }
+    let buffer = read_request_bytes(&mut limited).await?;
     let (response, mut outcome, mut error_kind) = match serde_json::from_slice::<Request>(&buffer) {
         Ok(request) => {
             *operation = Some(request_operation(&request));
@@ -142,10 +133,30 @@ async fn handle_client_inner(
             "response exceeds {MAX_RESPONSE_BYTES} bytes"
         )))?;
     }
-    let mut stream = limited.into_inner();
+    write_response_and_close(limited.into_inner(), &bytes).await?;
+    Ok((outcome, error_kind))
+}
+
+/// Read the whole request under the read timeout, refusing oversize payloads.
+async fn read_request_bytes(limited: &mut tokio::io::Take<UnixStream>) -> Result<Vec<u8>> {
+    let mut buffer = Vec::with_capacity(8 * 1024);
+    tokio::time::timeout(
+        Duration::from_secs(CLIENT_READ_TIMEOUT_SECS),
+        limited.read_to_end(&mut buffer),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("client read timed out"))??;
+    if buffer.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("client payload exceeds {MAX_REQUEST_BYTES} bytes");
+    }
+    Ok(buffer)
+}
+
+/// Write the response and shut the stream down, each under the write timeout.
+async fn write_response_and_close(mut stream: UnixStream, bytes: &[u8]) -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
-        stream.write_all(&bytes),
+        stream.write_all(bytes),
     )
     .await
     .map_err(|_| anyhow::anyhow!("client response write timed out"))??;
@@ -155,7 +166,7 @@ async fn handle_client_inner(
     )
     .await
     .map_err(|_| anyhow::anyhow!("client connection shutdown timed out"))??;
-    Ok((outcome, error_kind))
+    Ok(())
 }
 
 /// Map a parsed request to the fixed operation label used by daemon metrics.

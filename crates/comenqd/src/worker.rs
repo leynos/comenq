@@ -7,17 +7,16 @@
 
 use crate::metrics;
 use crate::queue::SharedQueue;
-use crate::queue::convert::request_from_comment;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
+mod delivery;
+use delivery::{claim_due_or_wait, deliver_entry, pace_retry};
 mod posting;
-use posting::post_comment_with_metrics;
 mod tokens;
 pub(crate) use tokens::build_octocrab;
-use tokens::next_token_index;
 pub use tokens::{TokenClient, token_hash};
 
 const RETRY_OVERFLOW_FALLBACK: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
@@ -258,14 +257,8 @@ pub async fn run_worker(
     queue.recover_worker_state().await?;
     let config = queue.config().clone();
     loop {
-        let due = queue.claim_next_due_domain().await?;
-        let Some(scheduled) = due else {
-            control.notify_drained();
-            tokio::select! {
-                biased;
-                _ = control.shutdown.changed() => break,
-                () = queue.changed() => continue,
-            }
+        let Some(scheduled) = claim_due_or_wait(&queue, &mut control).await? else {
+            break;
         };
         let wait_seconds = scheduled.eta_seconds;
         let entry = scheduled.entry;
@@ -277,66 +270,11 @@ pub async fn run_worker(
             continue;
         }
         control.notify_enqueued();
-        let last_hash = match queue.last_token_hash().await {
-            Ok(last_hash) => last_hash,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "Unable to read posting history; selecting the first configured GitHub token",
-                );
-                None
-            }
-        };
-        let index = next_token_index(
-            clients.iter().map(|client| client.hash.as_str()),
-            last_hash.as_deref(),
-        );
-        let client = clients.get(index).context("token index in range")?;
-        let request = request_from_comment(&entry.comment);
-        match post_comment_with_metrics(&client.octocrab, &request, &config).await {
-            Ok(comment_url) => {
-                queue
-                    .complete_entry(&entry, &client.hash, Some(comment_url))
-                    .await?;
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    id = %entry.id,
-                    token = %client.name,
-                    owner = %entry.comment.owner,
-                    repo = %entry.comment.repo,
-                    pr = entry.comment.pr_number,
-                    "GitHub API call failed; will retry after cooldown",
-                );
-                if let Err(error) = queue
-                    .record_failure_for(&entry, &client.hash, &e.to_string())
-                    .await
-                {
-                    tracing::error!(
-                        error = %error,
-                        id = %entry.id,
-                        "Failed to record the posting failure in the history log",
-                    );
-                }
-                if let Some(claim_token) = entry.claim_token.as_ref() {
-                    queue
-                        .release_claim(entry.id.as_str(), claim_token.as_str())
-                        .await?;
-                }
-                control.notify_idle();
-                // Pace retries so a persistently failing API is not hammered.
-                metrics::record_cooldown_wait(config.cooldown_period_seconds);
-                let deadline = retry_deadline(Duration::from_secs(config.cooldown_period_seconds));
-                if wait_for_retry_deadline(deadline, queue.change_notifier(), &mut control.shutdown)
-                    .await
-                {
-                    break;
-                }
-                continue;
-            }
-        }
+        let posted = deliver_entry(&queue, &clients, &entry, &config).await?;
         control.notify_idle();
+        if !posted && pace_retry(&queue, &mut control, config.cooldown_period_seconds).await {
+            break;
+        }
     }
     Ok(())
 }

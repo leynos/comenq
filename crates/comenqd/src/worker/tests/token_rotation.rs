@@ -1,6 +1,6 @@
 //! Token hashing and rotation selection tests.
 
-use super::super::{next_token_index, token_hash};
+use super::super::{token_hash, tokens::next_token_index};
 
 #[test]
 fn token_hash_is_sha256_hex() {

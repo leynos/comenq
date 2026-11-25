@@ -1,6 +1,6 @@
 //! Structured-tracing tests for bounded GitHub post outcomes.
 
-use super::super::post_comment_with_metrics;
+use super::super::posting::post_comment_with_metrics;
 use crate::config::Config;
 use comenq_lib::CommentRequest;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
