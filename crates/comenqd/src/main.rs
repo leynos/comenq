@@ -9,8 +9,17 @@ use comenqd::{config::Config, daemon};
 
 mod logging;
 
-#[tokio::main]
-async fn main() -> color_eyre::Result<()> {
+/// Build the multi-threaded runtime explicitly so its failure is reported, not a panic.
+fn main() -> color_eyre::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build the Tokio runtime")?
+        .block_on(run())
+}
+
+/// Install logging and metrics, load the configuration and run the daemon.
+async fn run() -> color_eyre::Result<()> {
     logging::init();
     color_eyre::install()?;
     if let Err(error) = comenqd::metrics::install_prometheus() {

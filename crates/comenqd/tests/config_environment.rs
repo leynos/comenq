@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
+use test_support::fixture_fs::{read_file, write_file};
 
 /// Variable marking the re-executed child, so it runs the child body rather
 /// than another full test pass.
@@ -143,16 +144,20 @@ fn load_in_child(config: &Path, vars: &[(&str, &OsStr)], what: &str) -> Resolved
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    let serialized = std::fs::read(&result)
-        .unwrap_or_else(|error| panic!("{what} wrote no configuration to {result:?}: {error}"));
-    serde_json::from_slice(&serialized)
-        .unwrap_or_else(|error| panic!("{what} did not serialize a configuration: {error}"))
+    let serialized = match read_file(&result) {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("{what} wrote no configuration to {result:?}: {error}"),
+    };
+    match serde_json::from_slice(&serialized) {
+        Ok(resolved) => resolved,
+        Err(error) => panic!("{what} did not serialize a configuration: {error}"),
+    }
 }
 
 /// Write `contents` as the configuration file for an environment case.
 fn write_config(dir: &tempfile::TempDir, contents: &str) -> PathBuf {
     let path = dir.path().join("config.toml");
-    std::fs::write(&path, contents).expect("write config fixture");
+    write_file(&path, contents).expect("write config fixture");
     path
 }
 
@@ -171,7 +176,7 @@ fn child_loads_configuration_with_the_supplied_environment() {
         .unwrap_or_else(|error| panic!("loading {config:?} in the child failed: {error}"));
     let serialized =
         serde_json::to_vec(&Resolved::project(loaded)).expect("serialize resolved configuration");
-    std::fs::write(&result, serialized).expect("write resolved configuration");
+    write_file(Path::new(&result), serialized).expect("write resolved configuration");
 }
 
 /// With no value in any layer, the built-in default wins.
@@ -341,8 +346,8 @@ fn array_literal_populates_the_pool() {
     let config = write_config(&dir, "github_token='file-token'");
     let first = dir.path().join("first.token");
     let second = dir.path().join("second.token");
-    std::fs::write(&first, "first-token").expect("write first token file");
-    std::fs::write(&second, "second-token").expect("write second token file");
+    write_file(&first, "first-token").expect("write first token file");
+    write_file(&second, "second-token").expect("write second token file");
     let literal = format!("[\"{}\",\"{}\"]", first.display(), second.display());
 
     let resolved = load_in_child(

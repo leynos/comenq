@@ -348,7 +348,7 @@ impl Fixture {
 
 /// Unwrap a successful domain result, failing the test otherwise.
 pub fn unwrap_ok<T>(result: Result<T, crate::QueueError<TestError>>) -> T {
-    result.unwrap_or_else(|error| panic!("domain operation failed: {error}"))
+    result.expect("domain operation failed")
 }
 
 /// Unwrap a failed domain result, failing the test otherwise.
@@ -356,15 +356,16 @@ pub fn unwrap_ok<T>(result: Result<T, crate::QueueError<TestError>>) -> T {
 pub fn unwrap_err<T>(
     result: Result<T, crate::QueueError<TestError>>,
 ) -> crate::QueueError<TestError> {
-    result
-        .err()
-        .unwrap_or_else(|| panic!("domain operation unexpectedly succeeded"))
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("domain operation unexpectedly succeeded"),
+    }
 }
 
 /// Parse a test identifier, failing loudly when the fixture is wrong.
 #[must_use]
 pub fn entry_id(value: &str) -> EntryId {
-    EntryId::parse(value).unwrap_or_else(|error| panic!("test identifier must be valid: {error}"))
+    EntryId::parse(value).expect("test identifier must be valid")
 }
 
 /// An entry with no claim and a stable lifetime.

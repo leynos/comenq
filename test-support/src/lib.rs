@@ -2,6 +2,7 @@
 
 pub mod daemon;
 pub mod env;
+pub mod fixture_fs;
 pub mod logging;
 pub mod util;
 mod workflow;

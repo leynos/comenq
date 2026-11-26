@@ -12,12 +12,11 @@ use comenqd::daemon::{
     run, run_worker,
 };
 use rstest::{fixture, rstest};
-use std::fs as stdfs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::{TempDir, tempdir};
+use test_support::fixture_fs::{permission_bits, write_file};
 use test_support::{octocrab_for, temp_config};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -145,11 +144,11 @@ async fn run_creates_queue_directory() {
 async fn prepare_listener_sets_permissions() {
     let dir = tempdir().expect("tempdir");
     let sock = dir.path().join("sock");
-    stdfs::write(&sock, b"stale").expect("create stale file");
+    write_file(&sock, b"stale").expect("create stale file");
     let listener = prepare_listener(&sock).expect("prepare listener");
     drop(listener);
-    let meta = stdfs::metadata(&sock).expect("metadata");
-    assert_eq!(meta.permissions().mode() & 0o777, 0o660);
+    let bits = permission_bits(&sock).expect("permission bits");
+    assert_eq!(bits, 0o660);
 }
 
 #[tokio::test]
@@ -253,8 +252,9 @@ async fn run_listener_accepts_connections() -> Result<(), String> {
     Ok(())
 }
 
-/// Worker behaviour tests.
 mod worker_tests {
+    //! Worker behaviour tests.
+
     use super::*;
     const DRAINED_NOTIFICATION: TimeoutConfig = TimeoutConfig::new(15, TestComplexity::Moderate);
     const WORKER_SUCCESS: TimeoutConfig = TimeoutConfig::new(10, TestComplexity::Moderate);

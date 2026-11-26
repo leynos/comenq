@@ -46,6 +46,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for logging initialisation.
+
     use std::sync::{Arc, Mutex};
     use test_support::logging::init_with_writer_and_filter;
     use tracing::info;
