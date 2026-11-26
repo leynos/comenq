@@ -73,6 +73,8 @@ pub fn uses_shared_release_actions(yaml: &str) -> Result<bool, serde_yaml::Error
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for the shared-release-actions workflow check.
+
     use super::uses_shared_release_actions;
     use rstest::rstest;
 

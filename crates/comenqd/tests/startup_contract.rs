@@ -8,13 +8,13 @@
 
 #![cfg(feature = "test-support")]
 
-use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use rstest::rstest;
 use tempfile::tempdir;
+use test_support::fixture_fs::write_file;
 
 /// How long a startup-failure run may take before the test calls it hung.
 ///
@@ -138,7 +138,7 @@ fn startup_failure_exits_non_zero_and_reports_on_stderr(
     let absent = dir.path().join("absent.toml");
     let config = match contents {
         Some(contents) => {
-            fs::write(&path, contents).expect("write configuration fixture");
+            write_file(&path, contents).expect("write configuration fixture");
             path
         }
         // Deliberately not created: this case asserts the missing-file path.

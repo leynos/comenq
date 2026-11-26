@@ -218,6 +218,8 @@ pub(crate) fn pending_entry(scheduled: ScheduledEntry) -> PendingEntry {
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for the listener protocol handling.
+
     use super::*;
     use crate::store::{HistoryPosition, HistoryRecordAt};
     use comenq_domain::{Comment, EntryId, EntryLifetime, QueuedEntry, ScheduledEntry};

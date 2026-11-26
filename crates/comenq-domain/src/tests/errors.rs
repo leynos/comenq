@@ -17,9 +17,7 @@ fn entry_id_requires_exactly_eight_hex_digits() {
 
 #[test]
 fn invalid_identifier_message_matches_the_wire_contract() {
-    let error = EntryId::parse("bad")
-        .err()
-        .unwrap_or_else(|| panic!("identifier must be rejected"));
+    let error = EntryId::parse("bad").expect_err("identifier must be rejected");
 
     assert_eq!(
         error.to_string(),

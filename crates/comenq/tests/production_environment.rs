@@ -16,13 +16,14 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use comenq::Args;
 use comenq_lib::protocol::{Request, Response};
+use test_support::fixture_fs::{read_file, write_file};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::process::Command;
@@ -122,7 +123,7 @@ fn child_reports_socket_candidates() {
     }
     let result = std::env::var_os(CHILD_RESULT).expect("the parent supplies a result path");
     let args = Args::try_parse_from(["comenq", "list"]).expect("arguments parse");
-    std::fs::write(&result, encode_paths(&args.socket_candidates()))
+    write_file(Path::new(&result), encode_paths(&args.socket_candidates()))
         .expect("write socket candidates");
 }
 
@@ -142,7 +143,7 @@ fn socket_candidates_keep_a_non_unicode_override() -> Result<(), Box<dyn Error>>
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    let decoded = decode_paths(&std::fs::read(&result)?);
+    let decoded = decode_paths(&read_file(&result)?);
     assert_eq!(decoded, vec![socket]);
     Ok(())
 }

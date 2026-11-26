@@ -8,6 +8,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
+use test_support::fixture_fs::{list_dir, read_file};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 
@@ -15,11 +16,11 @@ use tokio::net::{TcpStream, UnixStream};
 fn persisted_accounting(queue_path: &Path) -> (usize, u64) {
     const ENTRY_MUTATION_HEADROOM_BYTES: u64 = 80;
 
-    std::fs::read_dir(queue_path.join("entries"))
+    list_dir(&queue_path.join("entries"))
         .expect("read queue entries")
-        .map(|dirent| {
-            let path = dirent.expect("read entry directory item").path();
-            let bytes = std::fs::read(&path).expect("read persisted entry");
+        .into_iter()
+        .map(|path| {
+            let bytes = read_file(&path).expect("read persisted entry");
             let entry: serde_json::Value =
                 serde_json::from_slice(&bytes).expect("decode persisted entry");
             let order = entry["order"].as_i64().expect("stored order");

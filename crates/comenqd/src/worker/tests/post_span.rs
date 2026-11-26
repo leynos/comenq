@@ -84,6 +84,57 @@ where
     }
 }
 
+/// Mount a POST handler for the comment endpoint that answers with `response`.
+async fn comment_server(response: ResponseTemplate) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/owner/repo/issues/1/comments"))
+        .respond_with(response)
+        .mount(&server)
+        .await;
+    server
+}
+
+/// Post `request` to a server answering with `response`, under the given API
+/// timeout, returning the comment URL when the post succeeds.
+async fn post_against(
+    response: ResponseTemplate,
+    request: &CommentRequest,
+    api_timeout_secs: u64,
+) -> Option<String> {
+    let server = comment_server(response).await;
+    let client = octocrab_for(&server).expect("build client");
+    let (_dir, config) = config_with_api_timeout(api_timeout_secs);
+    post_comment_with_metrics(&client, request, &config)
+        .await
+        .ok()
+}
+
+/// Post once each to a succeeding, an erroring and a timing-out server.
+async fn post_every_outcome(request: &CommentRequest) {
+    let response_body: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/github_comment_response.json"
+    ))
+    .expect("parse GitHub comment response fixture");
+    let success = ResponseTemplate::new(201).set_body_json(response_body);
+    assert_eq!(
+        post_against(success, request, 1).await.as_deref(),
+        Some("https://github.com/o/r/issues/1#issuecomment-1"),
+        "the post succeeds"
+    );
+    assert!(
+        post_against(ResponseTemplate::new(500), request, 1)
+            .await
+            .is_none(),
+        "a server error fails the post"
+    );
+    let slow = ResponseTemplate::new(201).set_delay(Duration::from_secs(1));
+    assert!(
+        post_against(slow, request, 0).await.is_none(),
+        "a slow server times the post out"
+    );
+}
+
 #[test]
 fn github_post_span_records_only_bounded_outcomes() {
     let request = CommentRequest {
@@ -101,54 +152,7 @@ fn github_post_span_records_only_bounded_outcomes() {
         .expect("build post-span test runtime");
 
     tracing::dispatcher::with_default(&dispatch, || {
-        runtime.block_on(async {
-            let success_server = MockServer::start().await;
-            let response_body: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../tests/fixtures/github_comment_response.json"
-            ))
-            .expect("parse GitHub comment response fixture");
-            Mock::given(method("POST"))
-                .and(path("/repos/owner/repo/issues/1/comments"))
-                .respond_with(ResponseTemplate::new(201).set_body_json(response_body))
-                .mount(&success_server)
-                .await;
-            let success_client = octocrab_for(&success_server).expect("build success client");
-            let (_success_dir, success_config) = config_with_api_timeout(1);
-            assert_eq!(
-                post_comment_with_metrics(&success_client, &request, &success_config)
-                    .await
-                    .expect("post succeeds"),
-                "https://github.com/o/r/issues/1#issuecomment-1"
-            );
-
-            let error_server = MockServer::start().await;
-            Mock::given(method("POST"))
-                .and(path("/repos/owner/repo/issues/1/comments"))
-                .respond_with(ResponseTemplate::new(500))
-                .mount(&error_server)
-                .await;
-            let error_client = octocrab_for(&error_server).expect("build error client");
-            let (_error_dir, error_config) = config_with_api_timeout(1);
-            assert!(
-                post_comment_with_metrics(&error_client, &request, &error_config)
-                    .await
-                    .is_err()
-            );
-
-            let timeout_server = MockServer::start().await;
-            Mock::given(method("POST"))
-                .and(path("/repos/owner/repo/issues/1/comments"))
-                .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_secs(1)))
-                .mount(&timeout_server)
-                .await;
-            let timeout_client = octocrab_for(&timeout_server).expect("build timeout client");
-            let (_timeout_dir, timeout_config) = config_with_api_timeout(0);
-            assert!(
-                post_comment_with_metrics(&timeout_client, &request, &timeout_config)
-                    .await
-                    .is_err()
-            );
-        });
+        runtime.block_on(post_every_outcome(&request));
     });
 
     let spans = collector.spans.lock().expect("read post-span collector");

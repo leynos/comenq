@@ -164,7 +164,7 @@ fn next_due_returns_an_unclaimed_head_while_waiting() {
     }));
 
     let head = unwrap_ok(fixture.service().next_due());
-    let head = head.unwrap_or_else(|| panic!("expected a head entry"));
+    let head = head.expect("expected a head entry");
     assert_eq!(head.eta_seconds, 637);
     assert_eq!(head.entry.claim_token, None);
 }
@@ -183,9 +183,7 @@ fn bump_moves_the_entry_and_preserves_floor_and_claim() {
     unwrap_ok(service.bump("bbbbbbbb"));
     let schedule = unwrap_ok(service.schedule());
 
-    let head = schedule
-        .first()
-        .unwrap_or_else(|| panic!("expected a head entry"));
+    let head = schedule.first().expect("expected a head entry");
     assert_eq!(head.entry.id.as_str(), "bbbbbbbb");
     assert_eq!(head.entry.not_before, 5_000);
     assert_eq!(head.entry.claim_token, Some(ClaimToken::new("held")));
@@ -205,9 +203,7 @@ fn bust_moves_the_entry_to_the_tail() {
     unwrap_ok(service.bust("aaaaaaaa"));
     let schedule = unwrap_ok(service.schedule());
 
-    let last = schedule
-        .last()
-        .unwrap_or_else(|| panic!("expected a tail entry"));
+    let last = schedule.last().expect("expected a tail entry");
     assert_eq!(last.entry.id.as_str(), "aaaaaaaa");
 }
 
@@ -273,9 +269,7 @@ fn projection_saturates_extreme_timestamps() {
         0,
     );
 
-    let first = schedule
-        .first()
-        .unwrap_or_else(|| panic!("expected a projected entry"));
+    let first = schedule.first().expect("expected a projected entry");
     assert_eq!(first.eta_seconds, u64::MAX);
 }
 
