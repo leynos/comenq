@@ -39,73 +39,76 @@ fn overflowing_retry_cooldown_uses_a_far_future_deadline() {
     assert!(deadline.duration_since(started) >= Duration::from_secs(99 * 365 * 24 * 60 * 60));
 }
 
-/// Tests that notify_one wakes exactly one waiter when multiple tasks are waiting.
+/// Tests that `notify_one` wakes exactly one waiter when several are waiting.
 ///
-/// This validates the single-waiter semantics documented on WorkerHooks.
-#[tokio::test]
-async fn notify_one_wakes_exactly_one_waiter() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+/// [`Notify::notify_one`] stores a single permit, so it wakes one waiter
+/// rather than broadcasting to all of them. `WorkerHooks` relies on this
+/// single-waiter contract, and `SharedQueue::mutation_finished` relies on the
+/// permit being retained while the worker is busy.
+///
+/// Every waiter registers through `Notified::enable` before the notification,
+/// so the test does not depend on scheduler timing to get them into the wait
+/// list. A no-op waker then polls each future once: exactly one must complete.
+/// The test does not assert which waiter wakes, because `notify_one` promises
+/// one wake, not first-in-first-out order.
+#[test]
+fn notify_one_wakes_exactly_one_waiter() {
+    let notify = Notify::new();
+    let mut first = std::pin::pin!(notify.notified());
+    let mut second = std::pin::pin!(notify.notified());
+    let mut third = std::pin::pin!(notify.notified());
 
-    let notify = Arc::new(Notify::new());
-    let wake_count = Arc::new(AtomicUsize::new(0));
+    // Register all three waiters before notifying, so no spawned task or
+    // sleep is needed to let them start.
+    let _ = first.as_mut().enable();
+    let _ = second.as_mut().enable();
+    let _ = third.as_mut().enable();
 
-    // Spawn three waiters
-    let mut handles = Vec::new();
-    for _ in 0..3 {
-        let n = notify.clone();
-        let count = wake_count.clone();
-        handles.push(tokio::spawn(async move {
-            // Wait with a timeout to avoid hanging the test
-            if tokio::time::timeout(Duration::from_millis(100), n.notified())
-                .await
-                .is_ok()
-            {
-                count.fetch_add(1, Ordering::SeqCst);
-            }
-        }));
-    }
-
-    // Give waiters time to register
-    tokio::time::sleep(Duration::from_millis(10)).await;
-
-    // Send exactly one notification
     notify.notify_one();
 
-    // Wait for all tasks to complete (they'll timeout after 100ms)
-    for h in handles {
-        let _ = h.await;
-    }
+    let mut context = Context::from_waker(Waker::noop());
+    let ready = [
+        first.as_mut().poll(&mut context),
+        second.as_mut().poll(&mut context),
+        third.as_mut().poll(&mut context),
+    ]
+    .into_iter()
+    .filter(Poll::is_ready)
+    .count();
 
-    // Only one waiter should have been woken
-    assert_eq!(
-        wake_count.load(Ordering::SeqCst),
-        1,
-        "notify_one should wake exactly one waiter"
-    );
+    assert_eq!(ready, 1, "notify_one should wake exactly one waiter");
 }
 
-/// Tests that notify_one buffers a permit when no waiters exist.
+/// Tests that `notify_one` buffers a permit when no waiters exist.
 ///
-/// This validates that the notification is not lost if sent before waiting.
-#[tokio::test]
-async fn notify_one_buffers_permit_when_no_waiters() {
-    let notify = Arc::new(Notify::new());
+/// `Notify::notify_one` stores one permit when nobody is waiting, so a
+/// notification is not lost. This is what lets `WorkerHooks` and
+/// `SharedQueue::mutation_finished` signal the worker without blocking: while
+/// the worker is busy posting, the permit waits for its next queue wait.
+///
+/// The first waiter consumes the buffered permit on its first poll; a second
+/// waiter then finds none and stays pending.
+#[test]
+fn notify_one_buffers_permit_when_no_waiters() {
+    let notify = Notify::new();
 
-    // Send notification before anyone is waiting
+    // Send the notification before anyone is waiting; the permit is buffered.
     notify.notify_one();
 
-    // The first waiter should receive the buffered permit immediately
-    let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-    assert!(
-        result.is_ok(),
-        "buffered permit should wake first waiter immediately"
+    let mut first = std::pin::pin!(notify.notified());
+    let mut context = Context::from_waker(Waker::noop());
+    assert_eq!(
+        first.as_mut().poll(&mut context),
+        Poll::Ready(()),
+        "the buffered permit should complete the first waiter on its first poll",
     );
 
-    // Second waiter should NOT receive a permit (it was consumed)
-    let result = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-    assert!(
-        result.is_err(),
-        "second waiter should timeout with no remaining permit"
+    // The first waiter consumed the only permit, so the second must wait.
+    let mut second = std::pin::pin!(notify.notified());
+    assert_eq!(
+        second.as_mut().poll(&mut context),
+        Poll::Pending,
+        "the second waiter should stay pending once the permit is consumed",
     );
 }
 
